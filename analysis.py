@@ -86,9 +86,9 @@ def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float 
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate MSD for each lag time
         for lag in range(1, min(max_lag + 1, len(track_data))):
@@ -96,14 +96,15 @@ def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float 
             sd_list = []
             lag_time_list = []
             
-            for i in range(len(track_data) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
+            n_points = len(track_data) - lag
+            if n_points > 0:
+                dx = x[lag:] - x[:-lag]
+                dy = y[lag:] - y[:-lag]
                 sd = dx**2 + dy**2
-                dt = (frames[i + lag] - frames[i]) * frame_interval
+                dt = (frames[lag:] - frames[:-lag]) * frame_interval
                 
-                sd_list.append(sd)
-                lag_time_list.append(dt)
+                sd_list.extend(sd)
+                lag_time_list.extend(dt)
             
             if sd_list:
                 # Store results
@@ -419,9 +420,9 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate displacements
         dx = np.diff(x)
@@ -562,11 +563,12 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
                     # Calculate squared displacements
                     sd_list = []
                     
-                    for i in range(len(track_data) - lag):
-                        dx = x[i + lag] - x[i]
-                        dy = y[i + lag] - y[i]
+                    n_points = len(track_data) - lag
+                    if n_points > 0:
+                        dx = x[lag:] - x[:-lag]
+                        dy = y[lag:] - y[:-lag]
                         sd = dx**2 + dy**2
-                        sd_list.append(sd)
+                        sd_list.extend(sd)
                     
                     if sd_list:
                         msd_values.append(np.mean(sd_list))
@@ -914,7 +916,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
             track_data = track_data.sort_values('frame')
             
             # Calculate changes over time
-            frames = track_data['frame'].values
+            frames = track_data['frame'].values.astype(float)
             centroids_x = track_data['centroid_x'].values
             centroids_y = track_data['centroid_y'].values
             n_points = track_data['n_points'].values
@@ -1047,7 +1049,7 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track results
         track_result = {
@@ -1293,7 +1295,7 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track result
         track_result = {
@@ -1528,9 +1530,9 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate MSD for different lag times
         msd_values = []
@@ -1539,11 +1541,12 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
             # Calculate squared displacements
             sd_list = []
             
-            for i in range(len(track_data) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
+            n_points = len(track_data) - lag
+            if n_points > 0:
+                dx = x[lag:] - x[:-lag]
+                dy = y[lag:] - y[:-lag]
                 sd = dx**2 + dy**2
-                sd_list.append(sd)
+                sd_list.extend(sd)
             
             if sd_list:
                 msd_values.append(np.mean(sd_list))
@@ -1858,7 +1861,7 @@ def analyze_crowding(tracks_df: pd.DataFrame,
         # Extract positions and densities
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         densities = track_crowding['local_density'].values
         
         # Calculate displacements
@@ -2025,7 +2028,7 @@ def analyze_active_transport(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate displacements
         dx = np.diff(x)
@@ -2416,7 +2419,7 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track result
         track_result = {
