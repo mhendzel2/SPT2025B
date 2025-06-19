@@ -7,6 +7,7 @@ track data processing, and global parameter handling.
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 import plotly.colors as pc
