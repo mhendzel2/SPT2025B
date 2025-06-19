@@ -412,3 +412,329 @@ def format_track_data(tracks_df: pd.DataFrame) -> pd.DataFrame:
     formatted_df = formatted_df.sort_values(['track_id', 'frame']).reset_index(drop=True)
     
     return formatted_df
+    """
+    Format track data into a standardized format.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Input track data
+        
+    Returns
+    -------
+    pd.DataFrame
+        Standardized track data
+    """
+    # Check if basic required columns exist and try to identify their equivalents
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    column_mapping = {}
+    
+    # List of potential column names for each required attribute
+    potential_names = {
+        'track_id': ['track_id', 'track', 'trackID', 'particle', 'id', 'trajectory'],
+        'frame': ['frame', 't', 'time', 'timepoint'],
+        'x': ['x', 'X', 'pos_x', 'position_x'],
+        'y': ['y', 'Y', 'pos_y', 'position_y']
+    }
+    
+    # Check for each required column
+    for req_col, potential_cols in potential_names.items():
+        # Direct match
+        if req_col in tracks_df.columns:
+            column_mapping[req_col] = req_col
+        else:
+            # Try alternative names
+            for alt_col in potential_cols:
+                if alt_col in tracks_df.columns:
+                    column_mapping[req_col] = alt_col
+                    break
+    
+    # If we couldn't find all required columns, try to guess based on dtypes and values
+    missing_cols = [col for col in required_columns if col not in column_mapping]
+    
+    if missing_cols:
+        numeric_cols = tracks_df.select_dtypes(include=['number']).columns.tolist()
+        
+        for missing in missing_cols:
+            if missing == 'track_id':
+                # Look for categorical columns or columns with few unique values
+                candidates = []
+                for col in tracks_df.columns:
+                    if col not in column_mapping.values():
+                        if tracks_df[col].dtype.name in ['category', 'object', 'int64']:
+                            unique_ratio = tracks_df[col].nunique() / len(tracks_df)
+                            if unique_ratio < 0.5:  # Track IDs typically have few unique values relative to row count
+                                candidates.append((col, unique_ratio))
+                
+                if candidates:
+                    # Sort by uniqueness ratio (lower is better for track IDs)
+                    candidates.sort(key=lambda x: x[1])
+                    column_mapping['track_id'] = candidates[0][0]
+            
+            elif missing == 'frame':
+                # Look for monotonically increasing values or time-like columns
+                for col in numeric_cols:
+                    if col not in column_mapping.values():
+                        # Check if values are monotonically increasing within groups
+                        if 'track_id' in column_mapping:
+                            is_monotonic = True
+                            for track in tracks_df[column_mapping['track_id']].unique():
+                                track_col_values = tracks_df[tracks_df[column_mapping['track_id']] == track][col].values
+                                # Check if values are monotonically increasing
+                                if len(track_col_values) > 1:
+                                    if not all(track_col_values[i] <= track_col_values[i+1] for i in range(len(track_col_values)-1)):
+                                        is_monotonic = False
+                                        break
+                            if is_monotonic:
+                                column_mapping['frame'] = col
+                                break
+                        # Fallback: choose column with regularly spaced values
+                        elif col not in column_mapping.values():
+                            diffs = tracks_df[col].diff().dropna().unique()
+                            if len(diffs) < 10:  # Few unique differences suggests regular spacing
+                                column_mapping['frame'] = col
+                                break
+            
+            elif missing in ['x', 'y']:
+                # For coordinates, look for remaining numeric columns
+                # Typically, the x coordinate varies more than y in most datasets
+                remaining_num_cols = [col for col in numeric_cols if col not in column_mapping.values()]
+                
+                if len(remaining_num_cols) >= 2:
+                    # Calculate variance for each column
+                    variances = [(col, tracks_df[col].var()) for col in remaining_num_cols]
+                    variances.sort(key=lambda x: x[1], reverse=True)
+                    
+                    if missing == 'x' and 'y' not in column_mapping:
+                        # If both x and y are missing, assign them based on variance
+                        column_mapping['x'] = variances[0][0]
+                        column_mapping['y'] = variances[1][0]
+                        break
+                    elif missing == 'x':
+                        # If only x is missing, take the remaining column with highest variance
+                        column_mapping['x'] = variances[0][0]
+                    elif missing == 'y':
+                        # If only y is missing, take the remaining column
+                        column_mapping['y'] = remaining_num_cols[0]
+    
+    # Apply the mapping and create a standardized DataFrame
+    if len(column_mapping) == len(required_columns):
+        # Create a new dataframe with standardized column names
+        standardized_df = pd.DataFrame()
+        
+        for std_col, orig_col in column_mapping.items():
+            if orig_col in tracks_df.columns:
+                standardized_df[std_col] = tracks_df[orig_col].copy()
+            else:
+                # Handle case where mapping refers to non-existent column
+                raise ValueError(f"Column '{orig_col}' not found in the data")
+        
+        # Include any additional columns that might be useful
+        additional_cols = ['z', 'intensity', 'quality', 'SNR', 'sigma']
+        for col in additional_cols:
+            if col in tracks_df.columns:
+                standardized_df[col] = tracks_df[col].copy()
+        
+        # Ensure track_id is integer, handle possible header rows
+        try:
+            standardized_df['track_id'] = pd.to_numeric(standardized_df['track_id'], errors='coerce')
+            # Drop any rows where track_id couldn't be converted (like headers)
+            standardized_df = standardized_df.dropna(subset=['track_id'])
+            standardized_df['track_id'] = standardized_df['track_id'].astype(int)
+        except Exception as e:
+            # If conversion fails completely, it may indicate a deeper issue
+            raise ValueError(f"Could not convert track_id column to numeric values: {str(e)}")
+        
+        # Ensure frame is integer, handle possible header rows
+        try:
+            standardized_df['frame'] = pd.to_numeric(standardized_df['frame'], errors='coerce')
+            # Drop any rows where frame couldn't be converted
+            standardized_df = standardized_df.dropna(subset=['frame'])
+            standardized_df['frame'] = standardized_df['frame'].astype(int)
+        except Exception as e:
+            # If conversion fails completely, it may indicate a deeper issue
+            raise ValueError(f"Could not convert frame column to numeric values: {str(e)}")
+        
+        return standardized_df
+    else:
+        # If we couldn't map all required columns, raise an error
+        missing = [col for col in required_columns if col not in column_mapping]
+        error_msg = f"Could not identify required columns: {', '.join(missing)}"
+        raise ValueError(error_msg)
+
+def calculate_track_statistics(tracks_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate basic statistics for each track.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data in standard format
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with track statistics
+    """
+    if tracks_df.empty:
+        return pd.DataFrame()
+        
+    # Group by track_id and calculate statistics
+    stats = []
+    
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        # Sort by frame to ensure correct calculations
+        track_data = track_data.sort_values('frame')
+        
+        # Basic info
+        track_length = len(track_data)
+        duration = track_data['frame'].max() - track_data['frame'].min() + 1
+        
+        # Single point tracks need special handling
+        if track_length == 1:
+            stat = {
+                'track_id': track_id,
+                'track_length': track_length,
+                'duration': duration,
+                'start_frame': track_data['frame'].iloc[0],
+                'end_frame': track_data['frame'].iloc[0],
+                'total_distance': 0.0,
+                'net_displacement': 0.0,
+                'straightness': 0.0,
+                'mean_speed': 0.0,
+                'x_min': track_data['x'].min(),
+                'x_max': track_data['x'].max(),
+                'y_min': track_data['y'].min(),
+                'y_max': track_data['y'].max(),
+                'x_std': 0.0,
+                'y_std': 0.0
+            }
+        else:
+            # Calculate distances between consecutive points
+            dx = track_data['x'].diff()
+            dy = track_data['y'].diff()
+            step_distances = np.sqrt(dx**2 + dy**2)
+            total_distance = step_distances.sum()
+            
+            # Calculate net displacement (start to end)
+            x_start, y_start = track_data[['x', 'y']].iloc[0]
+            x_end, y_end = track_data[['x', 'y']].iloc[-1]
+            net_displacement = np.sqrt((x_end - x_start)**2 + (y_end - y_start)**2)
+            
+            # Calculate straightness (0-1, with 1 being a perfectly straight line)
+            straightness = net_displacement / total_distance if total_distance > 0 else 0
+            
+            # Calculate mean speed (distance per frame)
+            mean_speed = total_distance / (duration - 1) if duration > 1 else 0
+            
+            stat = {
+                'track_id': track_id,
+                'track_length': track_length,
+                'duration': duration,
+                'start_frame': track_data['frame'].min(),
+                'end_frame': track_data['frame'].max(),
+                'total_distance': total_distance,
+                'net_displacement': net_displacement,
+                'straightness': straightness,
+                'mean_speed': mean_speed,
+                'x_min': track_data['x'].min(),
+                'x_max': track_data['x'].max(),
+                'y_min': track_data['y'].min(),
+                'y_max': track_data['y'].max(),
+                'x_std': track_data['x'].std(),
+                'y_std': track_data['y'].std()
+            }
+            
+            # Add MSD at different lag times if track is long enough
+            if track_length >= 4:
+                msd_values = calculate_msd_single_track(track_data, max_lag=min(10, track_length-1))
+                for lag, msd in enumerate(msd_values):
+                    if lag > 0:  # Skip lag 0
+                        stat[f'msd_lag{lag}'] = msd
+        
+        stats.append(stat)
+    
+    # Convert to DataFrame
+    stats_df = pd.DataFrame(stats)
+    
+    return stats_df
+
+def calculate_msd_single_track(track_data: pd.DataFrame, max_lag: int = 10) -> List[float]:
+    """
+    Calculate mean squared displacement for a single track.
+    
+    Parameters
+    ----------
+    track_data : pd.DataFrame
+        DataFrame containing a single track's data
+    max_lag : int
+        Maximum lag time to calculate MSD
+        
+    Returns
+    -------
+    list
+        List of MSD values for each lag time
+    """
+    n_frames = len(track_data)
+    msd_values = []
+    
+    # Sort by frame
+    track_data = track_data.sort_values('frame')
+    x = track_data['x'].values
+    y = track_data['y'].values
+    
+    # Calculate MSD for each lag time
+    for lag in range(max_lag + 1):
+        if lag == 0:
+            msd_values.append(0.0)  # MSD is 0 at lag 0
+        else:
+            # Calculate squared displacements for all pairs of points separated by lag
+            sd = []
+            for i in range(n_frames - lag):
+                dx = x[i + lag] - x[i]
+                dy = y[i + lag] - y[i]
+                sd.append(dx**2 + dy**2)
+            
+            # Calculate mean of squared displacements
+            if sd:
+                msd_values.append(np.mean(sd))
+            else:
+                msd_values.append(np.nan)
+    
+    return msd_values
+
+def convert_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """
+    Convert a DataFrame to Excel bytes for download.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to convert
+        
+    Returns
+    -------
+    bytes
+        Excel file as bytes
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Data')
+    excel_data = output.getvalue()
+    return excel_data
+
+def convert_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    """
+    Convert a DataFrame to CSV bytes for download.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to convert
+        
+    Returns
+    -------
+    bytes
+        CSV file as bytes
+    """
+    return df.to_csv(index=False).encode('utf-8')
