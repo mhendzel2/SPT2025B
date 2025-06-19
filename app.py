@@ -356,7 +356,7 @@ def apply_mask_to_tracks(tracks_df: pd.DataFrame, mask_name: str, selected_class
         
         # Check bounds and assign class
         if 0 <= x_pixel < mask.shape[1] and 0 <= y_pixel < mask.shape[0]:
-            tracks_with_classes.loc[idx, 'class'] = mask[y_pixel, x_pixel]
+            tracks_with_classes.at[idx, 'class'] = mask[y_pixel, x_pixel]
     
     # Filter by selected classes if specified
     if selected_classes:
@@ -856,7 +856,7 @@ analysis_manager = AnalysisManager()
 
 # Sidebar navigation
 st.sidebar.title("SPT Analysis")
-st.sidebar.image("generated-icon.png", width=100)
+# st.sidebar.image("generated-icon.png", width=100)  # Icon file missing
 
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
