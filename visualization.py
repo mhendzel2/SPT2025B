@@ -919,7 +919,7 @@ def plot_msd_curves(msd_data: pd.DataFrame, fit_data: Optional[pd.DataFrame] = N
     
     return fig
 
-def plot_diffusion_coefficients(diffusion_results: Dict[str, Any]) -> Dict[str, go.Figure]:
+def plot_diffusion_analysis_results(diffusion_results: Dict[str, Any]) -> Dict[str, go.Figure]:
     """
     Plot diffusion analysis results.
     
