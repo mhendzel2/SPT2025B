@@ -86,9 +86,9 @@ def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float 
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate MSD for each lag time
         for lag in range(1, min(max_lag + 1, len(track_data))):
@@ -419,9 +419,9 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate displacements
         dx = np.diff(x)
@@ -914,7 +914,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
             track_data = track_data.sort_values('frame')
             
             # Calculate changes over time
-            frames = track_data['frame'].values
+            frames = track_data['frame'].values.astype(float)
             centroids_x = track_data['centroid_x'].values
             centroids_y = track_data['centroid_y'].values
             n_points = track_data['n_points'].values
@@ -1047,7 +1047,7 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track results
         track_result = {
@@ -1293,7 +1293,7 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track result
         track_result = {
@@ -1528,9 +1528,9 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
         track_data = track_data.sort_values('frame')
         
         # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        x = track_data['x'].values.astype(float) * pixel_size
+        y = track_data['y'].values.astype(float) * pixel_size
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate MSD for different lag times
         msd_values = []
@@ -1858,7 +1858,7 @@ def analyze_crowding(tracks_df: pd.DataFrame,
         # Extract positions and densities
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         densities = track_crowding['local_density'].values
         
         # Calculate displacements
@@ -2025,7 +2025,7 @@ def analyze_active_transport(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Calculate displacements
         dx = np.diff(x)
@@ -2416,7 +2416,7 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values
+        frames = track_data['frame'].values.astype(float)
         
         # Initialize track result
         track_result = {
