@@ -739,3 +739,52 @@ def convert_to_csv_bytes(df: pd.DataFrame) -> bytes:
         CSV file as bytes
     """
     return df.to_csv(index=False).encode('utf-8')
+
+def sync_global_parameters():
+    """Synchronize global parameters between widgets and session state"""
+    if 'global_pixel_size' in st.session_state:
+        st.session_state.current_pixel_size = st.session_state.global_pixel_size
+    
+    if 'global_frame_interval' in st.session_state:
+        st.session_state.current_frame_interval = st.session_state.global_frame_interval
+
+def get_global_pixel_size():
+    """Get the current global pixel size with proper fallback"""
+    return st.session_state.get('current_pixel_size', 
+                               st.session_state.get('global_pixel_size', 0.1))
+
+def get_global_frame_interval():
+    """Get the current global frame interval with proper fallback"""
+    return st.session_state.get('current_frame_interval',
+                               st.session_state.get('global_frame_interval', 0.1))
+
+def create_analysis_record(name: str, analysis_type: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create a record of an analysis for storage in session state.
+    
+    Parameters
+    ----------
+    name : str
+        Name of the analysis
+    analysis_type : str
+        Type of analysis performed
+    parameters : dict
+        Parameters used for the analysis
+        
+    Returns
+    -------
+    dict
+        Analysis record with ID, timestamp, and input values
+    """
+    import uuid
+    analysis_id = str(uuid.uuid4())
+    timestamp = datetime.now()
+    
+    return {
+        'id': analysis_id,
+        'name': name,
+        'type': analysis_type,
+        'parameters': parameters,
+        'date': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        'datetime': timestamp
+    }
