@@ -563,11 +563,12 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
                     # Calculate squared displacements
                     sd_list = []
                     
-                    for i in range(len(track_data) - lag):
-                        dx = x[i + lag] - x[i]
-                        dy = y[i + lag] - y[i]
+                    n_points = len(track_data) - lag
+                    if n_points > 0:
+                        dx = x[lag:] - x[:-lag]
+                        dy = y[lag:] - y[:-lag]
                         sd = dx**2 + dy**2
-                        sd_list.append(sd)
+                        sd_list.extend(sd)
                     
                     if sd_list:
                         msd_values.append(np.mean(sd_list))
@@ -1540,11 +1541,12 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
             # Calculate squared displacements
             sd_list = []
             
-            for i in range(len(track_data) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
+            n_points = len(track_data) - lag
+            if n_points > 0:
+                dx = x[lag:] - x[:-lag]
+                dy = y[lag:] - y[:-lag]
                 sd = dx**2 + dy**2
-                sd_list.append(sd)
+                sd_list.extend(sd)
             
             if sd_list:
                 msd_values.append(np.mean(sd_list))
