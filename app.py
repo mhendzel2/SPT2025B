@@ -865,7 +865,7 @@ st.sidebar.title("SPT Analysis")
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
     "Navigation",
-    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Advanced Analysis", "Report Generation", "MD Integration"]
+    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Batch Processing", "Advanced Analysis", "Report Generation", "MD Integration"]
 )
 
 # Update session state based on navigation
@@ -2922,16 +2922,14 @@ Lower values provide faster comparison but may miss fine differences between met
                             
                             # Create bounds mask for valid coordinates
                             valid_mask = (
-                                (x_pixels >= 0) & (x_pixels < mask.shape[1]) &
-                                (y_pixels >= 0) & (y_pixels < mask.shape[0])
+                                (x_pixels >= 0) & (x_pixels < classes.shape[1]) &
+                                (y_pixels >= 0) & (y_pixels < classes.shape[0])
                             )
                             
                             # Apply mask values vectorized
                             tracks_df = tracks_df.copy()
-                            tracks_df['class'] = 0  # Default background class
-                            tracks_df.loc[valid_mask, 'class'] = mask[y_pixels[valid_mask], x_pixels[valid_mask]]
-                            
-                            tracks_df['nuclear_density_class'] = density_assignments
+                            tracks_df['nuclear_density_class'] = 0  # Default background class
+                            tracks_df.loc[valid_mask, 'nuclear_density_class'] = classes[y_pixels[valid_mask], x_pixels[valid_mask]]
                             st.session_state.tracks_data = tracks_df
                             
                             # Display summary
@@ -8505,6 +8503,12 @@ elif st.session_state.active_page == "Project Management":
     # 1. Project List/Creation
     # 2. Project Editor (for selected project)
     
+elif st.session_state.active_page == "Batch Processing":
+    from enhanced_project_management import show_batch_processing_interface
+    show_batch_processing_interface()
+
+# Project Management page continued
+elif st.session_state.active_page == "Project Management":
     # Initialize projects directory
     projects_dir = "./projects"
     os.makedirs(projects_dir, exist_ok=True)

@@ -443,6 +443,223 @@ class ProjectManager:
         except Exception:
             return []
 
+    def generate_batch_reports(self, project_id: str, selected_analyses: List[str] = None, 
+                             report_format: str = "HTML Interactive") -> Dict[str, Any]:
+        """Generate automated reports for all conditions in a project."""
+        project = self.get_project(project_id)
+        if not project:
+            return {'success': False, 'error': f'Project {project_id} not found'}
+        
+        from enhanced_report_generator import EnhancedSPTReportGenerator
+        from analysis_manager import AnalysisManager
+        
+        generator = EnhancedSPTReportGenerator()
+        analysis_manager = AnalysisManager()
+        
+        batch_results = {
+            'project_name': project.name,
+            'conditions': {},
+            'summary': {},
+            'success': True
+        }
+        
+        if not selected_analyses:
+            selected_analyses = ['basic_statistics', 'diffusion_analysis', 'motion_classification']
+        
+        for condition_id, condition in project.conditions.items():
+            try:
+                pooled_tracks = condition.pool_tracks()
+                if pooled_tracks.empty:
+                    batch_results['conditions'][condition.name] = {
+                        'success': False, 'error': 'No track data available'
+                    }
+                    continue
+                
+                condition_results = generator.generate_batch_report(
+                    pooled_tracks, selected_analyses, condition.name
+                )
+                
+                if report_format in ["HTML Interactive", "PDF Report"]:
+                    export_path = self._export_condition_report(
+                        condition_results, condition.name, report_format, project.id
+                    )
+                    condition_results['export_path'] = export_path
+                
+                batch_results['conditions'][condition.name] = condition_results
+                
+            except Exception as e:
+                batch_results['conditions'][condition.name] = {
+                    'success': False, 'error': str(e)
+                }
+        
+        batch_results['summary'] = self._generate_project_summary(batch_results['conditions'])
+        
+        return batch_results
+    
+    def _export_condition_report(self, results: Dict, condition_name: str, 
+                               format_type: str, project_id: str) -> str:
+        """Export condition report to HTML or PDF."""
+        import os
+        from datetime import datetime
+        
+        reports_dir = os.path.join(self.projects_dir, project_id, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        if format_type == "HTML Interactive":
+            return self._export_html_report(results, condition_name, reports_dir, timestamp)
+        elif format_type == "PDF Report":
+            return self._export_pdf_report(results, condition_name, reports_dir, timestamp)
+        
+        return ""
+    
+    def _export_html_report(self, results: Dict, condition_name: str, 
+                          reports_dir: str, timestamp: str) -> str:
+        """Export results as interactive HTML report."""
+        import plotly.io as pio
+        
+        filename = f"{condition_name}_report_{timestamp}.html"
+        filepath = os.path.join(reports_dir, filename)
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SPT Analysis Report - {condition_name}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .header {{ background-color: #f0f0f0; padding: 20px; border-radius: 5px; }}
+        .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; }}
+        .figure {{ margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Single Particle Tracking Analysis Report</h1>
+        <h2>Condition: {condition_name}</h2>
+        <p>Generated: {timestamp}</p>
+    </div>
+"""
+        
+        for analysis_key, result in results.get('analysis_results', {}).items():
+            if result.get('success', True):
+                html_content += f'<div class="section"><h3>{analysis_key.replace("_", " ").title()}</h3>'
+                
+                if 'summary' in result:
+                    html_content += '<h4>Summary Statistics:</h4><ul>'
+                    for key, value in result['summary'].items():
+                        html_content += f'<li><strong>{key}:</strong> {value}</li>'
+                    html_content += '</ul>'
+                
+                html_content += '</div>'
+        
+        for fig_key, figure in results.get('figures', {}).items():
+            if figure:
+                fig_html = pio.to_html(figure, include_plotlyjs=False, div_id=f"fig_{fig_key}")
+                html_content += f'<div class="figure">{fig_html}</div>'
+        
+        html_content += '</body></html>'
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        return filepath
+    
+    def _export_pdf_report(self, results: Dict, condition_name: str, 
+                         reports_dir: str, timestamp: str) -> str:
+        """Export results as PDF report using matplotlib."""
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+        
+        filename = f"{condition_name}_report_{timestamp}.pdf"
+        filepath = os.path.join(reports_dir, filename)
+        
+        with PdfPages(filepath) as pdf:
+            fig, ax = plt.subplots(figsize=(8.5, 11))
+            ax.text(0.5, 0.8, 'Single Particle Tracking Analysis Report', 
+                    ha='center', va='center', fontsize=20, weight='bold')
+            ax.text(0.5, 0.7, f'Condition: {condition_name}', 
+                    ha='center', va='center', fontsize=16)
+            ax.text(0.5, 0.6, f'Generated: {timestamp}', 
+                    ha='center', va='center', fontsize=12)
+            ax.axis('off')
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
+            
+            for analysis_key, result in results.get('analysis_results', {}).items():
+                if result.get('success', True) and 'summary' in result:
+                    fig, ax = plt.subplots(figsize=(8.5, 11))
+                    ax.text(0.5, 0.9, analysis_key.replace('_', ' ').title(), 
+                            ha='center', va='center', fontsize=16, weight='bold')
+                    
+                    y_pos = 0.8
+                    for key, value in result['summary'].items():
+                        ax.text(0.1, y_pos, f'{key}: {value}', 
+                                ha='left', va='center', fontsize=12)
+                        y_pos -= 0.05
+                    
+                    ax.axis('off')
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+        
+        return filepath
+    
+    def _generate_project_summary(self, conditions_results: Dict) -> Dict[str, Any]:
+        """Generate summary statistics across all conditions."""
+        summary = {
+            'total_conditions': len(conditions_results),
+            'successful_conditions': 0,
+            'failed_conditions': 0,
+            'total_analyses': 0
+        }
+        
+        for condition_name, result in conditions_results.items():
+            if result.get('success', True):
+                summary['successful_conditions'] += 1
+                if 'analysis_results' in result:
+                    summary['total_analyses'] += len(result['analysis_results'])
+            else:
+                summary['failed_conditions'] += 1
+        
+        return summary
+
+def pm_list_available_projects(projects_dir):
+    """List available projects in the projects directory."""
+    import os
+    projects = []
+    if os.path.exists(projects_dir):
+        for item in os.listdir(projects_dir):
+            project_path = os.path.join(projects_dir, item)
+            if os.path.isdir(project_path):
+                config_path = os.path.join(project_path, "project_config.json")
+                if os.path.exists(config_path):
+                    try:
+                        with open(config_path, 'r') as f:
+                            import json
+                            config = json.load(f)
+                            projects.append({
+                                'name': config.get('name', item),
+                                'path': project_path,
+                                'description': config.get('description', ''),
+                                'created': config.get('created', ''),
+                                'last_modified': config.get('last_modified', '')
+                            })
+                    except Exception:
+                        pass
+    return projects
+
+class ProjectManagerCompat:
+    """Compatibility wrapper for project management functions."""
+    
+    def __init__(self):
+        self.projects_dir = "./projects"
+    
+    def list_available_projects(self, projects_dir):
+        """List available projects."""
+        return pm_list_available_projects(projects_dir)
+
 def remove_file_from_project(project: 'Project', condition_id: str, file_id: str, base_path: str) -> Dict[str, Any]:
     """
     Remove a file from a project condition and delete its associated data file from disk.

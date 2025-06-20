@@ -1131,6 +1131,42 @@ class EnhancedSPTReportGenerator:
         fig.update_layout(title="Multi-Particle Interaction Analysis")
         return fig
 
+    def generate_batch_report(self, tracks_df, selected_analyses, condition_name):
+        """Generate automated report for batch processing (non-Streamlit)."""
+        results = {
+            'condition_name': condition_name,
+            'analysis_results': {},
+            'figures': {},
+            'success': True
+        }
+        
+        current_units = {
+            'pixel_size': 0.1,
+            'frame_interval': 1.0
+        }
+        
+        for analysis_key in selected_analyses:
+            if analysis_key not in self.available_analyses:
+                continue
+                
+            analysis = self.available_analyses[analysis_key]
+            
+            try:
+                result = analysis['function'](tracks_df, current_units)
+                results['analysis_results'][analysis_key] = result
+                
+                if result.get('success', True) and 'error' not in result:
+                    fig = analysis['visualization'](result)
+                    if fig:
+                        results['figures'][analysis_key] = fig
+                        
+            except Exception as e:
+                results['analysis_results'][analysis_key] = {
+                    'success': False, 'error': str(e)
+                }
+        
+        return results
+
 def show_enhanced_report_generator():
     """Display the enhanced report generator interface."""
     generator = EnhancedSPTReportGenerator()

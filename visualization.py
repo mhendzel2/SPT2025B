@@ -19,9 +19,36 @@ from mpl_toolkits.mplot3d import Axes3D
 
 # --- Track Visualization ---
 
-def plot_tracks(tracks_df: pd.DataFrame, frame_range: Optional[Tuple[int, int]] = None, 
+def plot_tracks(tracks_df: pd.DataFrame, image_data=None, frame_range: Optional[Tuple[int, int]] = None, 
                 color_by: str = 'track_id', colormap: str = 'viridis', 
+                show_image: bool = True, alpha: float = 0.7,
                 plot_type: str = 'plotly') -> Union[go.Figure, plt.Figure]:
+    """
+    Plot particle tracks with optional image overlay.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with columns: track_id, frame, x, y
+    image_data : np.ndarray, optional
+        Image data for background overlay
+    frame_range : tuple, optional
+        (start_frame, end_frame) to filter tracks
+    color_by : str, default 'track_id'
+        Column name to color tracks by
+    colormap : str, default 'viridis'
+        Colormap for track coloring
+    show_image : bool, default True
+        Whether to show background image
+    alpha : float, default 0.7
+        Track transparency
+    plot_type : str, default 'plotly'
+        Type of plot to generate
+    
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure or matplotlib.figure.Figure
+        Plot figure object
     """
     # Validate input data
     if tracks_df.empty:
@@ -33,26 +60,6 @@ def plot_tracks(tracks_df: pd.DataFrame, frame_range: Optional[Tuple[int, int]] 
     if missing_columns:
         st.error(f"Missing required columns for plotting: {missing_columns}")
         return None
-    Plot particle tracks as 2D trajectories.
-    
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        Tracks data in standard format
-    frame_range : tuple, optional
-        Range of frames to include (min, max)
-    color_by : str
-        Column to use for track coloring
-    colormap : str
-        Colormap name
-    plot_type : str
-        Type of plot: 'plotly' or 'matplotlib'
-        
-    Returns
-    -------
-    fig : plotly.graph_objects.Figure or matplotlib.figure.Figure
-        Plot figure object
-    """
     if tracks_df.empty:
         if plot_type == 'plotly':
             fig = go.Figure()
