@@ -822,12 +822,17 @@ class EnhancedSPTReportGenerator:
         fig.add_trace(go.Histogram(x=track_stats['cv_intensity'], name="Intensity CV",
                                  nbinsx=30), row=2, col=1)
         
-        # Sample track profiles (first 10 tracks)
+        # Sample track profiles (first 10 tracks) - vectorized approach
         sample_tracks = track_stats.head(10)
-        for i, (_, track) in enumerate(sample_tracks.iterrows()):
-            fig.add_trace(go.Scatter(y=[track['mean_intensity']], x=[i], 
-                                   mode='markers', name=f"Track {track['track_id']}",
-                                   showlegend=False), row=2, col=2)
+        if not sample_tracks.empty:
+            fig.add_trace(go.Scatter(
+                y=sample_tracks['mean_intensity'].values, 
+                x=list(range(len(sample_tracks))), 
+                mode='markers', 
+                name="Track Intensities",
+                text=[f"Track {tid}" for tid in sample_tracks['track_id']],
+                showlegend=False
+            ), row=2, col=2)
         
         fig.update_layout(title="Intensity Analysis")
         return fig

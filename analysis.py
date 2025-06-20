@@ -1627,15 +1627,15 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
                 'log_std': np.std(log_D_valid)
             }]
             
-            # Assign all tracks to this population
-            track_assignments = []
-            for i, (idx, row) in enumerate(diffusion_df.iterrows()):
-                if valid_indices[i]:
-                    track_assignments.append({
-                        'track_id': row['track_id'],
-                        'population_id': 0,
-                        'diffusion_coeff': row['diffusion_coeff']
-                    })
+            valid_df = diffusion_df[valid_indices].copy()
+            track_assignments = [
+                {
+                    'track_id': row['track_id'],
+                    'population_id': 0,
+                    'diffusion_coeff': row['diffusion_coeff']
+                }
+                for _, row in valid_df.iterrows()
+            ] if not valid_df.empty else []
             
             return {
                 'success': True,
