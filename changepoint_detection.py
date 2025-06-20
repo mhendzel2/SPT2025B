@@ -486,14 +486,11 @@ class ChangePointDetector:
         features = []
         feature_names = ['mean_displacement', 'std_displacement', 'displacement_cv', 'directional_persistence']
         
-        for _, segment in segments_df.iterrows():
-            feature_vector = []
-            for feat in feature_names:
-                if feat in segment:
-                    feature_vector.append(segment[feat])
-                else:
-                    feature_vector.append(0)
-            features.append(feature_vector)
+        for feat in feature_names:
+            if feat not in segments_df.columns:
+                segments_df[feat] = 0
+        
+        features = segments_df[feature_names].fillna(0).values
         
         features = np.array(features)
         

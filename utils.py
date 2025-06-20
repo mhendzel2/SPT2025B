@@ -542,7 +542,7 @@ def format_track_data(tracks_df: pd.DataFrame) -> pd.DataFrame:
             # Drop any rows where track_id couldn't be converted (like headers)
             standardized_df = standardized_df.dropna(subset=['track_id'])
             standardized_df['track_id'] = standardized_df['track_id'].astype(int)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             # If conversion fails completely, it may indicate a deeper issue
             raise ValueError(f"Could not convert track_id column to numeric values: {str(e)}")
         
@@ -552,7 +552,7 @@ def format_track_data(tracks_df: pd.DataFrame) -> pd.DataFrame:
             # Drop any rows where frame couldn't be converted
             standardized_df = standardized_df.dropna(subset=['frame'])
             standardized_df['frame'] = standardized_df['frame'].astype(int)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             # If conversion fails completely, it may indicate a deeper issue
             raise ValueError(f"Could not convert frame column to numeric values: {str(e)}")
         

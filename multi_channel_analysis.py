@@ -164,23 +164,22 @@ def analyze_compartment_occupancy(tracks_df: pd.DataFrame, compartments: List[Di
     tracks_um['x_um'] = tracks_df['x'] * pixel_size
     tracks_um['y_um'] = tracks_df['y'] * pixel_size
     
-    # Assign each track point to a compartment
-    tracks_enhanced = []
+    # Assign each track point to a compartment using vectorized operations
+    tracks_enhanced = tracks_um.copy()
+    tracks_enhanced['compartment'] = 'outside'
     
-    for _, track_point in tracks_um.iterrows():
-        x, y = track_point['x_um'], track_point['y_um']
-        assigned_compartment = 'outside'
-        
-        for comp in compartments:
-            bbox = comp['bbox_um']
-            if (bbox['x1'] <= x <= bbox['x2'] and 
-                bbox['y1'] <= y <= bbox['y2']):
-                assigned_compartment = comp['id']
-                break
-        
-        track_enhanced = track_point.to_dict()
-        track_enhanced['compartment'] = assigned_compartment
-        tracks_enhanced.append(track_enhanced)
+    for comp in compartments:
+        bbox = comp['bbox_um']
+        # Create boolean mask for points within this compartment
+        in_compartment = (
+            (tracks_enhanced['x_um'] >= bbox['x1']) & 
+            (tracks_enhanced['x_um'] <= bbox['x2']) &
+            (tracks_enhanced['y_um'] >= bbox['y1']) & 
+            (tracks_enhanced['y_um'] <= bbox['y2'])
+        )
+        tracks_enhanced.loc[in_compartment, 'compartment'] = comp['id']
+    
+    tracks_enhanced = tracks_enhanced.to_dict('records')
     
     tracks_enhanced_df = pd.DataFrame(tracks_enhanced)
     

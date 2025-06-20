@@ -343,20 +343,24 @@ def apply_mask_to_tracks(tracks_df: pd.DataFrame, mask_name: str, selected_class
     pixel_size = st.session_state.get('global_pixel_size', st.session_state.get('current_pixel_size', 0.1))
     track_coords_in_microns = st.session_state.get('track_coordinates_in_microns', False)
     
-    for idx, row in tracks_with_classes.iterrows():
-        # Convert coordinates to pixel indices for mask lookup
-        if track_coords_in_microns:
-            # Track coordinates are in microns - convert to pixels for mask indexing
-            x_pixel = int(row['x'] / pixel_size)
-            y_pixel = int(row['y'] / pixel_size)
-        else:
-            # Track coordinates are already in pixels
-            x_pixel = int(row['x'])
-            y_pixel = int(row['y'])
-        
-        # Check bounds and assign class
-        if 0 <= x_pixel < mask.shape[1] and 0 <= y_pixel < mask.shape[0]:
-            tracks_with_classes.at[idx, 'class'] = mask[y_pixel, x_pixel]
+    # Vectorized coordinate conversion and mask application
+    if track_coords_in_microns:
+        # Track coordinates are in microns - convert to pixels for mask indexing
+        x_pixels = (tracks_with_classes['x'] / pixel_size).astype(int)
+        y_pixels = (tracks_with_classes['y'] / pixel_size).astype(int)
+    else:
+        # Track coordinates are already in pixels
+        x_pixels = tracks_with_classes['x'].astype(int)
+        y_pixels = tracks_with_classes['y'].astype(int)
+    
+    # Create bounds mask for valid coordinates
+    valid_mask = (
+        (x_pixels >= 0) & (x_pixels < mask.shape[1]) &
+        (y_pixels >= 0) & (y_pixels < mask.shape[0])
+    )
+    
+    # Apply mask values only to valid coordinates
+    tracks_with_classes.loc[valid_mask, 'class'] = mask[y_pixels[valid_mask], x_pixels[valid_mask]]
     
     # Filter by selected classes if specified
     if selected_classes:
@@ -2906,24 +2910,26 @@ Lower values provide faster comparison but may miss fine differences between met
                             pixel_size = st.session_state.get('global_pixel_size', st.session_state.get('current_pixel_size', 0.1))
                             track_coords_in_microns = st.session_state.get('track_coordinates_in_microns', False)
                             
-                            for _, row in tracks_df.iterrows():
-                                # Convert coordinates to pixel indices for class lookup
-                                if track_coords_in_microns:
-                                    # Track coordinates are in microns - convert to pixels for class indexing
-                                    x_coord = int(row['x'] / pixel_size)
-                                    y_coord = int(row['y'] / pixel_size)
-                                else:
-                                    # Track coordinates are already in pixels
-                                    x_coord = int(row['x'])
-                                    y_coord = int(row['y'])
-                                
-                                # Check bounds and assign class
-                                if 0 <= x_coord < classes.shape[1] and 0 <= y_coord < classes.shape[0]:
-                                    density_class = classes[y_coord, x_coord]
-                                else:
-                                    density_class = 0  # Outside image bounds = background
-                                
-                                density_assignments.append(density_class)
+                            # Vectorized coordinate conversion for class lookup
+                            if track_coords_in_microns:
+                                # Track coordinates are in microns - convert to pixels for class indexing
+                                x_pixels = (tracks_df['x'] / pixel_size).astype(int)
+                                y_pixels = (tracks_df['y'] / pixel_size).astype(int)
+                            else:
+                                # Track coordinates are already in pixels
+                                x_pixels = tracks_df['x'].astype(int)
+                                y_pixels = tracks_df['y'].astype(int)
+                            
+                            # Create bounds mask for valid coordinates
+                            valid_mask = (
+                                (x_pixels >= 0) & (x_pixels < mask.shape[1]) &
+                                (y_pixels >= 0) & (y_pixels < mask.shape[0])
+                            )
+                            
+                            # Apply mask values vectorized
+                            tracks_df = tracks_df.copy()
+                            tracks_df['class'] = 0  # Default background class
+                            tracks_df.loc[valid_mask, 'class'] = mask[y_pixels[valid_mask], x_pixels[valid_mask]]
                             
                             tracks_df['nuclear_density_class'] = density_assignments
                             st.session_state.tracks_data = tracks_df

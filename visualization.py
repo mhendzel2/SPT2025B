@@ -1209,7 +1209,11 @@ def plot_motion_analysis(motion_results: Dict[str, Any]) -> Dict[str, go.Figure]
             fig_autocorr = go.Figure()
             has_autocorr_data = False
 
-            for _, track in track_results.iterrows():
+            # Vectorized processing of track results
+            valid_tracks = track_results.dropna(subset=['velocity_autocorr'])
+            
+            for idx in valid_tracks.index:
+                track = valid_tracks.loc[idx]
                 autocorr_val = track.get('velocity_autocorr')
                 
                 skip_plotting = False
@@ -1449,20 +1453,19 @@ def plot_spatial_clustering(clustering_results: Dict[str, Any]) -> Dict[str, go.
                 
                 fig = go.Figure()
                 
-                # Plot each cluster as a circle
-                for _, cluster in cluster_stats.iterrows():
+                # Plot each cluster as a circle using vectorized approach
+                if not cluster_stats.empty:
                     fig.add_trace(go.Scatter(
-                        x=[cluster['centroid_x']],
-                        y=[cluster['centroid_y']],
+                        x=cluster_stats['centroid_x'],
+                        y=cluster_stats['centroid_y'],
                         mode='markers',
                         marker=dict(
-                            size=cluster['n_points'] * 2,  # Size based on number of points
-                            color=cluster['cluster_id'],  # Color by cluster ID
-                            colorscale='Viridis',
-                            line=dict(width=1, color='black')
+                            size=cluster_stats.get('size', 10),
+                            color=cluster_stats.index,
+                            colorscale='viridis'
                         ),
-                        name=f"Cluster {cluster['cluster_id']} ({cluster['n_points']} points)",
-                        text=f"Cluster {cluster['cluster_id']}<br>Points: {cluster['n_points']}<br>Radius: {cluster['radius']:.2f}"
+                        text=[f"Cluster {i}" for i in cluster_stats.index],
+                        name="Clusters"
                     ))
                 
                 fig.update_layout(
@@ -1991,8 +1994,8 @@ def plot_gel_structure_analysis(gel_results: Dict[str, Any]) -> Dict[str, go.Fig
             fig = go.Figure()
             
             # Plot mesh as a network of pores
-            # First add all pores as circles with their radii
-            for _, region in confined_regions.iterrows():
+            for idx in confined_regions.index:
+                region = confined_regions.loc[idx]
                 fig.add_shape(
                     type="circle",
                     xref="x", yref="y",
@@ -2148,7 +2151,8 @@ def plot_diffusion_population_analysis(pop_results: Dict[str, Any]) -> Dict[str,
         # Add normal distributions for each population
         x = np.linspace(min(log_D), max(log_D), 100)
         
-        for _, pop in populations.iterrows():
+        for idx in populations.index:
+            pop = populations.loc[idx]
             # Calculate normal distribution based on population parameters
             mean = pop['log_mean']
             std = pop['log_std']
@@ -2231,8 +2235,9 @@ def plot_diffusion_population_analysis(pop_results: Dict[str, Any]) -> Dict[str,
             color_discrete_sequence=px.colors.qualitative.Plotly
         )
         
-        # Add text labels showing diffusion coefficients
-        for i, pop in populations.iterrows():
+        # Add text labels showing diffusion coefficients using vectorized approach
+        for idx in populations.index:
+            pop = populations.loc[idx]
             fig.add_annotation(
                 x=pop['population_id'],
                 y=pop['weight'],
@@ -2358,10 +2363,13 @@ def plot_crowding_analysis(crowding_results: Dict[str, Any]) -> Dict[str, go.Fig
         # Create dataframe for grouped plot
         group_data = []
         
-        for _, track in track_results.iterrows():
-            if not np.isnan(track['low_density_median_disp']):
-                group_data.append({
-                    'track_id': track['track_id'],
+        # Vectorized processing of track results
+        valid_tracks = track_results.dropna(subset=['low_density_median_disp'])
+        
+        for idx in valid_tracks.index:
+            track = valid_tracks.loc[idx]
+            group_data.append({
+                'track_id': track['track_id'],
                     'density_group': 'Low Density',
                     'displacement': track['low_density_median_disp']
                 })
@@ -2540,7 +2548,9 @@ def plot_active_transport_analysis(transport_results: Dict[str, Any]) -> Dict[st
         # Map of directed segments
         fig = go.Figure()
         
-        for _, segment in directed_segments.iterrows():
+        # Vectorized processing of directed segments
+        for idx in directed_segments.index:
+            segment = directed_segments.loc[idx]
             # Draw arrow for each segment
             fig.add_trace(go.Scatter(
                 x=[segment['start_x'], segment['end_x']],

@@ -416,27 +416,37 @@ class MultiChannelAnalyzer:
             if len(primary_frame) == 0 or len(secondary_nearby) == 0:
                 continue
             
-            # Calculate distances between all pairs
-            for _, p_particle in primary_frame.iterrows():
-                p_x, p_y = p_particle['x'], p_particle['y']
+            # Calculate distances between all pairs using vectorized operations
+            if len(primary_frame) > 0 and len(secondary_nearby) > 0:
+                p_coords = primary_frame[['x', 'y']].values
+                s_coords = secondary_nearby[['x', 'y']].values
                 
-                for _, s_particle in secondary_nearby.iterrows():
-                    s_x, s_y = s_particle['x'], s_particle['y']
+                # Calculate all pairwise distances using broadcasting
+                p_x = p_coords[:, 0][:, np.newaxis]
+                p_y = p_coords[:, 1][:, np.newaxis]
+                s_x = s_coords[:, 0]
+                s_y = s_coords[:, 1]
+                
+                distances = np.sqrt((p_x - s_x)**2 + (p_y - s_y)**2)
+                
+                p_indices, s_indices = np.where(distances <= distance_threshold)
+                
+                for p_idx, s_idx in zip(p_indices, s_indices):
+                    p_particle = primary_frame.iloc[p_idx]
+                    s_particle = secondary_nearby.iloc[s_idx]
+                    distance = distances[p_idx, s_idx]
                     
-                    distance = np.sqrt((p_x - s_x)**2 + (p_y - s_y)**2)
-                    
-                    if distance <= distance_threshold:
-                        coloc_events.append({
-                            'frame': frame,
-                            'primary_track_id': p_particle['track_id'],
-                            'secondary_track_id': s_particle['track_id'],
-                            'secondary_frame': s_particle['frame'],
-                            'distance': distance,
-                            'primary_x': p_x,
-                            'primary_y': p_y,
-                            'secondary_x': s_x,
-                            'secondary_y': s_y
-                        })
+                    coloc_events.append({
+                        'frame': frame,
+                        'primary_track_id': p_particle['track_id'],
+                        'secondary_track_id': s_particle['track_id'],
+                        'secondary_frame': s_particle['frame'],
+                        'distance': distance,
+                        'primary_x': p_particle['x'],
+                        'primary_y': p_particle['y'],
+                        'secondary_x': s_particle['x'],
+                        'secondary_y': s_particle['y']
+                    })
         
         # Calculate statistics
         stats = {}
@@ -498,9 +508,10 @@ class TemporalCrossCorrelator:
         window_size = 20  # frames before and after event
         triggered_averages = []
         
-        for _, event in reference_events.iterrows():
-            event_frame = event['frame']
-            
+        # Vectorized processing of reference events
+        event_frames = reference_events['frame'].values
+        
+        for event_frame in event_frames:
             # Get signal in window around event
             window_start = event_frame - window_size
             window_end = event_frame + window_size
@@ -510,20 +521,16 @@ class TemporalCrossCorrelator:
                 (tracks_df['frame'] <= window_end)
             ]
             
-            if len(window_data) > window_size:
-                # Calculate average signal in window
-                frame_averages = []
-                for frame in range(window_start, window_end + 1):
-                    frame_data = window_data[window_data['frame'] == frame]
-                    if len(frame_data) > 0 and signal_column in frame_data.columns:
-                        avg_signal = frame_data[signal_column].mean()
-                        frame_averages.append({
-                            'relative_frame': frame - event_frame,
-                            'signal': avg_signal
-                        })
+            if len(window_data) > window_size and signal_column in window_data.columns:
+                frame_range = np.arange(window_start, window_end + 1)
+                window_data_grouped = window_data.groupby('frame')[signal_column].mean()
                 
-                if frame_averages:
-                    triggered_averages.extend(frame_averages)
+                for frame in frame_range:
+                    if frame in window_data_grouped.index:
+                        triggered_averages.append({
+                            'relative_frame': frame - event_frame,
+                            'signal': window_data_grouped[frame]
+                        })
         
         # Calculate ensemble triggered average
         if triggered_averages:

@@ -690,10 +690,12 @@ class ActiveTransportAnalyzer:
         segments = []
         track_results = transport_results.get('track_results', pd.DataFrame())
         
-        for _, track in track_results.iterrows():
-            if track.get('mean_speed', 0) >= velocity_threshold:
-                segments.append({
-                    'track_id': track.get('track_id'),
+        # Vectorized filtering for tracks above velocity threshold
+        fast_tracks = track_results[track_results.get('mean_speed', pd.Series(dtype=float)).fillna(0) >= velocity_threshold]
+        
+        for _, track in fast_tracks.iterrows():
+            segments.append({
+                'track_id': track.get('track_id'),
                     'mean_velocity': track.get('mean_speed', 0),
                     'straightness': track.get('straightness', 0),
                     'transport_type': 'active' if track.get('mean_speed', 0) > velocity_threshold else 'passive'
