@@ -3785,9 +3785,9 @@ def plot_velocity_correlation_analysis(tracks_df: pd.DataFrame, max_lag: int = 1
     
     return fig
 
-def plot_diffusion_coefficients(track_results) -> go.Figure:
+def plot_diffusion_analysis_results(track_results) -> go.Figure:
     """
-    Plot diffusion coefficients for individual tracks.
+    Plot diffusion analysis results for individual tracks.
     
     Parameters
     ----------

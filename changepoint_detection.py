@@ -45,6 +45,20 @@ class ChangePointDetector:
         dict
             Changepoint detection results
         """
+        # Validate input DataFrame
+        if tracks_df.empty or 'track_id' not in tracks_df.columns:
+            return {
+                'success': False,
+                'changepoints': pd.DataFrame(),
+                'motion_segments': pd.DataFrame(),
+                'regime_classification': {'success': False, 'error': 'Invalid input data'},
+                'analysis_parameters': {
+                    'window_size': window_size,
+                    'min_segment_length': min_segment_length,
+                    'significance_level': significance_level
+                }
+            }
+        
         changepoints_data = []
         track_segments = []
         
@@ -189,6 +203,13 @@ class ChangePointDetector:
         dict
             Intensity changepoint results
         """
+        # Validate input DataFrame
+        if tracks_df.empty or 'track_id' not in tracks_df.columns:
+            return {
+                'success': False,
+                'error': 'Invalid input data: empty DataFrame or missing track_id column'
+            }
+        
         if intensity_column not in tracks_df.columns:
             return {
                 'success': False,

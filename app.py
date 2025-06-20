@@ -53,7 +53,7 @@ from image_processing_utils import (
     normalize_image_for_display, create_timepoint_preview, 
     get_image_statistics
 )
-from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients
+from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_analysis_results
 from segmentation import (
     segment_image_channel_otsu, 
     segment_image_channel_simple_threshold,
@@ -5048,7 +5048,7 @@ elif st.session_state.active_page == "Analysis":
                         st.plotly_chart(msd_fig, use_container_width=True)
                     
                     if 'track_results' in results and not results['track_results'].empty:
-                        diff_fig = plot_diffusion_coefficients(results)
+                        diff_fig = plot_diffusion_analysis_results(results)
                         st.plotly_chart(diff_fig, use_container_width=True)
                 else:
                     st.warning(f"Analysis was not successful: {results.get('error', 'Unknown error')}")
