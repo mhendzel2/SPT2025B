@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import pytest
 
 sys.path.append('.')
 
@@ -24,10 +25,9 @@ def test_imports():
         )
         from enhanced_error_handling import suggest_statistical_test, validate_statistical_analysis
         print("✓ All imports successful")
-        return True
+        assert True
     except ImportError as e:
-        print(f"✗ Import failed: {e}")
-        return False
+        pytest.skip(f"Required module missing: {e}")
 
 def load_sample_data(filename):
     """Load and format sample data for testing."""
@@ -45,8 +45,10 @@ def load_sample_data(filename):
         print(f"✗ Failed to load {filename}: {e}")
         return None
 
-def test_utils_functions(df):
+def test_utils_functions():
     """Test all utils.py functions with sample data."""
+    df = load_sample_data("Cell1_spots.csv")
+    assert df is not None
     from utils import (
         validate_tracks_dataframe, convert_coordinates_to_microns,
         calculate_basic_statistics, format_number, safe_divide,
@@ -77,8 +79,6 @@ def test_utils_functions(df):
     subset_df = df.head(100)
     merged_df = merge_close_detections(subset_df, distance_threshold=2.0)
     print(f"✓ merge_close_detections: {len(subset_df)} -> {len(merged_df)} points")
-    
-    return True
 
 def test_enhanced_error_handling():
     """Test enhanced error handling functions."""
@@ -96,15 +96,12 @@ def test_enhanced_error_handling():
         print("✓ validate_statistical_analysis: passed validation")
     except Exception as e:
         print(f"✗ validate_statistical_analysis failed: {e}")
-    
-    return True
 
 def main():
     """Run comprehensive functionality tests."""
     print("=== SPT2025B Functionality Test ===\n")
     
-    if not test_imports():
-        return False
+    test_imports()
     
     sample_files = [
         "Cell1_spots.csv",
@@ -122,9 +119,8 @@ def main():
             print(f"⚠ Sample file {filename} not found")
     
     test_enhanced_error_handling()
-    
+
     print("\n=== All tests completed ===")
-    return True
 
 if __name__ == "__main__":
     main()
