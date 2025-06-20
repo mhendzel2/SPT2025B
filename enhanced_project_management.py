@@ -438,6 +438,66 @@ def create_enhanced_comparison_interface():
         except Exception as e:
             st.error(f"Failed to load project: {str(e)}")
 
+def show_batch_processing_interface():
+    """Display batch processing interface for automated report generation."""
+    st.title("🔄 Batch Report Generation")
+    
+    pm = ProjectManager()
+    projects = pm.list_projects()
+    
+    if not projects:
+        st.warning("No projects found. Please create a project first.")
+        return
+    
+    project_names = [p['name'] for p in projects]
+    selected_project_name = st.selectbox("Select Project for Batch Processing", project_names)
+    
+    if selected_project_name:
+        selected_project = next(p for p in projects if p['name'] == selected_project_name)
+        project = pm.load_project(selected_project['path'])
+        
+        st.subheader(f"Project: {project.name}")
+        st.write(f"Conditions: {len(project.conditions)}")
+        
+        from enhanced_report_generator import EnhancedSPTReportGenerator
+        generator = EnhancedSPTReportGenerator()
+        
+        available_analyses = list(generator.available_analyses.keys())
+        selected_analyses = st.multiselect(
+            "Select Analyses for Batch Processing",
+            available_analyses,
+            default=['basic_statistics', 'diffusion_analysis', 'motion_classification']
+        )
+        
+        report_format = st.selectbox(
+            "Report Format",
+            ["HTML Interactive", "PDF Report", "Raw Data (JSON)"]
+        )
+        
+        if st.button("Generate Batch Reports"):
+            if not selected_analyses:
+                st.error("Please select at least one analysis.")
+                return
+            
+            with st.spinner("Generating batch reports..."):
+                results = pm.generate_batch_reports(
+                    project.id, selected_analyses, report_format
+                )
+            
+            if results['success']:
+                st.success("✅ Batch reports generated successfully!")
+                
+                st.subheader("Batch Processing Summary")
+                for condition_name, condition_result in results['conditions'].items():
+                    if condition_result.get('success', True):
+                        st.write(f"✅ {condition_name}: Report generated")
+                        if 'export_path' in condition_result:
+                            st.write(f"   📄 Exported to: {condition_result['export_path']}")
+                    else:
+                        st.write(f"❌ {condition_name}: {condition_result.get('error', 'Unknown error')}")
+            else:
+                st.error("❌ Batch processing failed")
+
 def show_enhanced_comparison_analysis(project: Project):
     """Show enhanced comparison analysis with statistical suggestions."""
     st.subheader(f"Comparative Analysis: {project.name}")

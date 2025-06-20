@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 try:
-    from analysis import calculate_msd, analyze_diffusion, analyze_motion, analyze_boundary_crossing
+    from analysis_optimized import calculate_msd, analyze_diffusion, analyze_motion, analyze_boundary_crossing
     ANALYSIS_AVAILABLE = True
 except ImportError:
     calculate_msd = None
