@@ -36,6 +36,7 @@ from rheology import MicrorheologyAnalyzer, create_rheology_plots, display_rheol
 from trajectory_heatmap import create_streamlit_heatmap_interface
 from state_manager import get_state_manager
 from analysis_manager import AnalysisManager
+from channel_manager import channel_manager
 
 # Import new page modules for multi-page architecture
 try:
@@ -5744,11 +5745,63 @@ if st.button("Analyze Boundary Crossings"):
                     with col1:
                         st.write("Primary Channel Settings")
                         primary_channel_name = st.text_input("Primary Channel Name", value="Channel 1", key="primary_ch_name")
+                        
+                        common_names = channel_manager.get_common_names()
+                        
+                        if common_names:
+                            st.write("Common biological names:")
+                            selected_primary = st.selectbox("Select from common names (optional)", 
+                                                          [""] + common_names, key="primary_bio_select")
+                            if selected_primary:
+                                primary_biological_name = selected_primary
+                            else:
+                                primary_biological_name = st.text_input("Custom biological name", 
+                                                                      placeholder="e.g., Nucleus, Cytoplasm", 
+                                                                      key="primary_bio_custom",
+                                                                      max_chars=24)
+                        else:
+                            primary_biological_name = st.text_input("Biological name", 
+                                                                  placeholder="e.g., Nucleus, Cytoplasm", 
+                                                                  key="primary_bio_name",
+                                                                  max_chars=24)
+                        
+                        if primary_biological_name and primary_biological_name.strip():
+                            is_valid, validated_name = channel_manager.validate_name(primary_biological_name)
+                            if is_valid:
+                                channel_manager.add_channel_name(validated_name)
+                            else:
+                                st.error(f"Invalid channel name: {validated_name}")
+                        
                         primary_color = st.color_picker("Primary Channel Color", value="#FF4B4B", key="primary_ch_color")
                     
                     with col2:
                         st.write("Secondary Channel Settings")
                         secondary_channel_name = st.text_input("Secondary Channel Name", value="Channel 2", key="secondary_ch_name")
+                        
+                        if common_names:
+                            st.write("Common biological names:")
+                            selected_secondary = st.selectbox("Select from common names (optional)", 
+                                                            [""] + common_names, key="secondary_bio_select")
+                            if selected_secondary:
+                                secondary_biological_name = selected_secondary
+                            else:
+                                secondary_biological_name = st.text_input("Custom biological name", 
+                                                                        placeholder="e.g., Mitochondria, ER", 
+                                                                        key="secondary_bio_custom",
+                                                                        max_chars=24)
+                        else:
+                            secondary_biological_name = st.text_input("Biological name", 
+                                                                    placeholder="e.g., Mitochondria, ER", 
+                                                                    key="secondary_bio_name",
+                                                                    max_chars=24)
+                        
+                        if secondary_biological_name and secondary_biological_name.strip():
+                            is_valid, validated_name = channel_manager.validate_name(secondary_biological_name)
+                            if is_valid:
+                                channel_manager.add_channel_name(validated_name)
+                            else:
+                                st.error(f"Invalid channel name: {validated_name}")
+                        
                         secondary_color = st.color_picker("Secondary Channel Color", value="#4B70FF", key="secondary_ch_color")
                     
                     # Analysis parameters

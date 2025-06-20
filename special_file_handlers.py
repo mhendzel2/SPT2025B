@@ -85,6 +85,8 @@ def load_trackmate_file(file_stream, sep=",") -> pd.DataFrame:
         # Create empty DataFrame with the determined headers
         tracks_df = pd.DataFrame(columns=header)
         
+        row_data = []
+        
         # Read and parse the data rows
         for line in file_stream:
             line = line.strip()
@@ -96,8 +98,11 @@ def load_trackmate_file(file_stream, sep=",") -> pd.DataFrame:
                 elif len(values) > len(header):
                     values = values[:len(header)]
                 
-                # Add row to DataFrame
-                tracks_df = pd.concat([tracks_df, pd.DataFrame([dict(zip(header, values))], columns=header)], ignore_index=True)
+                row_data.append(dict(zip(header, values)))
+        
+        # Create DataFrame from collected data - much faster than repeated concat
+        if row_data:
+            tracks_df = pd.DataFrame(row_data)
     
     # Convert numeric columns
     for col in tracks_df.columns:

@@ -27,9 +27,22 @@ try:
 except ImportError:
     OPENCV_AVAILABLE = False
 
+try:
+    from segment_anything import sam_model_registry, SamPredictor
+    SAM_AVAILABLE = True
+except ImportError:
+    SAM_AVAILABLE = False
+
+try:
+    from cellpose import models
+    CellposeModel = models.CellposeModel
+    CELLPOSE_AVAILABLE = True
+except ImportError:
+    CELLPOSE_AVAILABLE = False
+
 # Set availability flags based on imports
-CELLSAM_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE
-CELLPOSE_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE
+CELLSAM_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE and SAM_AVAILABLE
+CELLPOSE_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE and CELLPOSE_AVAILABLE
 
 class CellSAMSegmentation:
     """
@@ -277,7 +290,7 @@ class CellposeSegmentation:
             st.info(f"Loading Cellpose {self.model_type} model...")
             
             # Initialize Cellpose model
-            self.model = Cellpose(model_type=self.model_type, gpu=torch.cuda.is_available())
+            self.model = CellposeModel(model_type=self.model_type, gpu=torch.cuda.is_available())
             self.loaded = True
             
             st.success(f"Cellpose {self.model_type} model loaded successfully")
