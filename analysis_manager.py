@@ -6,31 +6,41 @@ from datetime import datetime
 
 try:
     from analysis import calculate_msd, analyze_diffusion, analyze_motion, analyze_boundary_crossing
+    ANALYSIS_AVAILABLE = True
 except ImportError:
     calculate_msd = None
     analyze_diffusion = None
     analyze_motion = None
     analyze_boundary_crossing = None
+    ANALYSIS_AVAILABLE = False
 
 try:
     from anomaly_detection import AnomalyDetector
+    ANOMALY_DETECTION_AVAILABLE = True
 except ImportError:
     AnomalyDetector = None
+    ANOMALY_DETECTION_AVAILABLE = False
 
 try:
     from changepoint_detection import ChangePointDetector
+    CHANGEPOINT_DETECTION_AVAILABLE = True
 except ImportError:
     ChangePointDetector = None
+    CHANGEPOINT_DETECTION_AVAILABLE = False
 
 try:
     from rheology import MicrorheologyAnalyzer
+    MICRORHEOLOGY_AVAILABLE = True
 except ImportError:
     MicrorheologyAnalyzer = None
+    MICRORHEOLOGY_AVAILABLE = False
 
 try:
     from biophysical_models import analyze_motion_models
+    BIOPHYSICAL_MODELS_AVAILABLE = True
 except ImportError:
     analyze_motion_models = None
+    BIOPHYSICAL_MODELS_AVAILABLE = False
 
 from state_manager import get_state_manager
 
@@ -239,7 +249,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if analyze_diffusion is None:
+            if not ANALYSIS_AVAILABLE or analyze_diffusion is None:
                 return {'success': False, 'error': 'Diffusion analysis module not available'}
             
             # Get analysis parameters
@@ -277,7 +287,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if analyze_motion is None:
+            if not ANALYSIS_AVAILABLE or analyze_motion is None:
                 return {'success': False, 'error': 'Motion analysis module not available'}
             
             result = analyze_motion(tracks_df)
@@ -297,7 +307,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if AnomalyDetector is None:
+            if not ANOMALY_DETECTION_AVAILABLE or AnomalyDetector is None:
                 return {'success': False, 'error': 'Anomaly detection module not available'}
             
             detector = AnomalyDetector()
@@ -319,7 +329,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if ChangePointDetector is None:
+            if not CHANGEPOINT_DETECTION_AVAILABLE or ChangePointDetector is None:
                 return {'success': False, 'error': 'Changepoint detection module not available'}
             
             detector = ChangePointDetector()
@@ -340,7 +350,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if MicrorheologyAnalyzer is None:
+            if not MICRORHEOLOGY_AVAILABLE or MicrorheologyAnalyzer is None:
                 return {'success': False, 'error': 'Microrheology module not available'}
             
             analyzer = MicrorheologyAnalyzer()
@@ -361,7 +371,7 @@ class AnalysisManager:
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
             
-            if analyze_motion_models is None:
+            if not BIOPHYSICAL_MODELS_AVAILABLE or analyze_motion_models is None:
                 return {'success': False, 'error': 'Biophysical models module not available'}
             
             result = analyze_motion_models(tracks_df)

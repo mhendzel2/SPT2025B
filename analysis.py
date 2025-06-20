@@ -887,17 +887,11 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                 cluster_stats['cluster_track_id'] = cluster_track_ids
                 prev_frame_clusters = cluster_stats
             
-            # Store cluster tracks for this frame
-            for _, cluster in cluster_stats.iterrows():
-                cluster_tracks.append({
-                    'frame': frame,
-                    'cluster_id': cluster['cluster_id'],
-                    'cluster_track_id': cluster['cluster_track_id'],
-                    'centroid_x': cluster['centroid_x'],
-                    'centroid_y': cluster['centroid_y'],
-                    'n_points': cluster['n_points'],
-                    'radius': cluster['radius']
-                })
+            # Store cluster tracks for this frame using vectorized operations
+            if not cluster_stats.empty:
+                frame_cluster_data = cluster_stats.copy()
+                frame_cluster_data['frame'] = frame
+                cluster_tracks.extend(frame_cluster_data.to_dict('records'))
     
     # Analyze cluster dynamics
     cluster_dynamics = []

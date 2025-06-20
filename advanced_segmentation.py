@@ -642,10 +642,13 @@ def calculate_detection_overlap(df1: pd.DataFrame, df2: pd.DataFrame,
     if df1.empty or df2.empty:
         return 0
     
-    overlap_count = 0
-    for _, row1 in df1.iterrows():
-        distances = np.sqrt((df2['x'] - row1['x'])**2 + (df2['y'] - row1['y'])**2)
-        if np.any(distances < threshold):
-            overlap_count += 1
+    df1_coords = df1[['x', 'y']].values
+    df2_coords = df2[['x', 'y']].values
+    
+    # Calculate all pairwise distances using broadcasting
+    distances = np.sqrt(np.sum((df1_coords[:, np.newaxis, :] - df2_coords[np.newaxis, :, :]) ** 2, axis=2))
+    
+    # Count rows in df1 that have at least one point in df2 within threshold
+    overlap_count = np.sum(np.any(distances < threshold, axis=1))
     
     return overlap_count

@@ -166,22 +166,22 @@ def prepare_custom_data(track_data: pd.DataFrame) -> np.ndarray:
     
     custom_data = []
     
-    for _, row in track_data.iterrows():
-        row_data = [
-            row['track_id'],
-            row.get('frame', 0),
-            row['x'],
-            row['y']
-        ]
-        
-        # Add additional columns if available
-        for col in ['velocity', 'displacement', 'intensity']:
-            if col in row:
-                row_data.append(row[col])
-            else:
-                row_data.append(None)
-        
-        custom_data.append(row_data)
+    # Vectorized preparation of custom data
+    base_data = [
+        track_data['track_id'].values,
+        track_data.get('frame', pd.Series([0] * len(track_data))).values,
+        track_data['x'].values,
+        track_data['y'].values
+    ]
+    
+    # Add additional columns if available
+    for col in ['velocity', 'displacement', 'intensity']:
+        if col in track_data.columns:
+            base_data.append(track_data[col].values)
+        else:
+            base_data.append(np.full(len(track_data), None))
+    
+    custom_data = np.array(base_data).T.tolist()
     
     return np.array(custom_data)
 

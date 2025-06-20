@@ -350,15 +350,17 @@ def kalman_filter_tracking(detections: Dict[int, pd.DataFrame],
         detection_positions = frame_detections[['x', 'y']].values
         
         if frame_idx == 0:
-            # Initialize tracks from first frame
-            for _, detection in frame_detections.iterrows():
+            # Initialize tracks from first frame using vectorized operations
+            detection_positions = frame_detections[['x', 'y']].values
+            
+            for i, position in enumerate(detection_positions):
                 kf = KalmanFilter(process_noise, measurement_noise)
-                kf.initialize(np.array([detection['x'], detection['y']]))
+                kf.initialize(position)
                 
                 track = {
                     'track_id': next_track_id,
                     'kalman_filter': kf,
-                    'positions': [np.array([detection['x'], detection['y']])],
+                    'positions': [position],
                     'frames': [frame],
                     'missed_frames': 0
                 }

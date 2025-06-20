@@ -190,7 +190,7 @@ class StateManager:
     
     def clear_data(self):
         """Clear all tracking data."""
-        st.session_state.tracks_data = None
+        st.session_state.raw_tracks = None
         st.session_state.current_file = None
         st.session_state.track_statistics = None
         st.session_state.analysis_results = {}
