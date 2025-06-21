@@ -89,6 +89,7 @@ from intensity_analysis import (
 )
 from unit_converter import UnitConverter
 from md_integration import MDSimulation, load_md_file
+from diffusion_simulator import DiffusionSimulator
 
 # Import tracking module with proper error handling
 try:
@@ -973,7 +974,7 @@ if st.session_state.active_page == "MD Integration":
     st.title("Molecular Dynamics Integration")
     
     # Create tabs for different MD functions
-    md_tabs = st.tabs(["Load Simulation", "Analyze Simulation", "Compare with SPT"])
+    md_tabs = st.tabs(["Load Simulation", "Analyze Simulation", "Compare with SPT", "Diffusion Simulator"])
     
     # Load Simulation tab
     with md_tabs[0]:
@@ -1494,6 +1495,251 @@ if st.session_state.active_page == "MD Integration":
                                     st.plotly_chart(fig, use_container_width=True)
                             except Exception as e:
                                 st.error(f"Error comparing trajectories: {str(e)}")
+    
+    # Diffusion Simulator tab
+    with md_tabs[3]:
+        st.header("Diffusion Simulator with Nuclear Boundaries")
+        
+        if 'diffusion_simulator' not in st.session_state:
+            st.session_state.diffusion_simulator = DiffusionSimulator()
+        
+        simulator = st.session_state.diffusion_simulator
+        
+        st.subheader("Simulation Environment")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            thickness_options = list(range(100, 751, 50))
+            thickness_nm = st.selectbox(
+                "Optical Slice Thickness (nm)",
+                thickness_options,
+                index=thickness_options.index(200)
+            )
+            simulator.set_optical_slice_thickness(thickness_nm)
+        
+        with col2:
+            simulate_optical = st.checkbox("Simulate Single Optical Slice", value=False)
+        
+        st.subheader("Boundary Constraints")
+        
+        boundary_type = st.selectbox(
+            "Boundary Type",
+            ["Nuclear Mask", "Crowding Map", "Gel Map", "No Boundaries"]
+        )
+        
+        if boundary_type == "Nuclear Mask":
+            available_masks = st.session_state.get('available_masks', {})
+            if available_masks:
+                mask_name = st.selectbox("Select Nuclear Mask", list(available_masks.keys()))
+                
+                if st.button("Load Nuclear Mask as Boundary"):
+                    if simulator.load_nuclear_mask_as_boundary(mask_name, simulate_optical):
+                        st.success(f"Loaded nuclear mask '{mask_name}' as boundary constraint")
+                        mask_info = st.session_state.get('mask_metadata', {}).get(mask_name, {})
+                        st.info(f"Mask shape: {mask_info.get('shape', 'Unknown')}")
+                        st.info(f"Optical slice thickness: {thickness_nm}nm")
+                        
+                        unique_regions = np.unique(simulator.region_map) if simulator.region_map is not None else []
+                        if len(unique_regions) > 1:
+                            st.subheader("Region Properties")
+                            
+                            for region_id in unique_regions:
+                                if region_id == 0:
+                                    continue
+                                
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    region_name = st.text_input(
+                                        f"Region {region_id} Name",
+                                        value=simulator.region_names.get(region_id, f"Region_{region_id}"),
+                                        key=f"region_name_{region_id}"
+                                    )
+                                
+                                with col2:
+                                    partition_coeff = st.number_input(
+                                        f"Partition Coefficient",
+                                        min_value=0.0,
+                                        max_value=10.0,
+                                        value=simulator.partition_coefficients.get(region_id, 1.0),
+                                        step=0.1,
+                                        key=f"partition_{region_id}"
+                                    )
+                                
+                                with col3:
+                                    if st.button(f"Update Region {region_id}", key=f"update_{region_id}"):
+                                        simulator.set_region_properties(region_id, region_name, partition_coeff)
+                                        st.success(f"Updated {region_name}")
+                            
+                            st.subheader("Liquid-Liquid Phase Boundaries")
+                            if len(unique_regions) >= 3:
+                                region_pairs = [(r1, r2) for r1 in unique_regions[1:] for r2 in unique_regions[1:] if r1 < r2]
+                                
+                                for r1, r2 in region_pairs:
+                                    st.write(f"**Boundary: {simulator.region_names.get(r1, f'Region_{r1}')} ↔ {simulator.region_names.get(r2, f'Region_{r2}')}**")
+                                    
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        coeff_1_to_2 = st.number_input(
+                                            f"Partition {r1}→{r2}",
+                                            min_value=0.0,
+                                            max_value=1.0,
+                                            value=0.5,
+                                            step=0.1,
+                                            key=f"coeff_{r1}_to_{r2}"
+                                        )
+                                    
+                                    with col2:
+                                        coeff_2_to_1 = st.number_input(
+                                            f"Partition {r2}→{r1}",
+                                            min_value=0.0,
+                                            max_value=1.0,
+                                            value=0.5,
+                                            step=0.1,
+                                            key=f"coeff_{r2}_to_{r1}"
+                                        )
+                                    
+                                    if st.button(f"Set Boundary {r1}-{r2}", key=f"boundary_{r1}_{r2}"):
+                                        simulator.add_liquid_liquid_boundary(r1, r2, coeff_1_to_2, coeff_2_to_1)
+                                        st.success(f"Set liquid-liquid boundary between regions {r1} and {r2}")
+                    else:
+                        st.error("Failed to load nuclear mask")
+            else:
+                st.warning("No nuclear masks available. Please create segmentation masks first.")
+                if st.button("Go to Image Processing"):
+                    st.session_state.active_page = "Image Processing"
+                    st.rerun()
+        
+        elif boundary_type == "Crowding Map":
+            crowding_percentage = st.slider("Macromolecular Crowding (%)", 20, 80, 40, 5)
+            map_dims = st.columns(3)
+            with map_dims[0]:
+                dim_x = st.number_input("X Dimension", 50, 200, 100)
+            with map_dims[1]:
+                dim_y = st.number_input("Y Dimension", 50, 200, 100)
+            with map_dims[2]:
+                dim_z = st.number_input("Z Dimension", 10, 50, 20)
+            
+            if st.button("Generate Crowding Map"):
+                crowding_map = simulator.generate_crowding_map((dim_x, dim_y, dim_z), crowding_percentage)
+                simulator.boundary_map = crowding_map
+                st.success(f"Generated crowding map with {crowding_percentage}% barriers")
+        
+        elif boundary_type == "Gel Map":
+            pore_size = st.slider("Gel Pore Size", 5, 50, 20)
+            map_dims = st.columns(3)
+            with map_dims[0]:
+                dim_x = st.number_input("X Dimension", 50, 200, 100, key="gel_x")
+            with map_dims[1]:
+                dim_y = st.number_input("Y Dimension", 50, 200, 100, key="gel_y")
+            with map_dims[2]:
+                dim_z = st.number_input("Z Dimension", 10, 50, 20, key="gel_z")
+            
+            if st.button("Generate Gel Map"):
+                gel_map = simulator.generate_gel_map((dim_x, dim_y, dim_z), pore_size)
+                simulator.boundary_map = gel_map
+                st.success(f"Generated gel map with pore size {pore_size}")
+        
+        st.subheader("Simulation Parameters")
+        
+        sim_mode = st.radio("Simulation Mode", ["Single Particle", "Multi-Particle"])
+        
+        if sim_mode == "Single Particle":
+            particle_diameter = st.number_input("Particle Diameter (nm)", 1, 100, 10)
+            mobility = st.number_input("Mobility", 0.1, 2.0, 0.5, 0.1)
+            num_steps = st.number_input("Number of Steps", 100, 10000, 1000)
+            
+            if st.button("Run Single Particle Simulation"):
+                with st.spinner("Running diffusion simulation..."):
+                    final_disp = simulator.run_single_simulation(particle_diameter, mobility, num_steps)
+                    
+                    if not np.isnan(final_disp):
+                        st.success(f"Simulation completed!")
+                        st.metric("Final Squared Displacement", f"{final_disp:.2f}")
+                        
+                        sim_tracks = simulator.convert_to_tracks_format()
+                        st.session_state.simulated_tracks = sim_tracks
+                        
+                        if simulator.trajectory is not None:
+                            fig = simulator.plot_trajectory(mode='3d')
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            msd_result = simulator.calculate_msd()
+                            msd_fig = go.Figure()
+                            msd_fig.add_trace(go.Scatter(
+                                x=msd_result['lag_time'],
+                                y=msd_result['msd'],
+                                mode='lines+markers',
+                                name='Simulated MSD'
+                            ))
+                            msd_fig.update_layout(
+                                title="Mean Squared Displacement",
+                                xaxis_title="Lag Time (frames)",
+                                yaxis_title="MSD (nm²)"
+                            )
+                            st.plotly_chart(msd_fig, use_container_width=True)
+                            
+                            region_stats = simulator.get_region_occupancy_stats()
+                            if region_stats:
+                                st.subheader("Region Occupancy")
+                                for region_name, occupancy in region_stats.items():
+                                    st.metric(f"{region_name} Occupancy", f"{occupancy:.1%}")
+                    else:
+                        st.error("Simulation failed - particle may be trapped by boundaries")
+        
+        else:
+            particle_sizes = st.text_input("Particle Diameters (nm, comma-separated)", "5, 10, 20, 50")
+            mobility = st.number_input("Mobility", 0.1, 2.0, 0.5, 0.1, key="multi_mobility")
+            num_steps = st.number_input("Number of Steps", 100, 10000, 1000, key="multi_steps")
+            particles_per_size = st.number_input("Particles per Size", 1, 20, 5)
+            
+            if st.button("Run Multi-Particle Simulation"):
+                try:
+                    diameters = [float(d.strip()) for d in particle_sizes.split(',')]
+                    
+                    with st.spinner("Running multi-particle simulation..."):
+                        results_df = simulator.run_multi_particle_simulation(
+                            diameters, mobility, num_steps, particles_per_size
+                        )
+                        
+                        st.success("Multi-particle simulation completed!")
+                        st.dataframe(results_df)
+                        
+                        fig = px.box(results_df, x='particle_diameter', y='final_displacement_sq',
+                                   title="Diffusion vs Particle Size")
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                except ValueError:
+                    st.error("Invalid particle diameter format. Use comma-separated numbers.")
+        
+        if 'simulated_tracks' in st.session_state and st.session_state.tracks_data is not None:
+            st.subheader("Compare with Experimental SPT Data")
+            
+            if st.button("Compare Simulated vs Experimental Tracks"):
+                sim_tracks = st.session_state.simulated_tracks
+                exp_tracks = st.session_state.tracks_data
+                
+                fig = go.Figure()
+                
+                for track_id in sim_tracks['track_id'].unique()[:5]:
+                    track_data = sim_tracks[sim_tracks['track_id'] == track_id]
+                    fig.add_trace(go.Scatter3d(
+                        x=track_data['x'], y=track_data['y'], z=track_data['z'],
+                        mode='lines+markers',
+                        name=f'Simulated {track_id}',
+                        line=dict(color='red', width=3)
+                    ))
+                
+                for track_id in exp_tracks['track_id'].unique()[:5]:
+                    track_data = exp_tracks[exp_tracks['track_id'] == track_id]
+                    fig.add_trace(go.Scatter3d(
+                        x=track_data['x'], y=track_data['y'], z=track_data['z'],
+                        mode='lines+markers',
+                        name=f'Experimental {track_id}',
+                        line=dict(color='blue', width=3)
+                    ))
+                
+                fig.update_layout(title="Simulated vs Experimental Trajectories")
+                st.plotly_chart(fig, use_container_width=True)
 
 # Home page                
 elif st.session_state.active_page == "Home":
