@@ -45,8 +45,11 @@ def load_sample_data(filename):
         print(f"✗ Failed to load {filename}: {e}")
         return None
 
-def test_utils_functions(df):
+def test_utils_functions():
     """Test all utils.py functions with sample data."""
+    # Load a default sample dataset for testing
+    df = load_sample_data("Cell1_spots.csv")
+    assert df is not None, "Sample data failed to load"
     from utils import (
         validate_tracks_dataframe, convert_coordinates_to_microns,
         calculate_basic_statistics, format_number, safe_divide,
@@ -117,7 +120,8 @@ def main():
             print(f"\n--- Testing with {filename} ---")
             df = load_sample_data(filename)
             if df is not None:
-                test_utils_functions(df)
+                # Run tests using one of the sample datasets
+                test_utils_functions()
         else:
             print(f"⚠ Sample file {filename} not found")
     
