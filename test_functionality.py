@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import pytest
 
 sys.path.append('.')
 
@@ -44,6 +45,12 @@ def load_sample_data(filename):
     except Exception as e:
         print(f"✗ Failed to load {filename}: {e}")
         return None
+
+
+@pytest.fixture(scope="module")
+def df():
+    """Fixture providing formatted sample track data."""
+    return load_sample_data("Cell1_spots.csv")
 
 def test_utils_functions(df):
     """Test all utils.py functions with sample data."""
