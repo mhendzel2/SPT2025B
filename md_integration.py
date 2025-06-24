@@ -12,6 +12,9 @@ from typing import Dict, List, Tuple, Any, Optional, Union
 import os
 import io
 
+# Import the diffusion simulator for local random walk generation
+from diffusion_simulator import DiffusionSimulator
+
 class MDSimulation:
     """
     Class for handling molecular dynamics simulation data.
@@ -267,6 +270,11 @@ class MDSimulation:
             
         except Exception as e:
             raise ValueError(f"Error loading trajectory file: {str(e)}")
+
+    # Alias method for compatibility with older attribute names
+    def _load_binary_trajectory_file(self, file):
+        """Wrapper to maintain backward compatibility."""
+        return self._load_trajectory_file(file)
     
     def _load_csv_trajectory(self, file):
         """Load a trajectory from a CSV file"""
@@ -394,8 +402,56 @@ class MDSimulation:
         
         # Create DataFrame
         tracks_df = pd.DataFrame(data)
-        
+
         return tracks_df
+
+    def run_local_diffusion(self,
+                            particle_diameters: List[float],
+                            mobility: float,
+                            num_steps: int,
+                            boundary_map: Optional[np.ndarray] = None,
+                            num_particles_per_size: int = 10) -> pd.DataFrame:
+        """Run a diffusion simulation using :class:`DiffusionSimulator`.
+
+        This provides a lightweight alternative to full MD simulations and is
+        useful for quick comparisons or generating synthetic data.
+
+        Parameters
+        ----------
+        particle_diameters : list of float
+            Diameters of the particles to simulate.
+        mobility : float
+            Step size for the random walk.
+        num_steps : int
+            Number of steps for each simulated particle.
+        boundary_map : np.ndarray, optional
+            Optional 3D array describing barriers (1 = barrier, 0 = free).
+            If ``None`` the simulator will run in an empty box.
+        num_particles_per_size : int
+            How many particles to simulate for each diameter.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Table containing final displacement and diffusion coefficient for
+            each simulated particle.
+        """
+
+        simulator = DiffusionSimulator()
+        if boundary_map is not None:
+            simulator.boundary_map = boundary_map
+
+        results_df = simulator.run_multi_particle_simulation(
+            particle_diameters,
+            mobility,
+            num_steps,
+            num_particles_per_size=num_particles_per_size,
+        )
+
+        # Store latest trajectory from simulator for inspection
+        self.trajectory = simulator.trajectory.reshape(-1, 1, 3) if simulator.trajectory is not None else None
+
+        return results_df
     
     def calculate_msd(self, selected_particles=None, max_lag=None):
         """
