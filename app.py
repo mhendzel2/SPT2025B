@@ -109,7 +109,12 @@ except ImportError:
 # Import report generation module
 try:
     # CORRECTED: Import the EnhancedSPTReportGenerator class from the correct file
-    from enhanced_report_generator import EnhancedSPTReportGenerator
+    # Import both the report generator class and the helper function that
+    # displays the Streamlit interface.
+    from enhanced_report_generator import (
+        EnhancedSPTReportGenerator,
+        show_enhanced_report_generator,
+    )
     REPORT_GENERATOR_AVAILABLE = True
 except ImportError:
     REPORT_GENERATOR_AVAILABLE = False
