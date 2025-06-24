@@ -117,6 +117,21 @@ class StateManager:
         if value <= 0:
             raise ValueError("Pixel size must be positive")
         st.session_state.pixel_size = value
+
+    def load_tracks(self, df: pd.DataFrame, source: str = None):
+        """Load track data and reset related state."""
+        self.set_tracks(df, filename=source)
+        st.session_state.track_statistics = None
+        st.session_state.analysis_results = {}
+
+    def load_image_data(self, image_data: Any, metadata: Optional[Dict[str, Any]] = None):
+        """Load image data with optional metadata."""
+        self.set_image_data(image_data)
+        if metadata is not None:
+            if 'image_metadata' not in st.session_state:
+                st.session_state.image_metadata = {}
+            if isinstance(metadata, dict):
+                st.session_state.image_metadata.update(metadata)
     
 
     
