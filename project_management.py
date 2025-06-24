@@ -650,6 +650,11 @@ def pm_list_available_projects(projects_dir):
                         pass
     return projects
 
+def list_available_projects(projects_dir: str) -> List[Dict[str, Any]]:
+    """List available projects using the ProjectManager class."""
+    manager = ProjectManager(projects_dir)
+    return manager.list_projects()
+
 class ProjectManagerCompat:
     """Compatibility wrapper for project management functions."""
     
