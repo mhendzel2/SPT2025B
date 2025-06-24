@@ -23,7 +23,12 @@ class PolymerPhysicsModel:
         """
         Phenomenological Rouse-like MSD model for nucleosome diffusion in chromatin.
         
-        MSD(t) = 2d * D_macro * t + Gamma * t^alpha
+        MSD(t) = D_macro * t + Gamma * t^alpha
+
+        The factor of $2d$ commonly appearing in Brownian motion MSD
+        expressions is absorbed into ``D_macro`` here.  This keeps the
+        implementation consistent with how diffusion coefficients are
+        estimated elsewhere in the code base.
         
         For nucleosome diffusion:
         - D_macro: macroscopic diffusion coefficient (long-time behavior)
