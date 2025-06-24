@@ -860,6 +860,12 @@ def navigate_to(page):
 state_manager = get_state_manager()
 analysis_manager = AnalysisManager()
 
+# Expose managers in session state for components that expect them
+if 'app_state' not in st.session_state:
+    st.session_state.app_state = state_manager
+if 'analysis_manager' not in st.session_state:
+    st.session_state.analysis_manager = analysis_manager
+
 # Sidebar navigation
 st.sidebar.title("SPT Analysis")
 #st.sidebar.image("generated-icon.png", width=100)
