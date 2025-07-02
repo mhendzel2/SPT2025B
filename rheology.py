@@ -110,42 +110,34 @@ class MicrorheologyAnalyzer:
     
     # In rheology.py, within the MicrorheologyAnalyzer class
 
-def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame, 
-                                   omega_rad_s: float) -> Tuple[float, float]:
-    """
-    Calculate complex modulus G*(ω) using Generalized Stokes-Einstein Relation.
-    
-    Based on Mason & Weitz (1995) approach for microrheology.
-    """
-    if len(msd_df) < 3:
-        return np.nan, np.nan
+    def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
+                                       omega_rad_s: float) -> Tuple[float, float]:
+        """Calculate complex modulus G*(ω) using the GSER approach."""
+        if len(msd_df) < 3:
+            return np.nan, np.nan
 
-    # ... (existing code to calculate alpha) ...
-    log_times = np.log(msd_df['lag_time_s'])
-    log_msd = np.log(msd_df['msd_m2'])
-    idx = np.argmin(np.abs(msd_df['lag_time_s'] - (1.0 / omega_rad_s)))
-    if idx == 0 or idx == len(msd_df) - 1:
-        alpha = 1.0 # Default fallback
-    else:
-        alpha = (log_msd[idx + 1] - log_msd[idx - 1]) / (log_times[idx + 1] - log_times[idx - 1])
-    
-    # --- FIX STARTS HERE ---
-    from scipy.special import gamma
-    gamma_factor = gamma(1 + alpha)
-    # --- FIX ENDS HERE ---
+        # Estimate alpha from local slope of the MSD curve
+        log_times = np.log(msd_df['lag_time_s'])
+        log_msd = np.log(msd_df['msd_m2'])
+        idx = np.argmin(np.abs(msd_df['lag_time_s'] - (1.0 / omega_rad_s)))
+        if idx == 0 or idx == len(msd_df) - 1:
+            alpha = 1.0
+        else:
+            alpha = (log_msd[idx + 1] - log_msd[idx - 1]) / (log_times[idx + 1] - log_times[idx - 1])
 
-    # Prefactor
-    msd_at_tau = np.interp(1.0 / omega_rad_s, msd_df['lag_time_s'], msd_df['msd_m2'])
-    prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
-    
-    # Complex part
-    omega_alpha = omega_rad_s**alpha
-    phase = alpha * np.pi / 2
-    
-    g_star_real = prefactor * gamma_factor * np.cos(phase)
-    g_star_imag = prefactor * gamma_factor * np.sin(phase)
-    
-    return g_star_real, g_star_imag
+        from scipy.special import gamma
+        gamma_factor = gamma(1 + alpha)
+
+        msd_at_tau = np.interp(1.0 / omega_rad_s, msd_df['lag_time_s'], msd_df['msd_m2'])
+        prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
+
+        omega_alpha = omega_rad_s ** alpha
+        phase = alpha * np.pi / 2
+
+        g_star_real = prefactor * gamma_factor * np.cos(phase)
+        g_star_imag = prefactor * gamma_factor * np.sin(phase)
+
+        return g_star_real, g_star_imag
 
     def calculate_effective_viscosity(self, msd_df: pd.DataFrame, 
                                       lag_time_range_s: Tuple[float, float] = None) -> float:
@@ -222,7 +214,7 @@ def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
             Complete microrheology analysis results for all datasets
         """
         if len(track_datasets) != len(frame_intervals_s):
-            return {
+                return {
                 'success': False,
                 'error': 'Number of datasets must match number of frame intervals'
             }
@@ -350,8 +342,81 @@ def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
             
         except Exception as e:
             results['error'] = str(e)
-        
+
         return results
+
+    def analyze_microrheology(self, tracks_df: pd.DataFrame, pixel_size_um: float,
+                              frame_interval_s: float, max_lag: int = 20) -> Dict:
+        """High level single dataset microrheology analysis."""
+
+        msd_df = self.calculate_msd_from_tracks(
+            tracks_df, pixel_size_um, frame_interval_s, max_lag_frames=max_lag
+        )
+
+        if msd_df.empty:
+            return {'success': False, 'error': 'Insufficient data for MSD calculation'}
+
+        # Determine frequency range based on sampling
+        min_time = frame_interval_s
+        max_time = msd_df['lag_time_s'].max()
+        omega_list = np.logspace(
+            np.log10(2 * np.pi / (max_time * 0.5)),
+            np.log10(2 * np.pi / (min_time * 2)),
+            20
+        )
+
+        g_prime_values = []
+        g_double_prime_values = []
+        frequencies_hz = []
+
+        for omega in omega_list:
+            g_p, g_pp = self.calculate_complex_modulus_gser(msd_df, omega)
+            if not (np.isnan(g_p) or np.isnan(g_pp)):
+                g_prime_values.append(g_p)
+                g_double_prime_values.append(g_pp)
+                frequencies_hz.append(omega / (2 * np.pi))
+
+        viscosity = self.calculate_effective_viscosity(msd_df)
+
+        return {
+            'success': True,
+            'msd_data': msd_df,
+            'frequency_response': {
+                'frequencies_hz': frequencies_hz,
+                'g_prime_pa': g_prime_values,
+                'g_double_prime_pa': g_double_prime_values,
+            },
+            'viscosity': {'effective_pa_s': viscosity},
+        }
+
+    def analyze_multi_dataset_rheology(self, track_datasets: List[pd.DataFrame],
+                                       pixel_sizes: List[float],
+                                       frame_intervals: List[float],
+                                       max_lag: int = 20) -> Dict:
+        """Wrapper for multi-dataset microrheology analysis."""
+
+        if len(track_datasets) != len(frame_intervals):
+            return {'success': False, 'error': 'Number of datasets must match number of frame intervals'}
+
+        pixel_size = pixel_sizes[0] if isinstance(pixel_sizes, list) else pixel_sizes
+
+        return self.multi_dataset_analysis(
+            track_datasets=track_datasets,
+            frame_intervals_s=frame_intervals,
+            pixel_size_um=pixel_size
+        )
+
+    def analyze_viscoelasticity(self, tracks_df: pd.DataFrame,
+                                pixel_size_um: float = 0.1,
+                                frame_interval_s: float = 0.1,
+                                max_lag: int = 20) -> Dict:
+        """Backward compatible API used by older components."""
+        return self.analyze_microrheology(
+            tracks_df,
+            pixel_size_um=pixel_size_um,
+            frame_interval_s=frame_interval_s,
+            max_lag=max_lag,
+        )
 
 
 def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:

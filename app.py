@@ -108,7 +108,13 @@ except ImportError:
 
 # Import report generation module
 try:
-    from report_generator import SPTReportGenerator
+    # CORRECTED: Import the EnhancedSPTReportGenerator class from the correct file
+    # Import both the report generator class and the helper function that
+    # displays the Streamlit interface.
+    from enhanced_report_generator import (
+        EnhancedSPTReportGenerator,
+        show_enhanced_report_generator,
+    )
     REPORT_GENERATOR_AVAILABLE = True
 except ImportError:
     REPORT_GENERATOR_AVAILABLE = False
@@ -854,9 +860,15 @@ def navigate_to(page):
 state_manager = get_state_manager()
 analysis_manager = AnalysisManager()
 
+# Expose managers in session state for components that expect them
+if 'app_state' not in st.session_state:
+    st.session_state.app_state = state_manager
+if 'analysis_manager' not in st.session_state:
+    st.session_state.analysis_manager = analysis_manager
+
 # Sidebar navigation
 st.sidebar.title("SPT Analysis")
-st.sidebar.image("generated-icon.png", width=100)
+#st.sidebar.image("generated-icon.png", width=100)
 
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
@@ -5484,73 +5496,75 @@ elif st.session_state.active_page == "Analysis":
                     st.text("Median dwell time: 0.0 s")
                     st.info("No dwell events were detected with the current parameters. Try adjusting the threshold distance or minimum dwell frames.")
         
-        # In app.py, within the "Boundary Crossing Analysis" tab
+        # Boundary Crossing Analysis tab
+        with tabs[5]:
+            st.header("Boundary Crossing Analysis")
 
-# Run boundary crossing analysis
-if st.button("Analyze Boundary Crossings"):
-    with st.spinner("Analyzing boundary crossings..."):
-        try:
-            # Add class information to tracks
-            tracks_with_classes = apply_mask_to_tracks(
-                st.session_state.tracks_data, 
-                selected_mask, 
-                []  # Don't filter, get all classes
-            )
+            # Run boundary crossing analysis
+            if st.button("Analyze Boundary Crossings"):
+                with st.spinner("Analyzing boundary crossings..."):
+                    try:
+                        # Add class information to tracks
+                        tracks_with_classes = apply_mask_to_tracks(
+                            st.session_state.tracks_data,
+                            selected_mask,
+                            []  # Don't filter, get all classes
+                        )
             
-            # Filter by minimum track length
-            track_lengths = tracks_with_classes.groupby('track_id').size()
-            valid_tracks = track_lengths[track_lengths >= min_track_length].index
-            filtered_tracks = tracks_with_classes[tracks_with_classes['track_id'].isin(valid_tracks)]
+                        # Filter by minimum track length
+                        track_lengths = tracks_with_classes.groupby('track_id').size()
+                        valid_tracks = track_lengths[track_lengths >= min_track_length].index
+                        filtered_tracks = tracks_with_classes[tracks_with_classes['track_id'].isin(valid_tracks)]
 
-            # --- FIX STARTS HERE ---
-            # Convert the selected segmentation mask into the correct boundary format
-            from segmentation import convert_compartments_to_boundary_crossing_format
+                        # --- FIX STARTS HERE ---
+                        # Convert the selected segmentation mask into the correct boundary format
+                        from segmentation import convert_compartments_to_boundary_crossing_format
             
-            # Create a list of dictionaries for each compartment region
-            compartments_for_conversion = []
-            for class_id in filtered_tracks['class'].unique():
-                if class_id != 'none':
-                    # Get the mask data properly
-                    if selected_mask and selected_mask[0] in st.session_state.available_masks:
-                        mask_data = st.session_state.available_masks[selected_mask[0]]
-                        comp_mask = (mask_data == class_id)
-                        props = measure.regionprops(comp_mask.astype(int))
-                    else:
-                        props = []
+                        # Create a list of dictionaries for each compartment region
+                        compartments_for_conversion = []
+                        for class_id in filtered_tracks['class'].unique():
+                            if class_id != 'none':
+                                # Get the mask data properly
+                                if selected_mask and selected_mask[0] in st.session_state.available_masks:
+                                    mask_data = st.session_state.available_masks[selected_mask[0]]
+                                    comp_mask = (mask_data == class_id)
+                                    props = measure.regionprops(comp_mask.astype(int))
+                                else:
+                                    props = []
                     
-                    # Process ALL regions for this class, not just the first one
-                    for i, prop in enumerate(props):
-                        min_row, min_col, max_row, max_col = prop.bbox
-                        compartments_for_conversion.append({
-                            'id': f'class_{class_id}_region_{i}',
-                            'bbox_um': {
-                                'x1': min_col * get_global_pixel_size(), 
-                                'y1': min_row * get_global_pixel_size(),
-                                'x2': max_col * get_global_pixel_size(), 
-                                'y2': max_row * get_global_pixel_size()
-                             }
-                        })
+                                # Process ALL regions for this class, not just the first one
+                                for i, prop in enumerate(props):
+                                    min_row, min_col, max_row, max_col = prop.bbox
+                                    compartments_for_conversion.append({
+                                        'id': f'class_{class_id}_region_{i}',
+                                        'bbox_um': {
+                                            'x1': min_col * get_global_pixel_size(),
+                                            'y1': min_row * get_global_pixel_size(),
+                                            'x2': max_col * get_global_pixel_size(),
+                                            'y2': max_row * get_global_pixel_size()
+                                         }
+                                    })
             
-            boundaries = convert_compartments_to_boundary_crossing_format(compartments_for_conversion)
-            # --- FIX ENDS HERE ---
+                        boundaries = convert_compartments_to_boundary_crossing_format(compartments_for_conversion)
+                        # --- FIX ENDS HERE ---
 
-            # Analyze boundary crossings using the correctly formatted boundaries
-            boundary_stats = analyze_boundary_crossing(
-                filtered_tracks,
-                boundaries=boundaries, # Pass the corrected boundaries
-                pixel_size=get_global_pixel_size(),
-                frame_interval=get_global_frame_interval(),
-                min_track_length=min_track_length
-            )
+                        # Analyze boundary crossings using the correctly formatted boundaries
+                        boundary_stats = analyze_boundary_crossing(
+                            filtered_tracks,
+                            boundaries=boundaries,  # Pass the corrected boundaries
+                            pixel_size=get_global_pixel_size(),
+                            frame_interval=get_global_frame_interval(),
+                            min_track_length=min_track_length
+                        )
             
-            if "error" not in boundary_stats:
-                st.session_state.analysis_results["boundary_crossing"] = boundary_stats
-                st.success("Boundary crossing analysis completed!")
-            else:
-                st.error(boundary_stats["error"])
+                        if "error" not in boundary_stats:
+                            st.session_state.analysis_results["boundary_crossing"] = boundary_stats
+                            st.success("Boundary crossing analysis completed!")
+                        else:
+                            st.error(boundary_stats["error"])
         
-        except Exception as e:
-            st.error(f"Error during boundary crossing analysis: {str(e)}")
+                    except Exception as e:
+                        st.error(f"Error during boundary crossing analysis: {str(e)}")
                 
             # Display results if available
             if "boundary_crossing" in st.session_state.analysis_results:
@@ -8448,46 +8462,11 @@ elif st.session_state.active_page == "Advanced Analysis":
 # Report Generation page
 elif st.session_state.active_page == "Report Generation":
     if REPORT_GENERATOR_AVAILABLE:
-        if 'report_generator' not in st.session_state:
-            st.session_state.report_generator = SPTReportGenerator()
+        st.title("Automated Report Generation")
         
-        report_generator = st.session_state.report_generator
+        # This single function call handles the entire user interface for this page.
+        show_enhanced_report_generator()
         
-        if st.session_state.tracks_data is not None and not st.session_state.tracks_data.empty:
-            # Display analysis selection interface
-            config = report_generator.display_analysis_selection_interface()
-            
-            # Generate report button
-            if st.button("🚀 Generate Automated Report", type="primary"):
-                if config['selected_analyses']:
-                    current_units = get_current_units()
-                    
-                    with st.spinner("Processing selected analyses and generating report..."):
-                        report_data = report_generator.generate_automated_report(
-                            st.session_state.tracks_data, 
-                            config, 
-                            current_units
-                        )
-                    
-                    if report_data:
-                        st.session_state.generated_report = report_data
-                        # Only display results if report generation was successful
-                        if 'metadata' in report_data:
-                            report_generator.display_report_results(report_data)
-                        else:
-                            st.warning("Report generated but may be incomplete. Check individual analysis results.")
-                else:
-                    st.warning("Please select at least one analysis to include in the report.")
-            
-            # Display previously generated report if available
-            if 'generated_report' in st.session_state:
-                st.divider()
-                st.subheader("📋 Previously Generated Report")
-                report_generator.display_report_results(st.session_state.generated_report)
-                
-        else:
-            st.warning("No track data available. Please load tracking data first.")
-            st.info("Navigate to **Data Loading** to load your tracking data, then return here to generate comprehensive analysis reports.")
     else:
         st.error("Report generation module is not available. Please ensure all required files are present.")
 
