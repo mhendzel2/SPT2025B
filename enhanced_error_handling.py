@@ -158,7 +158,11 @@ def suggest_statistical_test(data1: Union[List, np.ndarray], data2: Union[List, 
     """
     Suggest appropriate statistical test based on data characteristics.
     """
-    from scipy.stats import shapiro, levene
+    try:
+        from scipy.stats import shapiro, levene
+        scipy_available = True
+    except ImportError:
+        scipy_available = False
     
     n1, n2 = len(data1), len(data2)
     
@@ -169,6 +173,9 @@ def suggest_statistical_test(data1: Union[List, np.ndarray], data2: Union[List, 
     if n1 < 30 or n2 < 30:
         suggested_test = "Mann-Whitney U test (non-parametric, recommended for small samples)"
     else:
+        if not scipy_available:
+            return "Mann-Whitney U test (requires scipy for normality checks)"
+        
         # Test for normality
         try:
             _, p1 = shapiro(data1)
@@ -182,11 +189,11 @@ def suggest_statistical_test(data1: Union[List, np.ndarray], data2: Union[List, 
                         suggested_test = "Independent t-test (equal variances)"
                     else:
                         suggested_test = "Welch's t-test (unequal variances)"
-                except:
+                except Exception:
                     suggested_test = "Independent t-test"
             else:
                 suggested_test = "Mann-Whitney U test (non-normal distribution detected)"
-        except:
+        except Exception:
             suggested_test = "Mann-Whitney U test (unable to test normality)"
     
     return suggested_test

@@ -407,12 +407,12 @@ def load_tracks_file(file) -> pd.DataFrame:
                 if 'z' in tracks_df.columns:
                     data_dict['z'] = pd.to_numeric(tracks_df['z'], errors='coerce')
                 else:
-                    data_dict['z'] = 0
+                    data_dict['z'] = pd.Series([0] * len(tracks_df), dtype=float)
                     
                 if 'quality' in tracks_df.columns:
                     data_dict['quality'] = pd.to_numeric(tracks_df['quality'], errors='coerce')
                 else:
-                    data_dict['quality'] = 1
+                    data_dict['quality'] = pd.Series([1] * len(tracks_df), dtype=float)
                 
                 result_df = pd.DataFrame(data_dict)
                 

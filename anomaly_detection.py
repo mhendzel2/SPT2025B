@@ -44,6 +44,21 @@ class AnomalyDetector:
         self.anomaly_scores = {}
         self.anomaly_types = {}
         
+        # Emoji mapping for different anomaly types
+        self.anomaly_emojis = {
+            'velocity_spike': '⚡',      # High velocity anomalies
+            'confinement_break': '💥',   # Particles breaking confinement
+            'direction_reversal': '🔄',  # Sudden directional changes
+            'energy_transition': '🌊',   # Energy state changes
+            'spatial_outlier': '🎯',     # Spatial clustering anomalies
+            'ml_anomaly': '🤖',         # Machine learning detected
+            'statistical_outlier': '📊', # Statistical outliers
+            'track_fragmentation': '💔', # Track interruptions
+            'drift_anomaly': '🌀',      # Systematic drift
+            'binding_event': '🔗',      # Potential binding/unbinding
+            'normal': '✅'              # Normal behavior
+        }
+        
     def extract_features(self, tracks_df: pd.DataFrame) -> pd.DataFrame:
         """
         Extract comprehensive features for anomaly detection.
@@ -367,6 +382,257 @@ class AnomalyDetector:
         
         return results
     
+    def classify_anomaly_type(self, track_id: int, velocity_anomalies: Dict, confinement_anomalies: Dict, 
+                             directional_anomalies: Dict, ml_scores: Dict, spatial_anomalies: Dict) -> Tuple[str, str, str]:
+        """
+        Classify the primary anomaly type for a track and return emoji and description.
+        
+        Parameters
+        ----------
+        track_id : int
+            Track identifier
+        velocity_anomalies, confinement_anomalies, directional_anomalies : Dict
+            Anomaly detection results from various methods
+        ml_scores : Dict
+            Machine learning anomaly scores
+        spatial_anomalies : Dict
+            Spatial clustering anomaly results
+            
+        Returns
+        -------
+        Tuple[str, str, str]
+            (anomaly_type, emoji, description)
+        """
+        anomaly_types = []
+        
+        # Check for velocity anomalies
+        if track_id in velocity_anomalies and len(velocity_anomalies[track_id]) > 0:
+            anomaly_types.append('velocity_spike')
+        
+        # Check for confinement breaks
+        if track_id in confinement_anomalies and len(confinement_anomalies[track_id]) > 0:
+            anomaly_types.append('confinement_break')
+        
+        # Check for directional reversals
+        if track_id in directional_anomalies and len(directional_anomalies[track_id]) > 0:
+            anomaly_types.append('direction_reversal')
+        
+        # Check for ML-detected anomalies
+        if track_id in ml_scores and ml_scores[track_id] < -0.1:
+            anomaly_types.append('ml_anomaly')
+        
+        # Check for spatial outliers
+        if track_id in spatial_anomalies and spatial_anomalies[track_id] == 'outlier':
+            anomaly_types.append('spatial_outlier')
+        
+        # Determine primary anomaly type
+        if not anomaly_types:
+            return 'normal', self.anomaly_emojis['normal'], "Normal particle behavior"
+        
+        # Priority order for multiple anomalies
+        priority_order = ['velocity_spike', 'confinement_break', 'direction_reversal', 'ml_anomaly', 'spatial_outlier']
+        
+        primary_type = None
+        for ptype in priority_order:
+            if ptype in anomaly_types:
+                primary_type = ptype
+                break
+        
+        if primary_type is None:
+            primary_type = anomaly_types[0]
+        
+        # Generate descriptions
+        descriptions = {
+            'velocity_spike': "Sudden velocity increase detected - potential motor protein activation or external force",
+            'confinement_break': "Particle escaped confinement region - possible membrane permeation or structure change",
+            'direction_reversal': "Sharp directional change detected - potential obstacle encounter or binding event",
+            'ml_anomaly': "Machine learning detected unusual behavior pattern - complex anomaly requiring investigation",
+            'spatial_outlier': "Track location deviates from typical spatial distribution - possible experimental artifact",
+            'normal': "Normal particle behavior within expected parameters"
+        }
+        
+        return primary_type, self.anomaly_emojis[primary_type], descriptions[primary_type]
+    
+    def generate_detailed_tooltip(self, track_id: int, track_data: pd.DataFrame, 
+                                 anomaly_results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate comprehensive tooltip information for a specific track.
+        
+        Parameters
+        ----------
+        track_id : int
+            Track identifier
+        track_data : pd.DataFrame
+            Data for the specific track
+        anomaly_results : Dict
+            Results from comprehensive anomaly detection
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Detailed tooltip information with emojis and descriptions
+        """
+        # Basic track statistics
+        track_stats = {
+            'track_id': track_id,
+            'length': len(track_data),
+            'duration': track_data['frame'].max() - track_data['frame'].min() + 1,
+            'mean_velocity': 0,
+            'max_displacement': 0
+        }
+        
+        # Calculate velocities if possible
+        if len(track_data) > 1:
+            dx = np.diff(track_data['x'].values)
+            dy = np.diff(track_data['y'].values)
+            velocities = np.sqrt(dx**2 + dy**2)
+            track_stats['mean_velocity'] = np.mean(velocities)
+            track_stats['max_displacement'] = np.max(velocities)
+        
+        # Get anomaly classification
+        anomaly_type, emoji, description = self.classify_anomaly_type(
+            track_id,
+            anomaly_results.get('velocity_anomalies', {}),
+            anomaly_results.get('confinement_anomalies', {}),
+            anomaly_results.get('directional_anomalies', {}),
+            anomaly_results.get('ml_anomaly_scores', {}),
+            anomaly_results.get('spatial_anomalies', {})
+        )
+        
+        # Build tooltip data
+        tooltip_data = {
+            'primary_emoji': emoji,
+            'anomaly_type': anomaly_type,
+            'description': description,
+            'track_stats': track_stats,
+            'anomaly_details': []
+        }
+        
+        # Add specific anomaly details
+        velocity_frames = anomaly_results.get('velocity_anomalies', {}).get(track_id, [])
+        if velocity_frames:
+            tooltip_data['anomaly_details'].append({
+                'type': 'Velocity Spike',
+                'emoji': '⚡',
+                'frames': velocity_frames,
+                'count': len(velocity_frames),
+                'description': f"High velocity detected at {len(velocity_frames)} time points"
+            })
+        
+        confinement_frames = anomaly_results.get('confinement_anomalies', {}).get(track_id, [])
+        if confinement_frames:
+            tooltip_data['anomaly_details'].append({
+                'type': 'Confinement Break',
+                'emoji': '💥',
+                'frames': confinement_frames,
+                'count': len(confinement_frames),
+                'description': f"Escaped confinement at {len(confinement_frames)} time points"
+            })
+        
+        directional_frames = anomaly_results.get('directional_anomalies', {}).get(track_id, [])
+        if directional_frames:
+            tooltip_data['anomaly_details'].append({
+                'type': 'Direction Change',
+                'emoji': '🔄',
+                'frames': directional_frames,
+                'count': len(directional_frames),
+                'description': f"Sharp directional changes at {len(directional_frames)} time points"
+            })
+        
+        ml_score = anomaly_results.get('ml_anomaly_scores', {}).get(track_id, 0)
+        if ml_score < -0.1:
+            tooltip_data['anomaly_details'].append({
+                'type': 'ML Anomaly',
+                'emoji': '🤖',
+                'score': ml_score,
+                'description': f"ML anomaly score: {ml_score:.3f} (more negative = more anomalous)"
+            })
+        
+        spatial_label = anomaly_results.get('spatial_anomalies', {}).get(track_id, 'normal')
+        if spatial_label == 'outlier':
+            tooltip_data['anomaly_details'].append({
+                'type': 'Spatial Outlier',
+                'emoji': '🎯',
+                'description': "Track location deviates from typical spatial distribution"
+            })
+        
+        return tooltip_data
+    
+    def create_emoji_summary_table(self, anomaly_results: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Create a summary table with emoji indicators for all tracks.
+        
+        Parameters
+        ----------
+        anomaly_results : Dict
+            Results from comprehensive anomaly detection
+            
+        Returns
+        -------
+        pd.DataFrame
+            Summary table with emoji indicators and basic statistics
+        """
+        summary_data = []
+        
+        # Get all unique track IDs from all anomaly detection results
+        all_track_ids = set()
+        for result_dict in anomaly_results.values():
+            if isinstance(result_dict, dict):
+                all_track_ids.update(result_dict.keys())
+        
+        for track_id in sorted(all_track_ids):
+            # Classify anomaly type
+            anomaly_type, emoji, description = self.classify_anomaly_type(
+                track_id,
+                anomaly_results.get('velocity_anomalies', {}),
+                anomaly_results.get('confinement_anomalies', {}),
+                anomaly_results.get('directional_anomalies', {}),
+                anomaly_results.get('ml_anomaly_scores', {}),
+                anomaly_results.get('spatial_anomalies', {})
+            )
+            
+            # Count total anomalies
+            total_anomalies = 0
+            anomaly_types_present = []
+            
+            if track_id in anomaly_results.get('velocity_anomalies', {}):
+                count = len(anomaly_results['velocity_anomalies'][track_id])
+                total_anomalies += count
+                if count > 0:
+                    anomaly_types_present.append(f"⚡×{count}")
+            
+            if track_id in anomaly_results.get('confinement_anomalies', {}):
+                count = len(anomaly_results['confinement_anomalies'][track_id])
+                total_anomalies += count
+                if count > 0:
+                    anomaly_types_present.append(f"💥×{count}")
+            
+            if track_id in anomaly_results.get('directional_anomalies', {}):
+                count = len(anomaly_results['directional_anomalies'][track_id])
+                total_anomalies += count
+                if count > 0:
+                    anomaly_types_present.append(f"🔄×{count}")
+            
+            if track_id in anomaly_results.get('ml_anomaly_scores', {}):
+                score = anomaly_results['ml_anomaly_scores'][track_id]
+                if score < -0.1:
+                    anomaly_types_present.append(f"🤖({score:.2f})")
+            
+            if track_id in anomaly_results.get('spatial_anomalies', {}):
+                if anomaly_results['spatial_anomalies'][track_id] == 'outlier':
+                    anomaly_types_present.append("🎯")
+            
+            summary_data.append({
+                'Track ID': track_id,
+                'Status': emoji,
+                'Anomaly Type': anomaly_type.replace('_', ' ').title(),
+                'Total Anomalies': total_anomalies,
+                'Details': ' '.join(anomaly_types_present) if anomaly_types_present else '✅',
+                'Description': description[:50] + "..." if len(description) > 50 else description
+            })
+        
+        return pd.DataFrame(summary_data)
+    
     def comprehensive_anomaly_detection(self, tracks_df: pd.DataFrame) -> Dict[str, Any]:
         """
         Run comprehensive anomaly detection using all available methods.
@@ -442,6 +708,22 @@ class AnomalyDetector:
         
         return track_anomalies
     
+    def analyze_anomalies(self, tracks_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Main method to analyze anomalies in tracking data.
+        
+        Parameters
+        ----------
+        tracks_df : pd.DataFrame
+            Tracking data with columns: track_id, frame, x, y
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Comprehensive anomaly analysis results
+        """
+        return self.comprehensive_anomaly_detection(tracks_df)
+    
     def get_anomaly_summary(self) -> Dict[str, Any]:
         """
         Get a summary of detected anomalies.
@@ -467,3 +749,46 @@ class AnomalyDetector:
             'anomaly_type_counts': anomaly_counts,
             'anomaly_percentage': (total_tracks / (total_tracks + len([t for t in self.anomaly_scores if t not in self.anomaly_types]))) * 100 if self.anomaly_scores else 0
         }
+
+def detect_anomalies_iforest(tracks_df):
+    """
+    Detect anomalies in tracks using Isolation Forest.
+    """
+    print("Detecting anomalies with Isolation Forest...")
+    
+    if tracks_df.empty:
+        return pd.DataFrame()
+        
+    try:
+        from sklearn.ensemble import IsolationForest
+        
+        # Feature extraction (e.g., displacement between frames)
+        tracks_df['dx'] = tracks_df.groupby('track_id')['x'].diff().fillna(0)
+        tracks_df['dy'] = tracks_df.groupby('track_id')['y'].diff().fillna(0)
+        tracks_df['displacement'] = np.sqrt(tracks_df['dx']**2 + tracks_df['dy']**2)
+        
+        # Calculate speed (displacement per frame)
+        tracks_df['speed'] = tracks_df['displacement']
+        
+        # Calculate directional change
+        tracks_df['direction'] = np.arctan2(tracks_df['dy'], tracks_df['dx'])
+        tracks_df['direction_change'] = tracks_df.groupby('track_id')['direction'].diff().fillna(0)
+        
+        # Select features for anomaly detection
+        features = tracks_df[['displacement', 'speed', 'direction_change']].fillna(0)
+        
+        # Apply Isolation Forest
+        model = IsolationForest(contamination='auto', random_state=42)
+        tracks_df['anomaly'] = model.fit_predict(features)
+        
+        # Anomalies are marked as -1 by the model
+        anomalous_tracks = tracks_df[tracks_df['anomaly'] == -1].copy()
+        
+        return anomalous_tracks
+        
+    except ImportError:
+        print("scikit-learn not available. Isolation Forest requires scikit-learn.")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error in anomaly detection: {e}")
+        return pd.DataFrame()
