@@ -2802,8 +2802,8 @@ Lower values provide faster comparison but may miss fine differences between met
                                     unique_classes = np.unique(classes)
                                     st.write(f"Debug - Unique classes found: {unique_classes}")
                                     st.write(f"Debug - Class counts: {[(c, np.sum(classes == c)) for c in unique_classes]}")
-                                    if 'component_to_brightness_order' in locals():
-                                        st.write(f"Debug - Component mapping: {component_to_brightness_order}")
+                                    # if 'component_to_brightness_order' in locals():
+                                    #     st.write(f"Debug - Component mapping: {component_to_brightness_order}")
                                 
                                 # Display class distribution
                                 st.markdown("#### Class Distribution Summary")
@@ -5050,6 +5050,19 @@ elif st.session_state.active_page == "Analysis":
                     
                     # Display visualizations
                     if 'ensemble_msd' in results and not results['ensemble_msd'].empty:
+                        # Define plot_msd_curves if not already defined or import from your utilities
+                        def plot_msd_curves(msd_data):
+                            import plotly.express as px
+                            if isinstance(msd_data, dict) and 'lag_time' in msd_data and 'msd' in msd_data:
+                                df = pd.DataFrame({'lag_time': msd_data['lag_time'], 'msd': msd_data['msd']})
+                            elif isinstance(msd_data, pd.DataFrame):
+                                df = msd_data
+                            else:
+                                return px.scatter(title="No MSD data available")
+                            fig = px.scatter(df, x="lag_time", y="msd", title="MSD vs Lag Time", labels={"lag_time": "Lag Time (s)", "msd": "MSD (μm²)"})
+                            fig.update_traces(mode='lines+markers')
+                            return fig
+
                         msd_fig = plot_msd_curves(results.get('msd_data', results))
                         st.plotly_chart(msd_fig, use_container_width=True)
                     
@@ -5310,6 +5323,20 @@ elif st.session_state.active_page == "Analysis":
                             
                     # Display clustering visualizations
                     if 'spatial_clusters' in results:
+                        # Define a simple plot_spatial_clustering function if not already defined
+                        def plot_spatial_clustering(results):
+                            import plotly.express as px
+                            if 'cluster_tracks' in results and not results['cluster_tracks'].empty:
+                                df = results['cluster_tracks']
+                                fig = px.scatter(
+                                    df, x='x', y='y', color='cluster_id',
+                                    title="Spatial Clustering of Tracks",
+                                    labels={'x': 'X Position (µm)', 'y': 'Y Position (µm)', 'cluster_id': 'Cluster'}
+                                )
+                                fig.update_yaxes(autorange="reversed")
+                                return fig
+                            else:
+                                return px.scatter(title="No clustering data available")
                         spatial_fig = plot_spatial_clustering(results) if 'clustering_results' in results else st.warning('No clustering results available')
                         st.plotly_chart(spatial_fig, use_container_width=True)
                     
@@ -5473,6 +5500,24 @@ elif st.session_state.active_page == "Analysis":
                     
                     # Display dwell time visualizations
                     if 'dwell_times' in results:
+                        def plot_dwell_time_analysis(results):
+                            import plotly.express as px
+                            if 'dwell_times' in results and isinstance(results['dwell_times'], dict) and results['dwell_times']:
+                                dwell_data = []
+                                for class_val, stats in results['dwell_times'].items():
+                                    dwell_data.append({
+                                        'Class': int(class_val),
+                                        'Mean Dwell Time (frames)': stats['mean'],
+                                        'Std Dev (frames)': stats['std'],
+                                        'Min (frames)': stats['min'],
+                                        'Max (frames)': stats['max'],
+                                        'Count': stats['count']
+                                    })
+                                df = pd.DataFrame(dwell_data)
+                                fig = px.bar(df, x='Class', y='Mean Dwell Time (frames)', error_y='Std Dev (frames)', title='Mean Dwell Time by Class')
+                                return fig
+                            else:
+                                return px.scatter(title="No dwell time data available")
                         dwell_fig = plot_dwell_time_analysis(results)
                         st.plotly_chart(dwell_fig, use_container_width=True)
                     
@@ -7695,9 +7740,9 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         # Calculate MSD first
                                         msd_results = calculate_msd(
                                             st.session_state.tracks_data,
-                                            pixel_size=current_units['pixel_size'],
-                                            frame_interval=current_units['frame_interval']
-                                        )
+                                             pixel_size=pixel_size,
+                                            frame_interval=frame_interval
+                                       )
                                         
                                         if msd_results['success'] and 'ensemble_msd' in msd_results:
                                             polymer_model = PolymerPhysicsModel()
@@ -8167,9 +8212,9 @@ elif st.session_state.active_page == "Advanced Analysis":
                             if intensity_columns:
                                 corr_results = analyze_motion_intensity_correlation(
                                     st.session_state.tracks_data,
-                                    pixel_size=current_units['pixel_size'],
-                                    frame_interval=current_units['frame_interval']
-                                )
+                                     pixel_size=units['pixel_size'],
+                                    frame_interval=units['frame_interval']
+                               )
                                 
                                 if corr_results['success']:
                                     st.success("✓ Correlative analysis completed")
