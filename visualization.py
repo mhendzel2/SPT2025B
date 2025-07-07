@@ -544,14 +544,14 @@ def plot_active_transport(
         seg,
         "speed",
         title="Directed‑segment speeds",
-        xlabel="Speed (µm/s)",
+        xlabel="Speed (µm/s)",
         colour=QualColours[0],
     )
 
-    # polar histogram of angles – custom
+    # polar histogram of angles – custom
     if "angle" in seg.columns:
         theta = np.degrees(seg["angle"])
-        bins = np.linspace(-180, 180, 19)  # 18 × 20°
+        bins = np.linspace(-180, 180, 19)  # 18 × 20°
         counts, edges = np.histogram(theta, bins=bins)
         centres = (edges[:-1] + edges[1:]) / 2
 
@@ -573,6 +573,17 @@ def plot_active_transport(
         figs["directions"] = polar
 
     return figs
+
+
+# Alias for backwards compatibility
+def plot_motion_analysis(
+    transport: Dict[str, Any],
+) -> Dict[str, go.Figure]:
+    """
+    Alias for plot_active_transport for backwards compatibility.
+    Return dict with 'speeds', 'directions' etc.
+    """
+    return plot_active_transport(transport)
 
 
 # ------------------------------------------------------------------ #

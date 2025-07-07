@@ -46,13 +46,11 @@ except ImportError:
     ANALYSIS_MODULE_AVAILABLE = False
 
 try:
-    from interactive_plots import (
+    from visualization import (
         plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis,
-        plot_msd_curves, plot_diffusion_coefficients, plot_spatial_clustering,
-        plot_dwell_time_analysis, plot_gel_structure_analysis,
-        plot_diffusion_population_analysis, plot_active_transport_analysis,
-        plot_boundary_crossing_analysis, plot_crowding_analysis
+        plot_msd_curves, plot_diffusion_coefficients
     )
+    # Note: Some functions may not be available in visualization module
     VISUALIZATION_MODULE_AVAILABLE = True
 except ImportError:
     VISUALIZATION_MODULE_AVAILABLE = False
