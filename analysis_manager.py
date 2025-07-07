@@ -622,3 +622,29 @@ class AnalysisManager:
                 validation_results['warnings'].append(f"Very few tracks ({n_tracks}) for statistical analysis")
         
         return validation_results
+
+    def calculate_track_statistics(self) -> None:
+        """
+        Calculate track statistics for the current tracks data and store in session state.
+        """
+        import streamlit as st
+        from utils import calculate_track_statistics
+        
+        try:
+            if (hasattr(st.session_state, 'tracks_data') and 
+                st.session_state.tracks_data is not None and 
+                not st.session_state.tracks_data.empty):
+                
+                # Calculate statistics using the utility function
+                track_stats = calculate_track_statistics(st.session_state.tracks_data)
+                st.session_state.track_statistics = track_stats
+                
+                self.log(f"Calculated statistics for {len(track_stats)} tracks", "info")
+                
+            else:
+                st.session_state.track_statistics = None
+                self.log("No track data available for statistics calculation", "warning")
+                
+        except Exception as e:
+            self.log(f"Error calculating track statistics: {str(e)}", "error")
+            st.session_state.track_statistics = None
