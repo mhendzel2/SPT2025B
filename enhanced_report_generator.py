@@ -373,6 +373,9 @@ class EnhancedSPTReportGenerator:
                 st.error(f"❌ {analysis['name']} failed: {str(e)}")
         
         status_text.text("Report generation complete!")
+        
+        # Display the generated report
+        self._display_generated_report(config, current_units)
 
     # --- Full Implementations of Analysis Wrappers ---
 
@@ -1170,10 +1173,163 @@ class EnhancedSPTReportGenerator:
         
         return results
 
-def show_enhanced_report_generator():
-    """Display the enhanced report generator interface."""
-    generator = EnhancedSPTReportGenerator()
-    generator.display_enhanced_analysis_interface()
+    def _display_generated_report(self, config, current_units):
+        """Display the generated report with download options."""
+        if not self.report_results:
+            st.warning("No analysis results to display.")
+            return
+            
+        st.subheader("📄 Generated Report")
+        
+        # Create download options
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📊 View Interactive Report"):
+                self._show_interactive_report(current_units)
+        
+        with col2:
+            # Generate and provide JSON download
+            report_data = self._generate_report_data(config, current_units)
+            st.download_button(
+                "💾 Download JSON Report",
+                data=json.dumps(report_data, indent=2, default=str),
+                file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+        
+        with col3:
+            # Generate and provide CSV summary download
+            summary_csv = self._generate_csv_summary()
+            if summary_csv:
+                st.download_button(
+                    "📈 Download CSV Summary",
+                    data=summary_csv,
+                    file_name=f"spt_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
 
-if __name__ == "__main__":
-    show_enhanced_report_generator()
+    def _show_interactive_report(self, current_units):
+        """Display interactive report with visualizations."""
+        st.subheader("📊 Interactive Analysis Report")
+        
+        # Display summary statistics
+        if 'basic_statistics' in self.report_results:
+            stats = self.report_results['basic_statistics']
+            st.subheader("📈 Summary Statistics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Tracks", stats.get('total_tracks', 'N/A'))
+            with col2:
+                st.metric("Mean Track Length", f"{stats.get('mean_track_length', 0):.1f}")
+            with col3:
+                st.metric("Mean Velocity", f"{stats.get('mean_velocity', 0):.3f} µm/s")
+            with col4:
+                st.metric("Total Time Points", stats.get('total_timepoints', 'N/A'))
+        
+        # Display all analysis results
+        for analysis_key, result in self.report_results.items():
+            if analysis_key in self.available_analyses:
+                analysis_info = self.available_analyses[analysis_key]
+                
+                with st.expander(f"📊 {analysis_info['name']}", expanded=True):
+                    if 'error' in result:
+                        st.error(f"Analysis failed: {result['error']}")
+                        continue
+                    
+                    # Display analysis-specific results
+                    if analysis_key == 'basic_statistics':
+                        self._display_basic_stats(result)
+                    elif analysis_key == 'diffusion_analysis':
+                        self._display_diffusion_results(result)
+                    elif analysis_key == 'motion_classification':
+                        self._display_motion_results(result)
+                    else:
+                        # Generic result display
+                        st.json(result)
+                    
+                    # Display visualization if available
+                    if analysis_key in self.report_figures:
+                        st.plotly_chart(self.report_figures[analysis_key], use_container_width=True)
+
+    def _display_basic_stats(self, stats):
+        """Display basic statistics in a formatted way."""
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Track Statistics:**")
+            st.write(f"• Total tracks: {stats.get('total_tracks', 'N/A')}")
+            st.write(f"• Mean track length: {stats.get('mean_track_length', 0):.1f} frames")
+            st.write(f"• Median track length: {stats.get('median_track_length', 0):.1f} frames")
+            st.write(f"• Track length std: {stats.get('track_length_std', 0):.1f} frames")
+        
+        with col2:
+            st.markdown("**Motion Statistics:**")
+            st.write(f"• Mean velocity: {stats.get('mean_velocity', 0):.3f} µm/s")
+            st.write(f"• Total time points: {stats.get('total_timepoints', 'N/A')}")
+
+    def _display_diffusion_results(self, results):
+        """Display diffusion analysis results."""
+        if 'diffusion_coefficient' in results:
+            st.metric("Diffusion Coefficient", f"{results['diffusion_coefficient']:.2e} µm²/s")
+        if 'msd_slope' in results:
+            st.metric("MSD Slope", f"{results['msd_slope']:.3f}")
+
+    def _display_motion_results(self, results):
+        """Display motion classification results."""
+        if 'classification_summary' in results:
+            summary = results['classification_summary']
+            for motion_type, count in summary.items():
+                st.metric(f"{motion_type.title()} Motion", count)
+
+    def _generate_report_data(self, config, current_units):
+        """Generate comprehensive report data for download."""
+        import datetime
+        
+        report_data = {
+            'metadata': {
+                'generated_at': datetime.datetime.now().isoformat(),
+                'analysis_software': 'SPT2025B',
+                'pixel_size_um': current_units.get('pixel_size', 0.1),
+                'frame_interval_s': current_units.get('frame_interval', 0.1),
+                'config': config
+            },
+            'analysis_results': self.report_results,
+            'visualizations_available': list(self.report_figures.keys())
+        }
+        
+        return report_data
+
+    def _generate_csv_summary(self):
+        """Generate CSV summary of key results."""
+        try:
+            import io
+            import csv
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Write header
+            writer.writerow(['Analysis', 'Metric', 'Value', 'Unit'])
+            
+            # Extract key metrics from each analysis
+            for analysis_key, result in self.report_results.items():
+                if 'error' in result:
+                    continue
+                    
+                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
+                
+                if analysis_key == 'basic_statistics':
+                    writer.writerow([analysis_name, 'Total Tracks', result.get('total_tracks', ''), 'count'])
+                    writer.writerow([analysis_name, 'Mean Track Length', result.get('mean_track_length', ''), 'frames'])
+                    writer.writerow([analysis_name, 'Mean Velocity', result.get('mean_velocity', ''), 'µm/s'])
+                elif analysis_key == 'diffusion_analysis':
+                    writer.writerow([analysis_name, 'Diffusion Coefficient', result.get('diffusion_coefficient', ''), 'µm²/s'])
+                    writer.writerow([analysis_name, 'MSD Slope', result.get('msd_slope', ''), 'dimensionless'])
+                # Add more analysis types as needed
+            
+            return output.getvalue()
+        except Exception as e:
+            st.error(f"Failed to generate CSV summary: {str(e)}")
+            return None

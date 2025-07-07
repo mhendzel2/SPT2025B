@@ -493,14 +493,29 @@ def plot_msd_curves(
 #   Diffusion coefficient distribution
 # ------------------------------------------------------------------ #
 
-def plot_diffusion_coefficients(tracks: pd.DataFrame) -> go.Figure:
+def plot_diffusion_coefficients(tracks: Union[pd.DataFrame, Dict[str, Any]]) -> go.Figure:
     """
-    Accepts a DataFrame with column 'diffusion_coefficient'.
+    Accepts a DataFrame with column 'diffusion_coefficient' or a dict with diffusion results.
     """
-    if tracks.empty or "diffusion_coefficient" not in tracks:
-        return _empty_fig("No diffusion coefficients")
-
-    data = tracks["diffusion_coefficient"].dropna()
+    # Handle case where tracks is a dictionary (diffusion analysis results)
+    if isinstance(tracks, dict):
+        if "diffusion_coefficients" in tracks:
+            # Extract diffusion coefficients from analysis results
+            coeffs = tracks["diffusion_coefficients"]
+            if isinstance(coeffs, (list, np.ndarray)):
+                data = pd.Series(coeffs).dropna()
+            elif isinstance(coeffs, pd.Series):
+                data = coeffs.dropna()
+            else:
+                return _empty_fig("Invalid diffusion coefficient format in results")
+        else:
+            return _empty_fig("No diffusion coefficients in analysis results")
+    else:
+        # Handle DataFrame input
+        if tracks.empty or "diffusion_coefficient" not in tracks:
+            return _empty_fig("No diffusion coefficients")
+        data = tracks["diffusion_coefficient"].dropna()
+    
     data = data[data > 0]
     if data.empty:
         return _empty_fig("All diffusion coefficients are 0 / NaN")
