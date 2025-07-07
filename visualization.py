@@ -585,8 +585,6 @@ def comparative_histogram(
     log_x: bool = False,
     title: Optional[str] = None,
 ) -> go.Figure:
-    title: str | None = None,
-) -> go.Figure:
     if not data:
         return _empty_fig("No data sets provided")
 

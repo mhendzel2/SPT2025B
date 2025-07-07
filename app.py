@@ -29,7 +29,7 @@ from scipy.stats import linregress
 
 # Import utility modules
 from data_loader import load_image_file, load_tracks_file
-from constants import *
+from constants import DEFAULT_PIXEL_SIZE, DEFAULT_FRAME_INTERVAL
 from anomaly_detection import AnomalyDetector
 from anomaly_visualization import AnomalyVisualizer
 from rheology import MicrorheologyAnalyzer, create_rheology_plots, display_rheology_summary
