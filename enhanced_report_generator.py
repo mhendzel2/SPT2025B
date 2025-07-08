@@ -1333,3 +1333,21 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             st.error(f"Failed to generate CSV summary: {str(e)}")
             return None
+
+
+def show_enhanced_report_generator():
+    """
+    Main function to display the enhanced report generator interface.
+    This function creates an instance of the EnhancedSPTReportGenerator class
+    and displays the interface for users to generate comprehensive reports.
+    """
+    try:
+        # Create an instance of the report generator
+        report_generator = EnhancedSPTReportGenerator()
+        
+        # Display the enhanced analysis interface
+        report_generator.display_enhanced_analysis_interface()
+        
+    except Exception as e:
+        st.error(f"Error in enhanced report generator: {str(e)}")
+        st.error("Please check that all required modules are installed and properly configured.")

@@ -873,7 +873,7 @@ st.sidebar.title("SPT Analysis")
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
     "Navigation",
-    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Advanced Analysis", "Report Generation", "MD Integration"]
+    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration"]
 )
 
 # Update session state based on navigation
@@ -4575,7 +4575,6 @@ elif st.session_state.active_page == "Analysis":
             "Dwell Time Analysis",
             "Boundary Crossing Analysis",
             "Multi-Channel Analysis",
-            "AI Anomaly Detection",
             "Advanced Analysis"
         ])
         
@@ -5908,133 +5907,8 @@ elif st.session_state.active_page == "Analysis":
             else:
                 st.warning("Multi-Channel Analysis module is not available. Please ensure the 'correlative_analysis.py' file is properly installed.")
                 
-        # AI Anomaly Detection tab
-        with tabs[6]:
-            st.header("AI-Powered Anomaly Detection")
-            
-            if st.session_state.tracks_data is not None:
-                st.write("Detect unusual particle behaviors using advanced machine learning algorithms.")
-                
-                # Parameters for anomaly detection
-                st.subheader("Detection Parameters")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    contamination = st.slider(
-                        "Expected Anomaly Rate (%)",
-                        min_value=1.0,
-                        max_value=20.0,
-                        value=5.0,
-                        step=0.5,
-                        help="Expected percentage of anomalous tracks in your data"
-                    ) / 100.0
-                    
-                    z_threshold = st.number_input(
-                        "Velocity Change Threshold",
-                        min_value=1.0,
-                        max_value=5.0,
-                        value=3.0,
-                        step=0.1,
-                        help="Z-score threshold for detecting sudden velocity changes"
-                    )
-                    
-                    expansion_threshold = st.number_input(
-                        "Confinement Violation Threshold",
-                        min_value=1.0,
-                        max_value=5.0,
-                        value=2.0,
-                        step=0.1,
-                        help="Threshold for detecting sudden expansion beyond normal confinement"
-                    )
-                
-                with col2:
-                    reversal_threshold = st.number_input(
-                        "Directional Change Threshold (radians)",
-                        min_value=1.0,
-                        max_value=3.14,
-                        value=2.5,
-                        step=0.1,
-                        help="Threshold for detecting significant directional changes"
-                    )
-                    
-                    clustering_eps = st.number_input(
-                        "Spatial Clustering Parameter",
-                        min_value=1.0,
-                        max_value=20.0,
-                        value=5.0,
-                        step=1.0,
-                        help="Distance parameter for spatial clustering analysis"
-                    )
-                    
-                    min_track_length = st.slider(
-                        "Minimum Track Length",
-                        min_value=5,
-                        max_value=50,
-                        value=10,
-                        help="Minimum track length for anomaly analysis"
-                    )
-                
-                # Run anomaly detection
-                if st.button("Run Anomaly Detection"):
-                    with st.spinner("Analyzing particle behavior patterns..."):
-                        try:
-                            # Initialize anomaly detector
-                            detector = AnomalyDetector(contamination=contamination)
-                            
-                            # Filter tracks by minimum length
-                            filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
-                                lambda x: len(x) >= min_track_length
-                            )
-                            
-                            if len(filtered_tracks) > 0:
-                                # Run comprehensive anomaly detection
-                                anomaly_results = detector.comprehensive_anomaly_detection(
-                                    filtered_tracks
-                                )
-                                
-                                # Store results in session state
-                                st.session_state.analysis_results["anomaly_detection"] = {
-                                    'results': anomaly_results,
-                                    'detector': detector,
-                                    'parameters': {
-                                        'contamination': contamination,
-                                        'z_threshold': z_threshold,
-                                        'expansion_threshold': expansion_threshold,
-                                        'reversal_threshold': reversal_threshold,
-                                        'clustering_eps': clustering_eps,
-                                        'min_track_length': min_track_length
-                                    }
-                                }
-                                
-                                st.success("Anomaly detection completed successfully!")
-                            else:
-                                st.warning("No tracks meet the minimum length requirement for analysis.")
-                                
-                        except Exception as e:
-                            st.error(f"Error during anomaly detection: {str(e)}")
-                
-                # Display results if available
-                if "anomaly_detection" in st.session_state.analysis_results:
-                    results = st.session_state.analysis_results["anomaly_detection"]
-                    anomaly_results = results['results']
-                    
-                    # Initialize visualizer and create dashboard
-                    visualizer = AnomalyVisualizer()
-                    
-                    # Filter tracks for visualization
-                    filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
-                        lambda x: len(x) >= results['parameters']['min_track_length']
-                    )
-                    
-                    # Create comprehensive anomaly dashboard
-                    visualizer.create_anomaly_dashboard(filtered_tracks, anomaly_results)
-                    
-            else:
-                st.warning("No track data available. Please load track data first.")
-                
         # Advanced Analysis tab
-        with tabs[7]:
+        with tabs[6]:
             st.header("Advanced Analysis")
             
             # Create subtabs for different advanced analysis types
@@ -8503,6 +8377,131 @@ elif st.session_state.active_page == "Advanced Analysis":
                         if 'frequency_sweep' in results:
                             st.subheader("Frequency Sweep Data")
                             st.dataframe(results['frequency_sweep'])
+
+# AI Anomaly Detection page
+elif st.session_state.active_page == "AI Anomaly Detection":
+    st.title("AI-Powered Anomaly Detection")
+    
+    if st.session_state.tracks_data is None:
+        st.warning("No track data loaded. Please upload track data first.")
+        st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
+    else:
+        st.write("Detect unusual particle behaviors using advanced machine learning algorithms.")
+        
+        # Parameters for anomaly detection
+        st.subheader("Detection Parameters")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            contamination = st.slider(
+                "Expected Anomaly Rate (%)",
+                min_value=1.0,
+                max_value=20.0,
+                value=5.0,
+                step=0.5,
+                help="Expected percentage of anomalous tracks in your data"
+            ) / 100.0
+            
+            z_threshold = st.number_input(
+                "Velocity Change Threshold",
+                min_value=1.0,
+                max_value=5.0,
+                value=3.0,
+                step=0.1,
+                help="Z-score threshold for detecting sudden velocity changes"
+            )
+            
+            expansion_threshold = st.number_input(
+                "Confinement Violation Threshold",
+                min_value=1.0,
+                max_value=5.0,
+                value=2.0,
+                step=0.1,
+                help="Threshold for detecting sudden expansion beyond normal confinement"
+            )
+        
+        with col2:
+            reversal_threshold = st.number_input(
+                "Directional Change Threshold (radians)",
+                min_value=1.0,
+                max_value=3.14,
+                value=2.5,
+                step=0.1,
+                help="Threshold for detecting significant directional changes"
+            )
+            
+            clustering_eps = st.number_input(
+                "Spatial Clustering Parameter",
+                min_value=1.0,
+                max_value=20.0,
+                value=5.0,
+                step=1.0,
+                help="Distance parameter for spatial clustering analysis"
+            )
+            
+            min_track_length = st.slider(
+                "Minimum Track Length",
+                min_value=5,
+                max_value=50,
+                value=10,
+                help="Minimum track length for anomaly analysis"
+            )
+        
+        # Run anomaly detection
+        if st.button("Run Anomaly Detection"):
+            with st.spinner("Analyzing particle behavior patterns..."):
+                try:
+                    # Initialize anomaly detector
+                    detector = AnomalyDetector(contamination=contamination)
+                    
+                    # Filter tracks by minimum length
+                    filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
+                        lambda x: len(x) >= min_track_length
+                    )
+                    
+                    if len(filtered_tracks) > 0:
+                        # Run comprehensive anomaly detection
+                        anomaly_results = detector.comprehensive_anomaly_detection(
+                            filtered_tracks
+                        )
+                        
+                        # Store results in session state
+                        st.session_state.analysis_results["anomaly_detection"] = {
+                            'results': anomaly_results,
+                            'detector': detector,
+                            'parameters': {
+                                'contamination': contamination,
+                                'z_threshold': z_threshold,
+                                'expansion_threshold': expansion_threshold,
+                                'reversal_threshold': reversal_threshold,
+                                'clustering_eps': clustering_eps,
+                                'min_track_length': min_track_length
+                            }
+                        }
+                        
+                        st.success("Anomaly detection completed successfully!")
+                    else:
+                        st.warning("No tracks meet the minimum length requirement for analysis.")
+                        
+                except Exception as e:
+                    st.error(f"Error during anomaly detection: {str(e)}")
+        
+        # Display results if available
+        if "anomaly_detection" in st.session_state.analysis_results:
+            results = st.session_state.analysis_results["anomaly_detection"]
+            anomaly_results = results['results']
+            
+            # Initialize visualizer and create dashboard
+            visualizer = AnomalyVisualizer()
+            
+            # Filter tracks for visualization
+            filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
+                lambda x: len(x) >= results['parameters']['min_track_length']
+            )
+            
+            # Create comprehensive anomaly dashboard
+            visualizer.create_anomaly_dashboard(filtered_tracks, anomaly_results)
 
 # Report Generation page
 elif st.session_state.active_page == "Report Generation":
