@@ -780,3 +780,274 @@ class ActiveTransportAnalyzer:
             'mean_straightness': np.mean(straightness_values)
         }
         return self.results['transport_modes']
+
+def analyze_motion_models(tracks_df, models=None, min_track_length=10, time_window=None):
+    """
+    Analyze track data using different motion models to classify motion types.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
+    models : list, optional
+        List of motion models to test. Default is ['brownian', 'directed', 'confined']
+    min_track_length : int, optional
+        Minimum track length required for analysis, by default 10
+    time_window : int, optional
+        Number of frames to use for local analysis, by default None (use entire track)
+    
+    Returns
+    -------
+    dict
+        Dictionary containing model fit results and classifications
+    """
+    if models is None:
+        models = ['brownian', 'directed', 'confined']
+    
+    # Group tracks by track_id
+    grouped = tracks_df.groupby('track_id')
+    
+    # Filter for minimum track length
+    long_enough = [tid for tid, group in grouped if len(group) >= min_track_length]
+    
+    results = {
+        'track_ids': long_enough,
+        'models': models,
+        'classifications': {},
+        'model_parameters': {},
+        'best_model': {},
+        'error_metrics': {},
+    }
+    
+    for track_id in long_enough:
+        track_data = grouped.get_group(track_id).sort_values('frame')
+        
+        # Extract positions and frames
+        positions = track_data[['x', 'y']].values
+        frames = track_data['frame'].values
+        
+        # Handle time_window if specified
+        if time_window and len(positions) > time_window:
+            model_fits = {}
+            model_errors = {}
+            
+            # Analyze sliding windows
+            for i in range(len(positions) - time_window + 1):
+                window_pos = positions[i:i+time_window]
+                window_frames = frames[i:i+time_window]
+                
+                window_fits, window_errors = _fit_motion_models(window_pos, window_frames, models)
+                
+                for model, fit in window_fits.items():
+                    if model not in model_fits:
+                        model_fits[model] = []
+                    model_fits[model].append(fit)
+                
+                for model, error in window_errors.items():
+                    if model not in model_errors:
+                        model_errors[model] = []
+                    model_errors[model].append(error)
+            
+            # Aggregate window results
+            best_model, best_score = _determine_best_model(model_errors)
+            
+            # Store results
+            results['model_parameters'][track_id] = {
+                model: {param: np.mean([fit[param] for fit in fits]) 
+                       for param in fits[0]}
+                for model, fits in model_fits.items()
+            }
+            
+            results['error_metrics'][track_id] = {
+                model: np.mean(errors) for model, errors in model_errors.items()
+            }
+            
+        else:
+            # Analyze whole track
+            model_fits, model_errors = _fit_motion_models(positions, frames, models)
+            best_model, best_score = _determine_best_model(model_errors)
+            
+            results['model_parameters'][track_id] = model_fits
+            results['error_metrics'][track_id] = model_errors
+        
+        results['best_model'][track_id] = best_model
+        results['classifications'][track_id] = best_model
+    
+    # Generate summary statistics
+    results['summary'] = _summarize_motion_analysis(results)
+    
+    return results
+
+def _fit_motion_models(positions, frames, models):
+    """
+    Fit different motion models to position data.
+    
+    Parameters
+    ----------
+    positions : np.ndarray
+        Array of x,y positions
+    frames : np.ndarray
+        Array of frame numbers
+    models : list
+        List of motion model names to fit
+    
+    Returns
+    -------
+    tuple
+        (model_fits, model_errors) dictionaries
+    """
+    model_fits = {}
+    model_errors = {}
+    
+    # Calculate displacements and time intervals
+    displacements = np.sqrt(np.sum(np.diff(positions, axis=0)**2, axis=1))
+    dt = np.diff(frames)
+    
+    # Brownian motion model
+    if 'brownian' in models:
+        D, brownian_error = _fit_brownian_motion(displacements, dt)
+        model_fits['brownian'] = {'D': D}
+        model_errors['brownian'] = brownian_error
+    
+    # Directed motion model
+    if 'directed' in models:
+        D, v, directed_error = _fit_directed_motion(displacements, dt, positions)
+        model_fits['directed'] = {'D': D, 'v': v}
+        model_errors['directed'] = directed_error
+    
+    # Confined motion model
+    if 'confined' in models:
+        D, L, confined_error = _fit_confined_motion(displacements, dt, positions)
+        model_fits['confined'] = {'D': D, 'L': L}
+        model_errors['confined'] = confined_error
+    
+    return model_fits, model_errors
+
+def _fit_brownian_motion(displacements, dt):
+    """Fit Brownian motion model to displacements."""
+    # For pure Brownian motion: MSD = 4*D*t
+    # Estimate diffusion coefficient
+    msd = np.mean(displacements**2)
+    mean_dt = np.mean(dt)
+    D = msd / (4 * mean_dt)
+    
+    # Calculate error as residual between observed and expected displacements
+    expected_disp = np.sqrt(4 * D * dt)
+    error = np.mean((displacements - expected_disp)**2)
+    
+    return D, error
+
+def _fit_directed_motion(displacements, dt, positions):
+    """Fit directed motion model to displacements and positions."""
+    # For directed motion: MSD = 4*D*t + (v*t)^2
+    
+    # First, estimate direction using linear regression
+    t = np.cumsum(np.concatenate([[0], dt]))
+    x = positions[:, 0]
+    y = positions[:, 1]
+    
+    vx, _ = np.polyfit(t, x, 1)
+    vy, _ = np.polyfit(t, y, 1)
+    
+    v = np.sqrt(vx**2 + vy**2)
+    
+    # Now estimate diffusion coefficient
+    msd = np.mean(displacements**2)
+    mean_dt = np.mean(dt)
+    
+    # MSD = 4*D*t + (v*t)^2
+    # Solve for D
+    D = (msd - (v * mean_dt)**2) / (4 * mean_dt)
+    D = max(0, D)  # Ensure non-negative diffusion coefficient
+    
+    # Calculate error
+    expected_disp = np.sqrt(4 * D * dt + (v * dt)**2)
+    error = np.mean((displacements - expected_disp)**2)
+    
+    return D, v, error
+
+def _fit_confined_motion(displacements, dt, positions):
+    """Fit confined motion model to displacements and positions."""
+    # For confined motion: MSD = L^2 * [1 - exp(-4*D*t/L^2)]
+    
+    # Initial estimates
+    msd = np.mean(displacements**2)
+    mean_dt = np.mean(dt)
+    D_initial = msd / (4 * mean_dt)
+    
+    # Estimate confinement size as 2x standard deviation of positions
+    std_pos = np.std(positions, axis=0)
+    L_initial = 2 * np.mean(std_pos)
+    
+    # Define confined motion model function
+    def confined_msd(t, D, L):
+        return L**2 * (1 - np.exp(-4 * D * t / L**2))
+    
+    # Function to minimize
+    def objective(params):
+        D, L = params
+        expected_msd = confined_msd(dt, D, L)
+        return np.mean((displacements**2 - expected_msd)**2)
+    
+    # Optimize parameters
+    from scipy.optimize import minimize
+    
+    bounds = [(0, None), (0, None)]  # D and L must be positive
+    result = minimize(objective, [D_initial, L_initial], bounds=bounds)
+    
+    D, L = result.x
+    error = result.fun
+    
+    return D, L, error
+
+def _determine_best_model(model_errors):
+    """Determine best model based on error metrics."""
+    # Simple approach: choose model with lowest error
+    best_model = min(model_errors, key=model_errors.get)
+    best_score = model_errors[best_model]
+    
+    # Apply a bias to favor simpler models
+    # If Brownian motion is within 10% of best model, prefer it
+    if 'brownian' in model_errors and best_model != 'brownian':
+        if model_errors['brownian'] < 1.1 * best_score:
+            best_model = 'brownian'
+            best_score = model_errors['brownian']
+    
+    return best_model, best_score
+
+def _summarize_motion_analysis(results):
+    """Generate summary statistics for motion analysis."""
+    summary = {
+        'total_tracks': len(results['track_ids']),
+        'model_counts': {},
+        'model_parameters': {}
+    }
+    
+    # Count occurrences of each model
+    for model in results['best_model'].values():
+        if model not in summary['model_counts']:
+            summary['model_counts'][model] = 0
+        summary['model_counts'][model] += 1
+    
+    # Calculate average parameters for each model
+    for model in results['models']:
+        # Collect parameters for this model from all tracks
+        params = {}
+        for track_id, model_params in results['model_parameters'].items():
+            if model in model_params:
+                for param, value in model_params[model].items():
+                    if param not in params:
+                        params[param] = []
+                    params[param].append(value)
+        
+        # Calculate averages
+        if params:
+            summary['model_parameters'][model] = {
+                param: np.mean(values) for param, values in params.items()
+            }
+    
+    # Calculate fractions
+    for model, count in summary['model_counts'].items():
+        summary['model_counts'][f"{model}_fraction"] = count / summary['total_tracks']
+    
+    return summary

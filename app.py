@@ -8539,16 +8539,95 @@ elif st.session_state.active_page == "AI Anomaly Detection":
             # Create comprehensive anomaly dashboard
             visualizer.create_anomaly_dashboard(filtered_tracks, anomaly_results)
 
-# Report Generation page
+# Report Generation Page
 elif st.session_state.active_page == "Report Generation":
-    if REPORT_GENERATOR_AVAILABLE:
-        st.title("Automated Report Generation")
-        
-        # This single function call handles the entire user interface for this page.
-        show_enhanced_report_generator()
-        
+    st.title("Analysis Report Generation")
+    
+    # Check if track data is loaded
+    if not st.session_state.get('tracks_loaded', False) or st.session_state.get('tracks_df') is None:
+        st.error("No track data loaded. Please load data first.")
+        st.info("Go to the 'Data Loading' tab to upload track data.")
     else:
-        st.error("Report generation module is not available. Please ensure all required files are present.")
+        st.success(f"Track data loaded: {st.session_state.track_metadata.get('file_name', 'Unknown file')}")
+        
+        # Choose report options
+        st.subheader("Report Options")
+        
+        analysis_options = {
+            "basic_statistics": "Basic Track Statistics",
+            "msd_analysis": "MSD Analysis",
+            "diffusion_analysis": "Diffusion Coefficient Analysis",
+            "directional_analysis": "Directional Analysis",
+            "displacement_analysis": "Displacement Analysis",
+            "motion_classification": "Motion Classification"
+        }
+        
+        selected_analyses = []
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            for key, label in list(analysis_options.items())[:len(analysis_options)//2]:
+                if st.checkbox(label, value=True, key=f"chk_{key}"):
+                    selected_analyses.append(key)
+        
+        with col2:
+            for key, label in list(analysis_options.items())[len(analysis_options)//2:]:
+                if st.checkbox(label, value=True, key=f"chk_{key}"):
+                    selected_analyses.append(key)
+        
+        report_title = st.text_input("Report Title", "Single Particle Tracking Analysis Report")
+        
+        if st.button("Generate Report"):
+            if selected_analyses:
+                try:
+                    with st.spinner("Generating report..."):
+                        # Make sure we're using the tracks data from session state
+                        tracks_df = st.session_state.tracks_df
+                        pixel_size = st.session_state.track_metadata['pixel_size']
+                        frame_interval = st.session_state.track_metadata['frame_interval']
+                        
+                        # Generate the report
+                        from report_generator import SPTReportGenerator
+                        report_generator = SPTReportGenerator()
+                        report = report_generator.generate_report(
+                            tracks_df, 
+                            selected_analyses, 
+                            title=report_title,
+                            pixel_size=pixel_size,
+                            frame_interval=frame_interval
+                        )
+                        
+                        # Store report in session state for access across tabs
+                        st.session_state.current_report = report
+                        
+                        # Display the report
+                        st.subheader("Analysis Report")
+                        
+                        # Display figures
+                        for fig_name, fig in report.get('figures', {}).items():
+                            if fig:  # Check if figure exists
+                                st.subheader(fig_name.replace('_', ' ').title())
+                                st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display summary
+                        if 'summary' in report:
+                            st.subheader("Summary of Results")
+                            st.json(report['summary'])
+                        
+                        # Option to download report data
+                        st.download_button(
+                            "Download Report Data (JSON)", 
+                            data=json.dumps(report.get('summary', {}), indent=2),
+                            file_name="spt_report.json",
+                            mime="application/json"
+                        )
+                        
+                except Exception as e:
+                    st.error(f"Error generating report: {str(e)}")
+            else:
+                st.warning("Please select at least one analysis type.")
+
+# ...existing code...
 
 # Project Management page
 elif st.session_state.active_page == "Project Management":

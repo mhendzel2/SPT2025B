@@ -788,3 +788,51 @@ def create_analysis_record(name: str, analysis_type: str, parameters: Dict[str, 
         'date': timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         'datetime': timestamp
     }
+
+def validate_track_data(tracks_df):
+    """Validate track data format and return status with potential error message."""
+    if tracks_df is None or len(tracks_df) == 0:
+        return False, "Track data is empty"
+    
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    missing_columns = [col for col in required_columns if col not in tracks_df.columns]
+    
+    if missing_columns:
+        return False, f"Missing required columns: {', '.join(missing_columns)}"
+    
+    # Make sure there's at least one track
+    if tracks_df['track_id'].nunique() == 0:
+        return False, "No tracks found in data (track_id column is empty)"
+    
+    # Check for numeric data in coordinate columns
+    for col in ['x', 'y']:
+        if not pd.api.types.is_numeric_dtype(tracks_df[col]):
+            return False, f"Column '{col}' must contain numeric values"
+    
+    return True, "Track data is valid"
+
+def ensure_session_state_consistency():
+    """Ensure consistency of session state variables for track data."""
+    import streamlit as st
+    
+    # Initialize track loading flag if not present
+    if 'tracks_loaded' not in st.session_state:
+        st.session_state.tracks_loaded = False
+    
+    # Check if tracks are actually available when tracks_loaded is True
+    if st.session_state.get('tracks_loaded', False):
+        if 'tracks_df' not in st.session_state or st.session_state.tracks_df is None:
+            # Inconsistent state detected - fix it
+            st.session_state.tracks_loaded = False
+            
+    # Ensure track_metadata exists if tracks are loaded
+    if st.session_state.get('tracks_loaded', False) and 'track_metadata' not in st.session_state:
+        # Create minimal metadata
+        st.session_state.track_metadata = {
+            'file_name': 'Unknown file',
+            'num_tracks': st.session_state.tracks_df['track_id'].nunique(),
+            'num_frames': st.session_state.tracks_df['frame'].nunique(),
+            'total_localizations': len(st.session_state.tracks_df),
+            'pixel_size': 0.16,
+            'frame_interval': 0.1
+        }
