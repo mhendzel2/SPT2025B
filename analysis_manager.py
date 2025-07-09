@@ -49,6 +49,22 @@ except ImportError:
     analyze_motion_models = None
     BIOPHYSICAL_MODELS_AVAILABLE = False
 
+try:
+    from correlative_analysis import CorrelativeAnalyzer
+    CORRELATIVE_ANALYSIS_AVAILABLE = True
+except ImportError:
+    CorrelativeAnalyzer = None
+    CORRELATIVE_ANALYSIS_AVAILABLE = False
+
+try:
+    from multi_channel_analysis import analyze_channel_colocalization, analyze_compartment_occupancy, compare_channel_dynamics
+    MULTI_CHANNEL_ANALYSIS_AVAILABLE = True
+except ImportError:
+    analyze_channel_colocalization = None
+    analyze_compartment_occupancy = None
+    compare_channel_dynamics = None
+    MULTI_CHANNEL_ANALYSIS_AVAILABLE = False
+
 from state_manager import get_state_manager
 
 class AnalysisManager:
@@ -61,6 +77,8 @@ class AnalysisManager:
         self.state = get_state_manager()
         self.analysis_cache = {}
         self.debug_mode = False
+        self.analysis_results = {}
+        self.analysis_history = []
         
         # Available analysis types
         self.available_analyses = {
@@ -99,6 +117,24 @@ class AnalysisManager:
                 'description': 'Fit biophysical motion models',
                 'function': self.run_biophysical_analysis,
                 'requirements': ['position_data']
+            },
+            'correlative': {
+                'name': 'Correlative Analysis',
+                'description': 'Analyze intensity-motion coupling and correlations',
+                'function': self.run_correlative_analysis,
+                'requirements': ['position_data', 'intensity_data']
+            },
+            'multi_channel': {
+                'name': 'Multi-Channel Analysis',
+                'description': 'Analyze interactions between multiple channels',
+                'function': self.run_multi_channel_analysis,
+                'requirements': ['position_data', 'secondary_channel_data']
+            },
+            'channel_correlation': {
+                'name': 'Channel Correlation',
+                'description': 'Calculate correlations between particle channels',
+                'function': self.run_channel_correlation_analysis,
+                'requirements': ['position_data', 'secondary_channel_data']
             }
         }
     
@@ -144,11 +180,22 @@ class AnalysisManager:
                 if not all(col in tracks_df.columns for col in ['x', 'y']):
                     result['missing_requirements'].append('Position data (x, y columns)')
             elif req == 'intensity_data':
-                if 'intensity' not in tracks_df.columns:
+                # Check for any intensity-related columns
+                intensity_cols = [col for col in tracks_df.columns if 'intensity' in col.lower() or 'ch' in col.lower()]
+                if not intensity_cols:
                     result['missing_requirements'].append('Intensity data')
             elif req == 'time_data':
                 if 'frame' not in tracks_df.columns:
                     result['missing_requirements'].append('Time/frame data')
+            elif req == 'secondary_channel_data':
+                # Check for secondary channel data using state manager
+                if not self.state.has_secondary_channel_data():
+                    result['missing_requirements'].append('Secondary channel data (upload second channel)')
+                else:
+                    # Check that secondary data has required columns
+                    secondary_data = self.state.get_secondary_channel_data()
+                    if not all(col in secondary_data.columns for col in ['x', 'y']):
+                        result['missing_requirements'].append('Secondary channel position data (x, y columns)')
         
         # Check track count
         n_tracks = tracks_df['track_id'].nunique() if 'track_id' in tracks_df.columns else 0
@@ -360,10 +407,44 @@ class AnalysisManager:
             if not MICRORHEOLOGY_AVAILABLE or MicrorheologyAnalyzer is None:
                 return {'success': False, 'error': 'Microrheology module not available'}
             
-            analyzer = MicrorheologyAnalyzer()
-            result = analyzer.analyze_viscoelasticity(tracks_df)
+            # Get parameters
+            if parameters is None:
+                parameters = {}
+            
+            # Get required parameters
+            particle_radius_nm = parameters.get('particle_radius_nm', 50.0)  # Default 50nm
+            temperature_K = parameters.get('temperature_K', 300.0)  # Default room temperature
+            pixel_size_um = parameters.get('pixel_size_um', self.state.get_pixel_size())
+            frame_interval_s = parameters.get('frame_interval_s', self.state.get_frame_interval())
+            max_lag = parameters.get('max_lag', 20)
+            
+            # Convert particle radius to meters
+            particle_radius_m = particle_radius_nm * 1e-9
+            
+            # Initialize analyzer with proper parameters
+            analyzer = MicrorheologyAnalyzer(
+                particle_radius_m=particle_radius_m,
+                temperature_K=temperature_K
+            )
+            
+            # Run analysis
+            result = analyzer.analyze_microrheology(
+                tracks_df,
+                pixel_size_um=pixel_size_um,
+                frame_interval_s=frame_interval_s,
+                max_lag=max_lag
+            )
+            
+            # Enhance result with metadata
             result['analysis_type'] = 'microrheology'
             result['timestamp'] = datetime.now().isoformat()
+            result['parameters'] = {
+                'particle_radius_nm': particle_radius_nm,
+                'temperature_K': temperature_K,
+                'pixel_size_um': pixel_size_um,
+                'frame_interval_s': frame_interval_s,
+                'max_lag': max_lag
+            }
             
             return result
             
@@ -389,6 +470,215 @@ class AnalysisManager:
             
         except Exception as e:
             self.log(f"Biophysical analysis failed: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+    def run_correlative_analysis(self, parameters: Dict = None) -> Dict[str, Any]:
+        """Run correlative analysis including intensity-motion coupling."""
+        try:
+            tracks_df = self.state.get_raw_tracks()
+            if tracks_df.empty:
+                return {'success': False, 'error': 'No track data available'}
+            
+            if not CORRELATIVE_ANALYSIS_AVAILABLE or CorrelativeAnalyzer is None:
+                return {'success': False, 'error': 'Correlative analysis module not available'}
+            
+            # Get parameters
+            if parameters is None:
+                parameters = {}
+            
+            intensity_columns = parameters.get('intensity_columns', None)
+            lag_range = parameters.get('lag_range', 5)
+            
+            # Initialize analyzer
+            analyzer = CorrelativeAnalyzer()
+            
+            # Run intensity-motion coupling analysis
+            coupling_results = analyzer.analyze_intensity_motion_coupling(
+                tracks_df, 
+                intensity_columns=intensity_columns,
+                lag_range=lag_range
+            )
+            
+            # Run additional correlative analyses if track statistics are available
+            additional_results = {}
+            if hasattr(st, 'session_state') and 'track_statistics' in st.session_state:
+                track_stats = st.session_state.track_statistics
+                if track_stats is not None:
+                    # Add track statistics correlation
+                    try:
+                        additional_results['track_statistics_correlation'] = analyzer.correlate_track_parameters(track_stats)
+                    except AttributeError:
+                        # Method might not exist in all versions
+                        pass
+            
+            result = {
+                'success': True,
+                'analysis_type': 'correlative',
+                'timestamp': datetime.now().isoformat(),
+                'intensity_motion_coupling': coupling_results,
+                'additional_analyses': additional_results,
+                'parameters': parameters
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Correlative analysis failed: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+    def run_multi_channel_analysis(self, parameters: Dict = None) -> Dict[str, Any]:
+        """Run multi-channel analysis for colocalization and interactions."""
+        try:
+            tracks_df = self.state.get_raw_tracks()
+            if tracks_df.empty:
+                return {'success': False, 'error': 'No primary track data available'}
+            
+            # Check for secondary channel data
+            secondary_data = self.state.get_secondary_channel_data()
+            
+            if secondary_data is None or secondary_data.empty:
+                return {'success': False, 'error': 'No secondary channel data available'}
+            
+            if not MULTI_CHANNEL_ANALYSIS_AVAILABLE or analyze_channel_colocalization is None:
+                return {'success': False, 'error': 'Multi-channel analysis module not available'}
+            
+            # Get parameters
+            if parameters is None:
+                parameters = {}
+            
+            distance_threshold = parameters.get('distance_threshold', 2.0)
+            frame_tolerance = parameters.get('frame_tolerance', 1)
+            
+            # Run colocalization analysis
+            coloc_results = analyze_channel_colocalization(
+                tracks_df,
+                secondary_data,
+                distance_threshold=distance_threshold,
+                frame_tolerance=frame_tolerance
+            )
+            
+            # Run compartment occupancy analysis if compartments are available
+            compartment_results = {}
+            if (hasattr(st, 'session_state') and 'segmentation_results' in st.session_state and
+                analyze_compartment_occupancy is not None):
+                segmentation_results = st.session_state.segmentation_results
+                if segmentation_results and 'compartments' in segmentation_results:
+                    compartments = segmentation_results['compartments']
+                    pixel_size = self.state.get_pixel_size()
+                    
+                    # Analyze compartment occupancy for both channels
+                    compartment_results['primary_channel'] = analyze_compartment_occupancy(
+                        tracks_df, compartments, pixel_size=pixel_size
+                    )
+                    compartment_results['secondary_channel'] = analyze_compartment_occupancy(
+                        secondary_data, compartments, pixel_size=pixel_size
+                    )
+            
+            result = {
+                'success': True,
+                'analysis_type': 'multi_channel',
+                'timestamp': datetime.now().isoformat(),
+                'colocalization': coloc_results,
+                'compartment_occupancy': compartment_results,
+                'parameters': parameters
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Multi-channel analysis failed: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+    def run_channel_correlation_analysis(self, parameters: Dict = None) -> Dict[str, Any]:
+        """Run channel correlation analysis."""
+        try:
+            tracks_df = self.state.get_raw_tracks()
+            if tracks_df.empty:
+                return {'success': False, 'error': 'No primary track data available'}
+            
+            # Check for secondary channel data
+            secondary_data = self.state.get_secondary_channel_data()
+            
+            if secondary_data is None or secondary_data.empty:
+                return {'success': False, 'error': 'No secondary channel data available'}
+            
+            if not MULTI_CHANNEL_ANALYSIS_AVAILABLE or compare_channel_dynamics is None:
+                return {'success': False, 'error': 'Channel correlation analysis modules not available'}
+            
+            # Get parameters
+            if parameters is None:
+                parameters = {}
+            
+            # Run basic track analysis on both channels
+            primary_results = {}
+            secondary_results = {}
+            
+            # Analyze primary channel
+            if ANALYSIS_AVAILABLE and analyze_diffusion and analyze_motion:
+                primary_results = {
+                    'diffusion': analyze_diffusion(tracks_df, 
+                                                 max_lag=parameters.get('max_lag', 20),
+                                                 pixel_size=self.state.get_pixel_size(),
+                                                 frame_interval=self.state.get_frame_interval()),
+                    'motion': analyze_motion(tracks_df)
+                }
+                
+                # Analyze secondary channel
+                secondary_results = {
+                    'diffusion': analyze_diffusion(secondary_data,
+                                                 max_lag=parameters.get('max_lag', 20),
+                                                 pixel_size=self.state.get_pixel_size(),
+                                                 frame_interval=self.state.get_frame_interval()),
+                    'motion': analyze_motion(secondary_data)
+                }
+            
+            # Compare dynamics between channels
+            dynamics_comparison = {}
+            if primary_results and secondary_results:
+                dynamics_comparison = compare_channel_dynamics(
+                    primary_results,
+                    secondary_results,
+                    channel1_name=parameters.get('primary_channel_name', 'Primary'),
+                    channel2_name=parameters.get('secondary_channel_name', 'Secondary')
+                )
+            
+            # Run intensity correlations if available
+            intensity_correlations = {}
+            if CORRELATIVE_ANALYSIS_AVAILABLE and CorrelativeAnalyzer:
+                try:
+                    analyzer = CorrelativeAnalyzer()
+                    # Try to find intensity columns in both datasets
+                    primary_intensities = [col for col in tracks_df.columns if 'intensity' in col.lower() or 'ch' in col.lower()]
+                    secondary_intensities = [col for col in secondary_data.columns if 'intensity' in col.lower() or 'ch' in col.lower()]
+                    
+                    if primary_intensities:
+                        intensity_correlations['primary'] = analyzer.analyze_intensity_motion_coupling(
+                            tracks_df, intensity_columns=primary_intensities
+                        )
+                    
+                    if secondary_intensities:
+                        intensity_correlations['secondary'] = analyzer.analyze_intensity_motion_coupling(
+                            secondary_data, intensity_columns=secondary_intensities
+                        )
+                except Exception as e:
+                    self.log(f"Intensity correlation analysis failed: {str(e)}", 'warning')
+                    intensity_correlations['error'] = str(e)
+            
+            result = {
+                'success': True,
+                'analysis_type': 'channel_correlation',
+                'timestamp': datetime.now().isoformat(),
+                'primary_channel_analysis': primary_results,
+                'secondary_channel_analysis': secondary_results,
+                'dynamics_comparison': dynamics_comparison,
+                'intensity_correlations': intensity_correlations,
+                'parameters': parameters
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Channel correlation analysis failed: {str(e)}")
             return {'success': False, 'error': str(e)}
     
     def get_analysis_summary(self) -> Dict[str, Any]:
@@ -655,14 +945,6 @@ class AnalysisManager:
         except Exception as e:
             self.log(f"Error calculating track statistics: {str(e)}", "error")
             st.session_state.track_statistics = None
-    
-    """
-    Central manager for coordinating SPT analysis workflows.
-    """
-    
-    def __init__(self):
-        self.analysis_results = {}
-        self.analysis_history = []
     
     def run_comprehensive_analysis(self, tracks_df: pd.DataFrame, 
                                  analysis_types: List[str] = None,

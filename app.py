@@ -79,7 +79,8 @@ from multi_channel_analysis import (
 from analysis import (
     calculate_msd, analyze_diffusion, analyze_motion, analyze_clustering,
     analyze_dwell_time, analyze_gel_structure, analyze_diffusion_population,
-    analyze_crowding, analyze_active_transport, analyze_boundary_crossing
+    analyze_crowding, analyze_active_transport, analyze_boundary_crossing, 
+    analyze_polymer_physics
 )
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,
@@ -880,7 +881,10 @@ st.sidebar.title("SPT Analysis")
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
     "Navigation",
-    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration"]
+    [
+        "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
+        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration"
+    ]
 )
 
 # Update session state based on navigation
@@ -7849,45 +7853,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     st.error(f"Error loading additional datasets: {str(e)}")
                                     analysis_results = {'success': False, 'error': f'Dataset loading error: {str(e)}'}
                             else:
-                                # Single frequency analysis
-                                msd_data = analyzer.calculate_msd_from_tracks(
+                                # Single dataset analysis - use the proper analysis method
+                                analysis_results = analyzer.analyze_microrheology(
                                     st.session_state.tracks_data,
                                     pixel_size_um=pixel_size_um,
                                     frame_interval_s=frame_interval_s,
-                                    max_lag_frames=max_lag_frames
+                                    max_lag=max_lag_frames
                                 )
-                                
-                                if len(msd_data) > 0:
-                                    # Calculate effective viscosity
-                                    viscosity = analyzer.calculate_effective_viscosity(msd_data)
-                                    
-                                    # Calculate complex modulus at a characteristic frequency
-                                    omega = 2 * np.pi / (frame_interval_s * 10)  # Characteristic frequency
-                                    g_prime, g_double_prime = analyzer.calculate_complex_modulus_gser(msd_data, omega)
-                                    
-                                    analysis_results = {
-                                        'success': True,
-                                        'msd_data': msd_data,
-                                        'viscosity': {
-                                            'effective_pa_s': viscosity
-                                        },
-                                        'moduli': {
-                                            'g_prime_pa': g_prime,
-                                            'g_double_prime_pa': g_double_prime,
-                                            'frequency_hz': omega / (2 * np.pi)
-                                        },
-                                        'parameters': {
-                                            'particle_radius_nm': particle_radius_nm,
-                                            'temperature_K': temperature_K,
-                                            'pixel_size_um': pixel_size_um,
-                                            'frame_interval_s': frame_interval_s
-                                        }
-                                    }
-                                else:
-                                    analysis_results = {
-                                        'success': False,
-                                        'error': 'Failed to calculate MSD data'
-                                    }
                             
                             # Store results
                             st.session_state.analysis_results["microrheology"] = analysis_results

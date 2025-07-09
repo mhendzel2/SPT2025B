@@ -1060,16 +1060,19 @@ def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis")
         
     Returns
     -------
-    fig : plotly.graph_objects.Figure
-        Interactive Plotly figure displaying motion model analysis
+    fig : matplotlib.figure.Figure
+        Matplotlib figure displaying motion model analysis
     """
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+    import matplotlib.pyplot as plt
+    import seaborn as sns
     import numpy as np
     
     # Create summary dataframe for model classification
     if 'classifications' not in motion_analysis_results:
-        return _empty_fig("No motion analysis data available")
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.text(0.5, 0.5, "No motion analysis data available", 
+                horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
+        return fig
     
     # Count occurrences of each model type
     model_counts = {}
@@ -1090,63 +1093,45 @@ def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis")
             })
     
     # Create subplot figure
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=["Model Classification", "Parameter Distribution"],
-        specs=[[{"type": "pie"}, {"type": "box"}]]
-    )
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     
     # Add pie chart for model classification
     model_labels = list(model_counts.keys())
     model_values = list(model_counts.values())
     
-    fig.add_trace(
-        go.Pie(
-            labels=model_labels,
-            values=model_values,
-            textinfo='label+percent',
-            marker_colors=['#1f77b4', '#ff7f0e', '#2ca02c']
-        ),
-        row=1, col=1
-    )
+    model_colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    axes[0].pie(model_values, labels=model_labels, autopct='%1.1f%%', 
+               colors=model_colors[:len(model_labels)],
+               wedgeprops={'edgecolor': 'w'})
+    axes[0].set_title("Model Classification")
     
     # Add boxplot for model parameters if data is available
     if params_data:
         import pandas as pd
         params_df = pd.DataFrame(params_data)
         if 'D' in params_df.columns:
-            model_colors = {
+            model_palette = {
                 'brownian': '#1f77b4',
                 'directed': '#ff7f0e',
                 'confined': '#2ca02c'
             }
             
             # Create boxplot for diffusion coefficients
-            boxplot_data = []
+            sns.boxplot(x='model', y='D', data=params_df, ax=axes[1],
+                       palette=model_palette)
             
-            for model in model_labels:
-                model_params = params_df[params_df['model'] == model]
-                if not model_params.empty and 'D' in model_params.columns:
-                    boxplot_data.append(
-                        go.Box(
-                            y=model_params['D'],
-                            name=model,
-                            marker_color=model_colors.get(model, '#636EFA'),
-                            boxmean=True
-                        )
-                    )
-            
-            for box_trace in boxplot_data:
-                fig.add_trace(box_trace, row=1, col=2)
-                
-            fig.update_yaxes(title_text="Diffusion Coefficient (μm²/s)", type="log", row=1, col=2)
+            # Set y-axis to log scale
+            axes[1].set_yscale('log')
+            axes[1].set_title("Diffusion Coefficient Distribution")
+            axes[1].set_xlabel("Motion Model")
+            axes[1].set_ylabel("Diffusion Coefficient (μm²/s)")
+    else:
+        axes[1].text(0.5, 0.5, "No parameter data available", 
+                    horizontalalignment='center', verticalalignment='center',
+                    transform=axes[1].transAxes)
     
     # Update layout
-    fig.update_layout(
-        title_text=title,
-        showlegend=True,
-        height=500,
-        width=900
-    )
+    plt.suptitle(title)
+    plt.tight_layout()
     
     return fig

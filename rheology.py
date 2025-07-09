@@ -18,6 +18,7 @@ from scipy.special import gamma
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
+import os
 
 
 class MicrorheologyAnalyzer:
@@ -882,9 +883,25 @@ def display_rheology_summary(analysis_results: Dict) -> None:
     analysis_results : Dict
         Results from multi_dataset_analysis or single dataset analysis
     """
+    if not analysis_results:
+        st.error("No microrheology analysis results available")
+        return
+        
     if not analysis_results.get('success', False):
         st.error(f"Microrheology analysis failed: {analysis_results.get('error', 'Unknown error')}")
         return
+    
+    # Store the available analyses in session state so other components can check it
+    if 'available_rheology_analyses' not in st.session_state:
+        st.session_state.available_rheology_analyses = []
+    
+    # Mark analyses as available
+    if 'datasets' in analysis_results and len(analysis_results['datasets']) > 0:
+        st.session_state.available_rheology_analyses.append('datasets')
+    if 'combined_frequency_response' in analysis_results:
+        st.session_state.available_rheology_analyses.append('frequency_response')
+    if 'dataset_comparison' in analysis_results:
+        st.session_state.available_rheology_analyses.append('comparison')
     
     st.subheader("Microrheology Analysis Summary")
     

@@ -203,6 +203,44 @@ class StateManager:
         """Set segmentation results."""
         st.session_state.segmentation_results = results
     
+    def get_secondary_channel_data(self) -> Optional[pd.DataFrame]:
+        """Get secondary channel data."""
+        return st.session_state.get('channel2_data', None) or st.session_state.get('secondary_channel_data', None)
+    
+    def set_secondary_channel_data(self, df: pd.DataFrame, channel_name: str = None):
+        """Set secondary channel data with validation."""
+        if df is None or df.empty:
+            st.warning("Attempted to set empty or None DataFrame for secondary channel.")
+            st.session_state.channel2_data = None
+            st.session_state.secondary_channel_data = None
+            return
+        
+        # Basic validation
+        required_cols = ['x', 'y']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns in secondary channel DataFrame: {missing_cols}")
+        
+        # Store in both possible keys for compatibility
+        st.session_state.channel2_data = df
+        st.session_state.secondary_channel_data = df
+        
+        if channel_name:
+            st.session_state.secondary_channel_name = channel_name
+    
+    def has_secondary_channel_data(self) -> bool:
+        """Check if secondary channel data is available."""
+        secondary_data = self.get_secondary_channel_data()
+        return secondary_data is not None and not secondary_data.empty
+    
+    def get_channel_labels(self) -> Dict[str, str]:
+        """Get channel labels for intensity columns."""
+        return st.session_state.get('channel_labels', {})
+    
+    def set_channel_labels(self, labels: Dict[str, str]):
+        """Set channel labels for intensity columns."""
+        st.session_state.channel_labels = labels
+    
     def clear_data(self):
         """Clear all tracking data."""
         st.session_state.raw_tracks = None
