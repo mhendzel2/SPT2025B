@@ -1,8 +1,15 @@
+"""
+Analysis Manager for SPT Analysis Application.
+Coordinates and manages various analysis workflows.
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
 try:
     from analysis_optimized import calculate_msd, analyze_diffusion, analyze_motion, analyze_boundary_crossing
@@ -648,3 +655,380 @@ class AnalysisManager:
         except Exception as e:
             self.log(f"Error calculating track statistics: {str(e)}", "error")
             st.session_state.track_statistics = None
+    
+    """
+    Central manager for coordinating SPT analysis workflows.
+    """
+    
+    def __init__(self):
+        self.analysis_results = {}
+        self.analysis_history = []
+    
+    def run_comprehensive_analysis(self, tracks_df: pd.DataFrame, 
+                                 analysis_types: List[str] = None,
+                                 parameters: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Run comprehensive analysis suite on track data.
+        
+        Parameters
+        ----------
+        tracks_df : pd.DataFrame
+            Track data
+        analysis_types : List[str]
+            Types of analysis to run
+        parameters : Dict[str, Any]
+            Analysis parameters
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Comprehensive analysis results
+        """
+        if analysis_types is None:
+            analysis_types = [
+                'basic_statistics',
+                'diffusion_analysis', 
+                'motion_classification',
+                'msd_analysis',
+                'active_transport'
+            ]
+        
+        if parameters is None:
+            parameters = {}
+        
+        results = {
+            'success': True,
+            'analysis_types': analysis_types,
+            'results': {},
+            'summary': {}
+        }
+        
+        try:
+            # Basic track statistics
+            if 'basic_statistics' in analysis_types:
+                results['results']['basic_statistics'] = self._analyze_basic_statistics(tracks_df)
+            
+            # Diffusion analysis
+            if 'diffusion_analysis' in analysis_types:
+                results['results']['diffusion_analysis'] = self._analyze_diffusion(tracks_df, parameters)
+            
+            # Motion classification
+            if 'motion_classification' in analysis_types:
+                results['results']['motion_classification'] = self._classify_motion(tracks_df, parameters)
+            
+            # MSD analysis
+            if 'msd_analysis' in analysis_types:
+                results['results']['msd_analysis'] = self._analyze_msd(tracks_df, parameters)
+            
+            # Active transport analysis
+            if 'active_transport' in analysis_types:
+                results['results']['active_transport'] = self._analyze_active_transport(tracks_df, parameters)
+            
+            # Anomaly detection
+            if 'anomaly_detection' in analysis_types:
+                results['results']['anomaly_detection'] = self._detect_anomalies(tracks_df, parameters)
+            
+            # Generate summary
+            results['summary'] = self._generate_analysis_summary(results['results'])
+            
+            # Store results
+            self.analysis_results = results
+            self.analysis_history.append({
+                'timestamp': pd.Timestamp.now(),
+                'analysis_types': analysis_types,
+                'n_tracks': len(tracks_df['track_id'].unique()),
+                'success': True
+            })
+            
+        except Exception as e:
+            results['success'] = False
+            results['error'] = str(e)
+            
+            self.analysis_history.append({
+                'timestamp': pd.Timestamp.now(),
+                'analysis_types': analysis_types,
+                'success': False,
+                'error': str(e)
+            })
+        
+        return results
+    
+    def _analyze_basic_statistics(self, tracks_df: pd.DataFrame) -> Dict[str, Any]:
+        """Analyze basic track statistics."""
+        try:
+            from analysis import calculate_track_statistics
+            
+            # Calculate track-level statistics
+            track_stats = []
+            for track_id in tracks_df['track_id'].unique():
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                stats = calculate_track_statistics(track_data)
+                stats['track_id'] = track_id
+                track_stats.append(stats)
+            
+            stats_df = pd.DataFrame(track_stats)
+            
+            # Calculate ensemble statistics
+            ensemble_stats = {}
+            for col in stats_df.select_dtypes(include=[np.number]).columns:
+                if col != 'track_id':
+                    values = stats_df[col].dropna()
+                    if len(values) > 0:
+                        ensemble_stats[col] = {
+                            'mean': float(values.mean()),
+                            'median': float(values.median()),
+                            'std': float(values.std()),
+                            'min': float(values.min()),
+                            'max': float(values.max())
+                        }
+            
+            return {
+                'success': True,
+                'track_statistics': stats_df,
+                'ensemble_statistics': ensemble_stats,
+                'n_tracks': len(stats_df)
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _analyze_diffusion(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze diffusion coefficients."""
+        try:
+            from analysis import calculate_diffusion_coefficient
+            
+            pixel_size = parameters.get('pixel_size', 0.1)
+            frame_interval = parameters.get('frame_interval', 0.1)
+            
+            diffusion_results = []
+            for track_id in tracks_df['track_id'].unique():
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                
+                if len(track_data) >= 10:  # Minimum points for reliable diffusion calculation
+                    diff_coeff = calculate_diffusion_coefficient(
+                        track_data, pixel_size, frame_interval
+                    )
+                    diffusion_results.append({
+                        'track_id': track_id,
+                        'diffusion_coefficient': diff_coeff
+                    })
+            
+            if diffusion_results:
+                diffusion_df = pd.DataFrame(diffusion_results)
+                
+                # Calculate statistics
+                coeffs = diffusion_df['diffusion_coefficient'].dropna()
+                diffusion_stats = {
+                    'mean': float(coeffs.mean()),
+                    'median': float(coeffs.median()),
+                    'std': float(coeffs.std()),
+                    'min': float(coeffs.min()),
+                    'max': float(coeffs.max())
+                }
+                
+                return {
+                    'success': True,
+                    'diffusion_coefficients': diffusion_df,
+                    'statistics': diffusion_stats,
+                    'n_tracks': len(diffusion_df)
+                }
+            else:
+                return {'success': False, 'error': 'No tracks suitable for diffusion analysis'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _classify_motion(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify motion types."""
+        try:
+            from motion_analysis import classify_motion_type
+            
+            motion_results = []
+            for track_id in tracks_df['track_id'].unique():
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                
+                if len(track_data) >= 5:
+                    classification = classify_motion_type(track_data)
+                    motion_results.append({
+                        'track_id': track_id,
+                        'motion_type': classification.get('motion_type', 'unknown'),
+                        'confidence': classification.get('confidence', 0.0),
+                        'features': classification.get('features', {})
+                    })
+            
+            if motion_results:
+                motion_df = pd.DataFrame(motion_results)
+                
+                # Count motion types
+                motion_counts = motion_df['motion_type'].value_counts().to_dict()
+                
+                return {
+                    'success': True,
+                    'motion_classifications': motion_df,
+                    'motion_type_counts': motion_counts,
+                    'n_tracks': len(motion_df)
+                }
+            else:
+                return {'success': False, 'error': 'No tracks suitable for motion classification'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _analyze_msd(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze mean squared displacement."""
+        try:
+            from analysis import calculate_ensemble_msd
+            
+            pixel_size = parameters.get('pixel_size', 0.1)
+            frame_interval = parameters.get('frame_interval', 0.1)
+            max_lag = parameters.get('max_lag', 20)
+            
+            msd_result = calculate_ensemble_msd(
+                tracks_df, 
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                max_lag=max_lag
+            )
+            
+            return {
+                'success': True,
+                'ensemble_msd': msd_result,
+                'parameters': {
+                    'pixel_size': pixel_size,
+                    'frame_interval': frame_interval,
+                    'max_lag': max_lag
+                }
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _analyze_active_transport(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze active transport characteristics."""
+        try:
+            from analysis import analyze_active_transport
+            
+            pixel_size = parameters.get('pixel_size', 0.1)
+            frame_interval = parameters.get('frame_interval', 0.1)
+            
+            transport_result = analyze_active_transport(
+                tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval
+            )
+            
+            return transport_result
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _detect_anomalies(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect anomalous particle behavior."""
+        try:
+            from anomaly_detection import AnomalyDetector
+            
+            detector = AnomalyDetector()
+            anomaly_results = detector.comprehensive_anomaly_detection(tracks_df)
+            
+            return {
+                'success': True,
+                'anomaly_results': anomaly_results,
+                'summary': detector.get_anomaly_summary()
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _generate_analysis_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate comprehensive analysis summary."""
+        summary = {
+            'completed_analyses': [],
+            'key_findings': [],
+            'data_quality': {},
+            'recommendations': []
+        }
+        
+        # Track completed analyses
+        for analysis_type, result in results.items():
+            if result.get('success', False):
+                summary['completed_analyses'].append(analysis_type)
+        
+        # Extract key findings
+        if 'basic_statistics' in results and results['basic_statistics']['success']:
+            stats = results['basic_statistics']['ensemble_statistics']
+            n_tracks = results['basic_statistics']['n_tracks']
+            
+            summary['key_findings'].append(f"Analyzed {n_tracks} tracks")
+            
+            if 'track_length' in stats:
+                mean_length = stats['track_length']['mean']
+                summary['key_findings'].append(f"Average track length: {mean_length:.1f} frames")
+        
+        if 'diffusion_analysis' in results and results['diffusion_analysis']['success']:
+            diff_stats = results['diffusion_analysis']['statistics']
+            mean_diff = diff_stats['mean']
+            summary['key_findings'].append(f"Mean diffusion coefficient: {mean_diff:.2e} μm²/s")
+        
+        if 'motion_classification' in results and results['motion_classification']['success']:
+            motion_counts = results['motion_classification']['motion_type_counts']
+            dominant_motion = max(motion_counts.items(), key=lambda x: x[1])
+            summary['key_findings'].append(f"Dominant motion type: {dominant_motion[0]} ({dominant_motion[1]} tracks)")
+        
+        # Assess data quality
+        if 'basic_statistics' in results and results['basic_statistics']['success']:
+            stats = results['basic_statistics']['ensemble_statistics']
+            
+            if 'track_length' in stats:
+                mean_length = stats['track_length']['mean']
+                if mean_length < 10:
+                    summary['data_quality']['track_length'] = 'Short tracks detected'
+                    summary['recommendations'].append('Consider optimizing tracking parameters for longer tracks')
+                else:
+                    summary['data_quality']['track_length'] = 'Good track lengths'
+        
+        return summary
+    
+    def get_analysis_history(self) -> List[Dict[str, Any]]:
+        """Get history of analysis runs."""
+        return self.analysis_history.copy()
+    
+    def export_results(self, format_type: str = 'json') -> Dict[str, Any]:
+        """Export analysis results in specified format."""
+        if not self.analysis_results:
+            return {'success': False, 'error': 'No analysis results to export'}
+        
+        try:
+            if format_type == 'json':
+                # Convert DataFrames to dictionaries for JSON serialization
+                exportable_results = {}
+                for key, value in self.analysis_results.items():
+                    if isinstance(value, dict):
+                        exportable_results[key] = self._make_json_serializable(value)
+                    else:
+                        exportable_results[key] = value
+                
+                return {
+                    'success': True,
+                    'format': 'json',
+                    'data': exportable_results
+                }
+            else:
+                return {'success': False, 'error': f'Unsupported export format: {format_type}'}
+                
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _make_json_serializable(self, obj: Any) -> Any:
+        """Convert objects to JSON serializable format."""
+        if isinstance(obj, pd.DataFrame):
+            return obj.to_dict('records')
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {k: self._make_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_json_serializable(item) for item in obj]
+        else:
+            return obj

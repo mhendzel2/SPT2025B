@@ -7,14 +7,14 @@ Enhanced with density map segmentation for nuclear density classification.
 """
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # Missing import
 from skimage import measure, filters, morphology, draw
 from skimage.filters import threshold_otsu, threshold_triangle, gaussian
 from skimage.morphology import remove_small_objects, binary_closing, disk, opening, binary_erosion, binary_dilation, label
 from skimage.segmentation import find_boundaries
 from skimage.draw import polygon
 from concurrent.futures import ThreadPoolExecutor
-import multiprocessing
+import multiprocessing  # Missing import
 from functools import partial
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 import warnings
@@ -22,7 +22,7 @@ from scipy.ndimage import binary_fill_holes
 from skimage.measure import label, regionprops
 from skimage.morphology import binary_erosion, binary_dilation
 from typing import List, Dict, Tuple, Any, Optional
-import streamlit as st
+import streamlit as st  # Missing import
 
 def segment_image_channel_otsu(image_channel: np.ndarray, min_object_size: int = 50, 
                               pixel_size: float = 1.0) -> List[Dict[str, Any]]:
@@ -1842,52 +1842,6 @@ def segment_nuclear_interior_with_density_map(image: np.ndarray, nuclear_boundar
                 # Use two thresholds to create two classes
                 high_threshold = np.percentile(nuclear_pixels, 75)  # Upper 25% for class 2
                 medium_threshold = np.percentile(nuclear_pixels, 50)  # Upper 50% for class 1
-                
-                internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
-                internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
-            else:
-                internal_class1 = np.zeros_like(image, dtype=bool)
-                internal_class2 = np.zeros_like(image, dtype=bool)
-                
-    except Exception:
-        # Fallback: Use percentile-based thresholding within nuclear regions
-        nuclear_pixels = image[nuclear_regions]
-        if len(nuclear_pixels) > 0:
-            # Use two thresholds to create two classes
-            high_threshold = np.percentile(nuclear_pixels, 75)  # Upper 25% for class 2
-            medium_threshold = np.percentile(nuclear_pixels, 50)  # Upper 50% for class 1
-            
-            internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
-            internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
-        else:
-            internal_class1 = np.zeros_like(image, dtype=bool)
-            internal_class2 = np.zeros_like(image, dtype=bool)
-    
-    # Apply minimal morphological operations to clean up results
-    internal_class1 = binary_closing(internal_class1, disk(2))
-    internal_class2 = binary_closing(internal_class2, disk(2))
-    
-    # Remove very small objects
-    internal_class1 = remove_small_objects(internal_class1, min_size=50)
-    internal_class2 = remove_small_objects(internal_class2, min_size=50)
-    
-    # Ensure classes are only within nuclear regions
-    internal_class1 = internal_class1 & nuclear_regions
-    internal_class2 = internal_class2 & nuclear_regions
-    
-    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
-    internal_class2 = binary_closing(internal_class2, disk(2))
-    
-    # Remove very small objects
-    internal_class1 = remove_small_objects(internal_class1, min_size=50)
-    internal_class2 = remove_small_objects(internal_class2, min_size=50)
-    
-    # Ensure classes are only within nuclear regions
-    internal_class1 = internal_class1 & nuclear_regions
-    internal_class2 = internal_class2 & nuclear_regions
-    
-    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
-    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
                 
                 internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
                 internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
