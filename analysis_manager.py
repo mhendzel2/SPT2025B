@@ -61,6 +61,8 @@ class AnalysisManager:
         self.state = get_state_manager()
         self.analysis_cache = {}
         self.debug_mode = False
+        self.analysis_results = {}
+        self.analysis_history = []
         
         # Available analysis types
         self.available_analyses = {
@@ -655,14 +657,6 @@ class AnalysisManager:
         except Exception as e:
             self.log(f"Error calculating track statistics: {str(e)}", "error")
             st.session_state.track_statistics = None
-    
-    """
-    Central manager for coordinating SPT analysis workflows.
-    """
-    
-    def __init__(self):
-        self.analysis_results = {}
-        self.analysis_history = []
     
     def run_comprehensive_analysis(self, tracks_df: pd.DataFrame, 
                                  analysis_types: List[str] = None,
