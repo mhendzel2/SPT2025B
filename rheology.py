@@ -108,48 +108,91 @@ class MicrorheologyAnalyzer:
         
         return pd.DataFrame(msd_results)
     
-    # In rheology.py, within the MicrorheologyAnalyzer class
-
     def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
                                        omega_rad_s: float) -> Tuple[float, float]:
-        """Calculate complex modulus G*(ω) using the GSER approach."""
+        """
+        Calculate complex modulus G*(ω) using the GSER (Generalized Stokes-Einstein Relation) approach.
+        
+        The GSER relates the complex modulus to the Fourier transform of the MSD:
+        G*(ω) = (kB*T) / (3*π*a*s*Γ(1+α)) * (iω)^α
+        
+        Where α is the local logarithmic slope of MSD at time τ = 1/ω
+        
+        Parameters
+        ----------
+        msd_df : pd.DataFrame
+            MSD data with columns: lag_time_s, msd_m2
+        omega_rad_s : float
+            Angular frequency in rad/s
+            
+        Returns
+        -------
+        Tuple[float, float]
+            G' (storage modulus) and G" (loss modulus) in Pa
+        """
         if len(msd_df) < 3:
             return np.nan, np.nan
 
-        # Estimate alpha from local slope of the MSD curve
+        # Calculate characteristic time τ = 1/ω
+        tau = 1.0 / omega_rad_s
+        
+        # Find the closest time point and estimate local slope α
+        if tau < msd_df['lag_time_s'].min() or tau > msd_df['lag_time_s'].max():
+            return np.nan, np.nan
+            
+        # Interpolate MSD at τ and estimate local slope
         log_times = np.log(msd_df['lag_time_s'])
         log_msd = np.log(msd_df['msd_m2'])
-        idx = np.argmin(np.abs(msd_df['lag_time_s'] - (1.0 / omega_rad_s)))
-        if idx == 0 or idx == len(msd_df) - 1:
-            alpha = 1.0
+        
+        # Find closest point to tau
+        idx = np.argmin(np.abs(msd_df['lag_time_s'] - tau))
+        
+        # Estimate local slope α using neighboring points
+        if idx == 0:
+            alpha = (log_msd[idx + 1] - log_msd[idx]) / (log_times[idx + 1] - log_times[idx])
+        elif idx == len(msd_df) - 1:
+            alpha = (log_msd[idx] - log_msd[idx - 1]) / (log_times[idx] - log_times[idx - 1])
         else:
+            # Use symmetric difference for better accuracy
             alpha = (log_msd[idx + 1] - log_msd[idx - 1]) / (log_times[idx + 1] - log_times[idx - 1])
-
-        from scipy.special import gamma
-        gamma_factor = gamma(1 + alpha)
-
-        msd_at_tau = np.interp(1.0 / omega_rad_s, msd_df['lag_time_s'], msd_df['msd_m2'])
+        
+        # Ensure alpha is physically reasonable (0 < α < 2)
+        alpha = np.clip(alpha, 0.01, 1.99)
+        
+        # Interpolate MSD at tau
+        msd_at_tau = np.interp(tau, msd_df['lag_time_s'], msd_df['msd_m2'])
+        
+        # Calculate the prefactor using corrected GSER formula
+        # G*(ω) = (kB*T) / (3*π*a*<Δr²(τ)>) * Γ(1+α) * (iω*τ)^α
         prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
-
-        omega_alpha = omega_rad_s ** alpha
+        
+        # Gamma function factor
+        gamma_factor = gamma(1 + alpha)
+        
+        # Complex frequency factor (iω*τ)^α = (ωτ)^α * e^(iα*π/2)
+        omega_tau_alpha = (omega_rad_s * tau) ** alpha
         phase = alpha * np.pi / 2
-
-        g_star_real = prefactor * gamma_factor * np.cos(phase)
-        g_star_imag = prefactor * gamma_factor * np.sin(phase)
-
-        return g_star_real, g_star_imag
+        
+        # Calculate G' and G"
+        g_prime = prefactor * gamma_factor * omega_tau_alpha * np.cos(phase)
+        g_double_prime = prefactor * gamma_factor * omega_tau_alpha * np.sin(phase)
+        
+        return g_prime, g_double_prime
 
     def calculate_effective_viscosity(self, msd_df: pd.DataFrame, 
                                       lag_time_range_s: Tuple[float, float] = None) -> float:
         """
-        Calculate effective viscosity from MSD slope.
+        Calculate effective viscosity from MSD slope using Stokes-Einstein relation.
+        
+        For 2D projected motion: η = kB*T / (4*π*D*a)
+        Where D is the diffusion coefficient from MSD slope: D = slope/4 (2D)
         
         Parameters
         ----------
         msd_df : pd.DataFrame
             MSD data
         lag_time_range_s : Tuple[float, float], optional
-            Time range for slope calculation. If None, uses initial slope.
+            Time range for slope calculation. If None, uses initial linear region.
             
         Returns
         -------
@@ -165,29 +208,128 @@ class MicrorheologyAnalyzer:
                    (msd_df['lag_time_s'] <= lag_time_range_s[1])
             slope_data = msd_df[mask]
         else:
-            # Use first few points for initial slope
-            slope_data = msd_df.head(min(5, len(msd_df)))
+            # Use initial linear region (first 20% of data or first 5 points)
+            n_points = min(max(2, len(msd_df) // 5), 5)
+            slope_data = msd_df.head(n_points)
         
         if len(slope_data) < 2:
             return np.nan
         
-        # Linear fit to get slope
+        # Linear fit to get slope in log-log space to check for pure diffusion
         try:
-            slope, _ = np.polyfit(slope_data['lag_time_s'], slope_data['msd_m2'], 1)
+            # First check if behavior is diffusive (slope ≈ 1 in log-log)
+            log_slope = np.polyfit(np.log(slope_data['lag_time_s']), 
+                                 np.log(slope_data['msd_m2']), 1)[0]
+            
+            # If close to diffusive behavior, use linear fit
+            if 0.8 <= log_slope <= 1.2:
+                slope, intercept = np.polyfit(slope_data['lag_time_s'], slope_data['msd_m2'], 1)
+            else:
+                # For non-diffusive behavior, use power law fit at short times
+                # MSD = 4*D*t^α, so D_eff = MSD(t)/(4*t) at short times
+                t_ref = slope_data['lag_time_s'].iloc[0]
+                msd_ref = slope_data['msd_m2'].iloc[0]
+                slope = msd_ref / t_ref  # Effective slope
+                
         except:
             return np.nan
         
         if slope <= 0:
             return np.inf
         
-        # Effective diffusion coefficient: D_eff = slope / 4 (for 2D)
+        # Calculate effective diffusion coefficient
+        # For 2D projected motion: D = slope/4
         D_eff = slope / 4.0
         
-        # Stokes-Einstein: η = kB*T / (6*π*D*a) for 3D
-        # For 2D projected motion: η = kB*T / (4*π*D*a)
+        # Calculate viscosity using Stokes-Einstein relation
+        # For 2D: η = kB*T / (4*π*D*a)
+        # For 3D: η = kB*T / (6*π*D*a)
+        # Use 2D formula since we're analyzing projected motion
         viscosity_eff = (self.kB * self.temperature_K) / (4 * np.pi * D_eff * self.particle_radius_m)
         
         return viscosity_eff
+    
+    def calculate_frequency_dependent_viscosity(self, msd_df: pd.DataFrame, 
+                                              omega_rad_s: float) -> float:
+        """
+        Calculate frequency-dependent viscosity using the complex modulus.
+        
+        η*(ω) = G*(ω) / (iω)
+        |η*(ω)| = |G*(ω)| / ω
+        
+        Parameters
+        ----------
+        msd_df : pd.DataFrame
+            MSD data
+        omega_rad_s : float
+            Angular frequency in rad/s
+            
+        Returns
+        -------
+        float
+            Frequency-dependent viscosity magnitude in Pa·s
+        """
+        g_prime, g_double_prime = self.calculate_complex_modulus_gser(msd_df, omega_rad_s)
+        
+        if np.isnan(g_prime) or np.isnan(g_double_prime):
+            return np.nan
+        
+        # Calculate complex viscosity magnitude
+        g_star_magnitude = np.sqrt(g_prime**2 + g_double_prime**2)
+        eta_star_magnitude = g_star_magnitude / omega_rad_s
+        
+        return eta_star_magnitude
+    
+    def fit_power_law_msd(self, msd_df: pd.DataFrame) -> Dict[str, float]:
+        """
+        Fit power law to MSD data: MSD(t) = A * t^α
+        
+        Parameters
+        ----------
+        msd_df : pd.DataFrame
+            MSD data
+            
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary with 'amplitude', 'exponent', and 'r_squared'
+        """
+        if len(msd_df) < 3:
+            return {'amplitude': np.nan, 'exponent': np.nan, 'r_squared': np.nan}
+        
+        try:
+            # Fit in log space: log(MSD) = log(A) + α*log(t)
+            log_times = np.log(msd_df['lag_time_s'])
+            log_msd = np.log(msd_df['msd_m2'])
+            
+            # Remove any infinite or NaN values
+            valid_mask = np.isfinite(log_times) & np.isfinite(log_msd)
+            if np.sum(valid_mask) < 3:
+                return {'amplitude': np.nan, 'exponent': np.nan, 'r_squared': np.nan}
+            
+            log_times = log_times[valid_mask]
+            log_msd = log_msd[valid_mask]
+            
+            # Linear fit
+            coeffs = np.polyfit(log_times, log_msd, 1)
+            alpha = coeffs[0]  # Exponent
+            log_A = coeffs[1]  # Log amplitude
+            A = np.exp(log_A)  # Amplitude
+            
+            # Calculate R-squared
+            y_pred = np.polyval(coeffs, log_times)
+            ss_res = np.sum((log_msd - y_pred)**2)
+            ss_tot = np.sum((log_msd - np.mean(log_msd))**2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+            
+            return {
+                'amplitude': A,
+                'exponent': alpha,
+                'r_squared': r_squared
+            }
+            
+        except:
+            return {'amplitude': np.nan, 'exponent': np.nan, 'r_squared': np.nan}
     
     def multi_dataset_analysis(self, track_datasets: List[pd.DataFrame], 
                               frame_intervals_s: List[float],
@@ -214,7 +356,7 @@ class MicrorheologyAnalyzer:
             Complete microrheology analysis results for all datasets
         """
         if len(track_datasets) != len(frame_intervals_s):
-                return {
+            return {
                 'success': False,
                 'error': 'Number of datasets must match number of frame intervals'
             }
@@ -238,6 +380,7 @@ class MicrorheologyAnalyzer:
             all_frequencies_hz = []
             all_g_prime_values = []
             all_g_double_prime_values = []
+            all_viscosities = []
             dataset_labels = []
             
             for i, (tracks_df, frame_interval_s) in enumerate(zip(track_datasets, frame_intervals_s)):
@@ -251,49 +394,68 @@ class MicrorheologyAnalyzer:
                 
                 if len(msd_data) == 0:
                     results['error'] = f"Insufficient data for MSD calculation in {dataset_label}"
-                    return results
+                    continue
+                
+                # Fit power law to MSD
+                power_law_fit = self.fit_power_law_msd(msd_data)
                 
                 # Determine frequency range for this dataset
                 if omega_ranges and i < len(omega_ranges):
                     omega_list = omega_ranges[i]
                 else:
                     # Auto-determine frequency range based on accessible time scales
-                    min_time = frame_interval_s
+                    min_time = msd_data['lag_time_s'].min()
                     max_time = msd_data['lag_time_s'].max()
+                    
+                    # Frequency range should be within the time range where we have data
                     omega_max = 2 * np.pi / (min_time * 2)  # High frequency limit
                     omega_min = 2 * np.pi / (max_time * 0.5)  # Low frequency limit
-                    omega_list = np.logspace(np.log10(omega_min), np.log10(omega_max), 10)
+                    
+                    # Ensure reasonable frequency range
+                    omega_max = min(omega_max, 2 * np.pi / frame_interval_s)
+                    omega_min = max(omega_min, 2 * np.pi / (max_time))
+                    
+                    if omega_max > omega_min:
+                        omega_list = np.logspace(np.log10(omega_min), np.log10(omega_max), 15)
+                    else:
+                        omega_list = [2 * np.pi / (min_time * 5)]
                 
-                # Calculate complex moduli for this dataset
+                # Calculate complex moduli and viscosities for this dataset
                 g_prime_values = []
                 g_double_prime_values = []
+                viscosity_values = []
                 frequencies_hz = []
                 
                 for omega_rad_s in omega_list:
                     g_prime, g_double_prime = self.calculate_complex_modulus_gser(msd_data, omega_rad_s)
+                    viscosity = self.calculate_frequency_dependent_viscosity(msd_data, omega_rad_s)
                     
                     if not (np.isnan(g_prime) or np.isnan(g_double_prime)):
                         g_prime_values.append(g_prime)
                         g_double_prime_values.append(g_double_prime)
+                        viscosity_values.append(viscosity)
                         frequencies_hz.append(omega_rad_s / (2 * np.pi))
                         
                         # Add to combined lists for overall frequency response
                         all_frequencies_hz.append(omega_rad_s / (2 * np.pi))
                         all_g_prime_values.append(g_prime)
                         all_g_double_prime_values.append(g_double_prime)
+                        all_viscosities.append(viscosity)
                 
-                # Calculate effective viscosity for this dataset
-                viscosity = self.calculate_effective_viscosity(msd_data)
+                # Calculate effective viscosity from MSD slope
+                effective_viscosity = self.calculate_effective_viscosity(msd_data)
                 
                 # Store dataset results
                 dataset_results = {
                     'label': dataset_label,
                     'frame_interval_s': frame_interval_s,
                     'msd_data': msd_data,
+                    'power_law_fit': power_law_fit,
                     'frequencies_hz': frequencies_hz,
                     'g_prime_pa': g_prime_values,
                     'g_double_prime_pa': g_double_prime_values,
-                    'effective_viscosity_pa_s': viscosity,
+                    'frequency_dependent_viscosity_pa_s': viscosity_values,
+                    'effective_viscosity_pa_s': effective_viscosity,
                     'omega_range_rad_s': omega_list.tolist() if hasattr(omega_list, 'tolist') else list(omega_list)
                 }
                 
@@ -303,7 +465,9 @@ class MicrorheologyAnalyzer:
                         'g_prime_std_pa': np.std(g_prime_values),
                         'g_double_prime_mean_pa': np.mean(g_double_prime_values),
                         'g_double_prime_std_pa': np.std(g_double_prime_values),
-                        'loss_tangent': np.mean(g_double_prime_values) / np.mean(g_prime_values) if np.mean(g_prime_values) > 0 else np.inf
+                        'loss_tangent': np.mean(g_double_prime_values) / np.mean(g_prime_values) if np.mean(g_prime_values) > 0 else np.inf,
+                        'viscosity_mean_pa_s': np.mean(viscosity_values),
+                        'viscosity_std_pa_s': np.std(viscosity_values)
                     })
                 
                 results['datasets'].append(dataset_results)
@@ -316,13 +480,14 @@ class MicrorheologyAnalyzer:
                     'frequencies_hz': [all_frequencies_hz[i] for i in sorted_indices],
                     'g_prime_pa': [all_g_prime_values[i] for i in sorted_indices],
                     'g_double_prime_pa': [all_g_double_prime_values[i] for i in sorted_indices],
-                    'dataset_labels': [dataset_labels[i // 10] for i in sorted_indices]  # Approximate dataset assignment
+                    'viscosity_pa_s': [all_viscosities[i] for i in sorted_indices]
                 }
                 
                 # Overall statistics
                 results['combined_frequency_response'].update({
                     'g_prime_overall_mean_pa': np.mean(all_g_prime_values),
                     'g_double_prime_overall_mean_pa': np.mean(all_g_double_prime_values),
+                    'viscosity_overall_mean_pa_s': np.mean(all_viscosities),
                     'frequency_range_hz': [min(all_frequencies_hz), max(all_frequencies_hz)]
                 })
             
@@ -332,10 +497,15 @@ class MicrorheologyAnalyzer:
                 valid_viscosities = [v for v in viscosities if not np.isnan(v)]
                 
                 if len(valid_viscosities) > 1:
+                    mean_visc = np.mean(valid_viscosities)
+                    std_visc = np.std(valid_viscosities)
+                    
                     results['dataset_comparison'] = {
-                        'viscosity_variation_coefficient': np.std(valid_viscosities) / np.mean(valid_viscosities),
-                        'frequency_dependent_behavior': np.std(valid_viscosities) / np.mean(valid_viscosities) > 0.2,
-                        'viscosity_range_pa_s': [min(valid_viscosities), max(valid_viscosities)]
+                        'viscosity_variation_coefficient': std_visc / mean_visc if mean_visc > 0 else np.inf,
+                        'frequency_dependent_behavior': std_visc / mean_visc > 0.2,
+                        'viscosity_range_pa_s': [min(valid_viscosities), max(valid_viscosities)],
+                        'mean_viscosity_pa_s': mean_visc,
+                        'std_viscosity_pa_s': std_visc
                     }
             
             results['success'] = True
@@ -356,8 +526,11 @@ class MicrorheologyAnalyzer:
         if msd_df.empty:
             return {'success': False, 'error': 'Insufficient data for MSD calculation'}
 
+        # Fit power law to MSD
+        power_law_fit = self.fit_power_law_msd(msd_df)
+
         # Determine frequency range based on sampling
-        min_time = frame_interval_s
+        min_time = msd_df['lag_time_s'].min()
         max_time = msd_df['lag_time_s'].max()
         omega_list = np.logspace(
             np.log10(2 * np.pi / (max_time * 0.5)),
@@ -367,26 +540,39 @@ class MicrorheologyAnalyzer:
 
         g_prime_values = []
         g_double_prime_values = []
+        viscosity_values = []
         frequencies_hz = []
 
         for omega in omega_list:
             g_p, g_pp = self.calculate_complex_modulus_gser(msd_df, omega)
+            viscosity = self.calculate_frequency_dependent_viscosity(msd_df, omega)
+            
             if not (np.isnan(g_p) or np.isnan(g_pp)):
                 g_prime_values.append(g_p)
                 g_double_prime_values.append(g_pp)
+                viscosity_values.append(viscosity)
                 frequencies_hz.append(omega / (2 * np.pi))
 
-        viscosity = self.calculate_effective_viscosity(msd_df)
+        effective_viscosity = self.calculate_effective_viscosity(msd_df)
 
         return {
             'success': True,
             'msd_data': msd_df,
+            'power_law_fit': power_law_fit,
             'frequency_response': {
                 'frequencies_hz': frequencies_hz,
                 'g_prime_pa': g_prime_values,
                 'g_double_prime_pa': g_double_prime_values,
+                'viscosity_pa_s': viscosity_values,
             },
-            'viscosity': {'effective_pa_s': viscosity},
+            'viscosity': {'effective_pa_s': effective_viscosity},
+            'moduli': {
+                'g_prime_mean_pa': np.mean(g_prime_values) if g_prime_values else np.nan,
+                'g_prime_std_pa': np.std(g_prime_values) if g_prime_values else np.nan,
+                'g_double_prime_mean_pa': np.mean(g_double_prime_values) if g_double_prime_values else np.nan,
+                'g_double_prime_std_pa': np.std(g_double_prime_values) if g_double_prime_values else np.nan,
+                'loss_tangent': np.mean(g_double_prime_values) / np.mean(g_prime_values) if g_prime_values and np.mean(g_prime_values) > 0 else np.inf
+            }
         }
 
     def analyze_multi_dataset_rheology(self, track_datasets: List[pd.DataFrame],
@@ -450,6 +636,7 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                     msd_data = dataset['msd_data']
                     color = colors[i % len(colors)]
                     
+                    # Plot MSD data
                     fig_msd.add_trace(go.Scatter(
                         x=msd_data['lag_time_s'],
                         y=msd_data['msd_m2'],
@@ -462,6 +649,22 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                             visible=True
                         )
                     ))
+                    
+                    # Add power law fit if available
+                    if 'power_law_fit' in dataset and not np.isnan(dataset['power_law_fit']['amplitude']):
+                        fit_data = dataset['power_law_fit']
+                        t_fit = np.logspace(np.log10(msd_data['lag_time_s'].min()), 
+                                          np.log10(msd_data['lag_time_s'].max()), 50)
+                        msd_fit = fit_data['amplitude'] * (t_fit ** fit_data['exponent'])
+                        
+                        fig_msd.add_trace(go.Scatter(
+                            x=t_fit,
+                            y=msd_fit,
+                            mode='lines',
+                            name=f"{dataset['label']} fit (α={fit_data['exponent']:.2f})",
+                            line=dict(color=color, dash='dash'),
+                            showlegend=True
+                        ))
             
             fig_msd.update_layout(
                 title='Mean Squared Displacement Comparison Across Datasets',
@@ -501,10 +704,26 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                     yaxis='y'
                 ))
                 
+                # Viscosity if available
+                if 'viscosity_pa_s' in freq_data:
+                    fig_freq.add_trace(go.Scatter(
+                        x=freq_data['frequencies_hz'],
+                        y=freq_data['viscosity_pa_s'],
+                        mode='lines+markers',
+                        name='|η*| (Complex Viscosity)',
+                        line=dict(color='purple'),
+                        yaxis='y2'
+                    ))
+                
                 fig_freq.update_layout(
                     title='Combined Complex Modulus vs Frequency',
                     xaxis_title='Frequency (Hz)',
                     yaxis_title='Modulus (Pa)',
+                    yaxis2=dict(
+                        title='Viscosity (Pa·s)',
+                        overlaying='y',
+                        side='right'
+                    ),
                     xaxis_type='log',
                     yaxis_type='log',
                     template='plotly_white'
@@ -554,54 +773,8 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
     
     else:
         # Legacy single dataset structure (backwards compatibility)
-        # MSD comparison plot
-        if analysis_results.get('msd_high_freq') is not None and analysis_results.get('msd_low_freq') is not None:
-            fig_msd = go.Figure()
-            
-            msd_high = analysis_results['msd_high_freq']
-            msd_low = analysis_results['msd_low_freq']
-            
-            # High frequency MSD
-            fig_msd.add_trace(go.Scatter(
-                x=msd_high['lag_time_s'],
-                y=msd_high['msd_m2'],
-                mode='lines+markers',
-                name='High Frequency',
-                line=dict(color='red'),
-                error_y=dict(
-                    type='data',
-                    array=msd_high.get('std_msd_m2', []),
-                    visible=True
-                )
-            ))
-            
-            # Low frequency MSD
-            fig_msd.add_trace(go.Scatter(
-                x=msd_low['lag_time_s'],
-                y=msd_low['msd_m2'],
-                mode='lines+markers',
-                name='Low Frequency',
-                line=dict(color='blue'),
-                error_y=dict(
-                    type='data',
-                    array=msd_low.get('std_msd_m2', []),
-                    visible=True
-                )
-            ))
-            
-            fig_msd.update_layout(
-                title='Mean Squared Displacement Comparison',
-                xaxis_title='Lag Time (s)',
-                yaxis_title='MSD (m²)',
-                xaxis_type='log',
-                yaxis_type='log',
-                template='plotly_white'
-            )
-            
-            figures['msd_comparison'] = fig_msd
-        
-        # Single dataset MSD plot
-        elif 'msd_data' in analysis_results:
+        # MSD plot
+        if 'msd_data' in analysis_results:
             fig_msd = go.Figure()
             msd_data = analysis_results['msd_data']
             
@@ -617,6 +790,21 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                     visible=True
                 )
             ))
+            
+            # Add power law fit if available
+            if 'power_law_fit' in analysis_results and not np.isnan(analysis_results['power_law_fit']['amplitude']):
+                fit_data = analysis_results['power_law_fit']
+                t_fit = np.logspace(np.log10(msd_data['lag_time_s'].min()), 
+                                  np.log10(msd_data['lag_time_s'].max()), 50)
+                msd_fit = fit_data['amplitude'] * (t_fit ** fit_data['exponent'])
+                
+                fig_msd.add_trace(go.Scatter(
+                    x=t_fit,
+                    y=msd_fit,
+                    mode='lines',
+                    name=f"Power law fit (α={fit_data['exponent']:.2f})",
+                    line=dict(color='red', dash='dash')
+                ))
             
             fig_msd.update_layout(
                 title='Mean Squared Displacement',
@@ -655,10 +843,26 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                 yaxis='y'
             ))
             
+            # Viscosity if available
+            if 'viscosity_pa_s' in freq_data:
+                fig_freq.add_trace(go.Scatter(
+                    x=freq_data['frequencies_hz'],
+                    y=freq_data['viscosity_pa_s'],
+                    mode='lines+markers',
+                    name='|η*| (Complex Viscosity)',
+                    line=dict(color='purple'),
+                    yaxis='y2'
+                ))
+            
             fig_freq.update_layout(
                 title='Complex Modulus vs Frequency',
                 xaxis_title='Frequency (Hz)',
                 yaxis_title='Modulus (Pa)',
+                yaxis2=dict(
+                    title='Viscosity (Pa·s)',
+                    overlaying='y',
+                    side='right'
+                ),
                 xaxis_type='log',
                 yaxis_type='log',
                 template='plotly_white'
@@ -694,9 +898,12 @@ def display_rheology_summary(analysis_results: Dict) -> None:
         if len(datasets) > 0:
             dataset_summary = []
             for dataset in datasets:
+                power_law = dataset.get('power_law_fit', {})
                 summary_row = {
                     'Dataset': dataset['label'],
                     'Frame Interval (s)': f"{dataset['frame_interval_s']:.3f}",
+                    'MSD Exponent (α)': f"{power_law.get('exponent', 0):.3f}" if not np.isnan(power_law.get('exponent', np.nan)) else "N/A",
+                    'R² (fit)': f"{power_law.get('r_squared', 0):.3f}" if not np.isnan(power_law.get('r_squared', np.nan)) else "N/A",
                     'Effective Viscosity (Pa·s)': f"{dataset.get('effective_viscosity_pa_s', 0):.2e}" if not np.isnan(dataset.get('effective_viscosity_pa_s', np.nan)) else "N/A",
                     'G\' Mean (Pa)': f"{dataset.get('g_prime_mean_pa', 0):.2e}" if dataset.get('g_prime_mean_pa') is not None else "N/A",
                     'G\" Mean (Pa)': f"{dataset.get('g_double_prime_mean_pa', 0):.2e}" if dataset.get('g_double_prime_mean_pa') is not None else "N/A",
@@ -719,7 +926,7 @@ def display_rheology_summary(analysis_results: Dict) -> None:
             if 'frequencies_hz' in freq_data:
                 st.write(f"**Total Data Points:** {len(freq_data['frequencies_hz'])}")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 if 'g_prime_overall_mean_pa' in freq_data:
@@ -734,6 +941,13 @@ def display_rheology_summary(analysis_results: Dict) -> None:
                         label="Overall G\" Mean",
                         value=f"{freq_data['g_double_prime_overall_mean_pa']:.2e} Pa"
                     )
+            
+            with col3:
+                if 'viscosity_overall_mean_pa_s' in freq_data:
+                    st.metric(
+                        label="Overall |η*| Mean",
+                        value=f"{freq_data['viscosity_overall_mean_pa_s']:.2e} Pa·s"
+                    )
         
         # Dataset comparison
         if 'dataset_comparison' in analysis_results and analysis_results['dataset_comparison']:
@@ -741,11 +955,23 @@ def display_rheology_summary(analysis_results: Dict) -> None:
             
             st.subheader("Dataset Comparison")
             
-            if 'viscosity_variation_coefficient' in comparison:
-                st.metric(
-                    label="Viscosity Variation Coefficient",
-                    value=f"{comparison['viscosity_variation_coefficient']:.3f}"
-                )
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if 'viscosity_variation_coefficient' in comparison:
+                    st.metric(
+                        label="Viscosity Variation Coefficient",
+                        value=f"{comparison['viscosity_variation_coefficient']:.3f}",
+                        help="Standard deviation / Mean of viscosity across datasets"
+                    )
+            
+            with col2:
+                if 'mean_viscosity_pa_s' in comparison:
+                    st.metric(
+                        label="Mean Viscosity Across Datasets",
+                        value=f"{comparison['mean_viscosity_pa_s']:.2e} Pa·s",
+                        delta=f"±{comparison.get('std_viscosity_pa_s', 0):.2e}"
+                    )
             
             if comparison.get('frequency_dependent_behavior', False):
                 st.warning("⚠️ Significant frequency-dependent behavior detected across datasets")
@@ -758,11 +984,51 @@ def display_rheology_summary(analysis_results: Dict) -> None:
     
     else:
         # Legacy single dataset structure (backwards compatibility)
-        col1, col2, col3 = st.columns(3)
+        # Power law fit summary
+        if 'power_law_fit' in analysis_results:
+            power_law = analysis_results['power_law_fit']
+            
+            st.subheader("MSD Power Law Fit")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "Exponent (α)",
+                    f"{power_law.get('exponent', 0):.3f}",
+                    help="α = 1: normal diffusion, α < 1: subdiffusion, α > 1: superdiffusion"
+                )
+            
+            with col2:
+                st.metric(
+                    "Amplitude (A)",
+                    f"{power_law.get('amplitude', 0):.2e}",
+                    help="Prefactor in MSD = A * t^α"
+                )
+            
+            with col3:
+                st.metric(
+                    "R² (fit quality)",
+                    f"{power_law.get('r_squared', 0):.3f}",
+                    help="Coefficient of determination for power law fit"
+                )
+            
+            # Interpret the exponent
+            alpha = power_law.get('exponent', 1.0)
+            if 0.9 <= alpha <= 1.1:
+                st.success("✅ Normal diffusion detected (α ≈ 1)")
+            elif alpha < 0.9:
+                st.warning(f"⚠️ Subdiffusion detected (α = {alpha:.3f} < 1)")
+            else:
+                st.info(f"ℹ️ Superdiffusion detected (α = {alpha:.3f} > 1)")
         
         # Moduli summary
         if 'moduli' in analysis_results:
             moduli = analysis_results['moduli']
+            
+            st.subheader("Viscoelastic Moduli")
+            
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 st.metric(
@@ -791,21 +1057,8 @@ def display_rheology_summary(analysis_results: Dict) -> None:
             
             st.subheader("Effective Viscosity")
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric(
-                    "High Frequency Viscosity",
-                    f"{viscosity.get('high_freq_pa_s', 0):.2e} Pa·s"
-                )
-            
-            with col2:
-                st.metric(
-                    "Low Frequency Viscosity",
-                    f"{viscosity.get('low_freq_pa_s', 0):.2e} Pa·s"
+            st.metric(
+                "Effective Viscosity",
+                f"{viscosity.get('effective_pa_s', 0):.2e} Pa·s",
+                help="Calculated from MSD slope using Stokes-Einstein relation"
             )
-        
-        if viscosity.get('frequency_dependent', False):
-            st.warning("⚠️ Frequency-dependent viscosity detected - indicates viscoelastic behavior")
-        else:
-            st.info("✅ Frequency-independent viscosity - indicates Newtonian behavior")

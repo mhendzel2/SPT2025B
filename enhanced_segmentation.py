@@ -126,7 +126,11 @@ def classify_particles_by_contour(tracks_df: pd.DataFrame,
     pd.DataFrame
         Enhanced tracks with compartment classification
     """
-    from matplotlib.path import Path
+    try:
+        from matplotlib.path import Path
+    except ImportError:
+        # Fallback to simple bounding box classification
+        return _classify_particles_by_bbox(tracks_df, segmented_compartments, pixel_size)
     
     tracks_enhanced = tracks_df.copy()
     tracks_enhanced['compartment_id'] = 'none'
@@ -145,54 +149,50 @@ def classify_particles_by_contour(tracks_df: pd.DataFrame,
             continue  # Not a valid polygon
         
         # Create Path object for point-in-polygon test
-        path = Path(contour_um)
-        
-        # Test which points are inside this compartment
-        particle_coords = np.column_stack((x_um, y_um))
-        inside_mask = path.contains_points(particle_coords)
-        
-        # Update tracks that fall within this compartment and haven't been assigned
-        update_mask = inside_mask & (tracks_enhanced['compartment_id'] == 'none')
-        tracks_enhanced.loc[update_mask, 'compartment_id'] = comp['id']
-        tracks_enhanced.loc[update_mask, 'in_compartment'] = True
+        try:
+            path = Path(contour_um)
+            
+            # Test which points are inside this compartment
+            particle_coords = np.column_stack((x_um, y_um))
+            inside_mask = path.contains_points(particle_coords)
+            
+            # Update tracks that fall within this compartment and haven't been assigned
+            update_mask = inside_mask & (tracks_enhanced['compartment_id'] == 'none')
+            tracks_enhanced.loc[update_mask, 'compartment_id'] = comp['id']
+            tracks_enhanced.loc[update_mask, 'in_compartment'] = True
+            
+        except Exception:
+            # Fallback to bounding box for this compartment
+            continue
     
     return tracks_enhanced
 
-def adaptive_threshold_segmentation(image_channel: np.ndarray, 
-                                   block_size: int = 51, 
-                                   offset: float = 0.01,
-                                   min_object_size: int = 50,
-                                   pixel_size: float = 1.0) -> List[Dict[str, Any]]:
-    """
-    Segments an image using adaptive thresholding for varying illumination conditions.
+def _classify_particles_by_bbox(tracks_df: pd.DataFrame, 
+                               segmented_compartments: List[Dict], 
+                               pixel_size: float) -> pd.DataFrame:
+    """Fallback classification using bounding boxes."""
+    tracks_enhanced = tracks_df.copy()
+    tracks_enhanced['compartment_id'] = 'none'
+    tracks_enhanced['in_compartment'] = False
     
-    Parameters
-    ----------
-    image_channel : np.ndarray
-        2D image array to segment
-    block_size : int
-        Size of the local neighborhood for adaptive thresholding
-    offset : float
-        Constant subtracted from the mean/median of neighborhood
-    min_object_size : int
-        Minimum size of objects to keep
-    pixel_size : float
-        Pixel size in micrometers
-        
-    Returns
-    -------
-    List[Dict[str, Any]]
-        List of segmented compartments
-    """
-    if image_channel.ndim != 2:
-        raise ValueError("Image channel for segmentation must be 2D.")
+    x_um = tracks_enhanced['x'] * pixel_size
+    y_um = tracks_enhanced['y'] * pixel_size
     
-    # Normalize image
-    image_norm = (image_channel - image_channel.min()) / (image_channel.max() - image_channel.min())
-    
-    # Adaptive thresholding
-    adaptive_thresh = filters.threshold_local(image_norm, block_size=block_size, offset=offset)
-    binary_mask = image_norm > adaptive_thresh
+    for comp in segmented_compartments:
+        if 'bbox_um' not in comp:
+            continue
+            
+        bbox = comp['bbox_um']
+        # Assuming bbox format is [min_row, min_col, max_row, max_col]
+        if len(bbox) >= 4:
+            min_y, min_x, max_y, max_x = bbox[:4]
+            
+            inside_mask = (
+                (x_um >= min_x) & (x_um <= max_x) &
+                (y_um >= min_y) & (y_um <= max_y)
+            )
+            
+            update_mask = inside_mask & (tracks_enhanced['compartment_id'] == 'none')
     
     # Clean up the mask
     binary_mask = morphology.binary_opening(binary_mask, morphology.disk(2))

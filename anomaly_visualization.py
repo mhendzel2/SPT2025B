@@ -123,6 +123,9 @@ class AnomalyVisualizer:
         # Add velocity anomaly markers
         if 'velocity_anomalies' in anomaly_results:
             for track_id, frames in anomaly_results['velocity_anomalies'].items():
+                if not frames:  # Skip empty lists
+                    continue
+                    
                 anomaly_points = tracks_df[
                     (tracks_df['track_id'] == track_id) & 
                     (tracks_df['frame'].isin(frames))
@@ -147,6 +150,9 @@ class AnomalyVisualizer:
         # Add directional anomaly markers
         if 'directional_anomalies' in anomaly_results:
             for track_id, frames in anomaly_results['directional_anomalies'].items():
+                if not frames:  # Skip empty lists
+                    continue
+                    
                 anomaly_points = tracks_df[
                     (tracks_df['track_id'] == track_id) & 
                     (tracks_df['frame'].isin(frames))
@@ -211,7 +217,7 @@ class AnomalyVisualizer:
                         'color': self.color_map['directional']
                     })
         
-        # Confinement violations
+        # Confinement violations (corrected key name)
         if 'confinement_violations' in anomaly_results:
             for track_id, frames in anomaly_results['confinement_violations'].items():
                 for frame in frames:
@@ -331,7 +337,7 @@ class AnomalyVisualizer:
         with col2:
             st.metric("Anomalous Tracks", anomalous_tracks)
         with col3:
-            st.metric("Anomaly Rate", f"{(anomalous_tracks/total_tracks*100):.1f}%")
+            st.metric("Anomaly Rate", f"{(anomalous_tracks/total_tracks*100):.1f}%" if total_tracks > 0 else "0%")
         with col4:
             st.metric("ML Confidence", f"{len(anomaly_results.get('ml_anomaly_scores', {}))}")
         
@@ -425,17 +431,22 @@ class AnomalyVisualizer:
         st.dataframe(details_df, use_container_width=True)
         
         # Allow user to select a specific track for detailed view
-        selected_track = st.selectbox("Select track for detailed view:", 
-                                    options=list(anomaly_types.keys()),
-                                    format_func=lambda x: f"Track {x}")
-        
-        if selected_track:
-            self._show_track_details(tracks_df, anomaly_results, selected_track)
+        if anomaly_types:
+            selected_track = st.selectbox("Select track for detailed view:", 
+                                        options=list(anomaly_types.keys()),
+                                        format_func=lambda x: f"Track {x}")
+            
+            if selected_track:
+                self._show_track_details(tracks_df, anomaly_results, selected_track)
     
     def _show_track_details(self, tracks_df: pd.DataFrame, anomaly_results: Dict[str, Any], track_id: int):
         """Show detailed information for a specific track."""
         
         track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        
+        if track_data.empty:
+            st.warning(f"No data found for track {track_id}")
+            return
         
         col1, col2 = st.columns(2)
         
@@ -452,16 +463,17 @@ class AnomalyVisualizer:
             
             # Mark anomalous frames
             for anomaly_type, frames_dict in anomaly_results.items():
-                if track_id in frames_dict and isinstance(frames_dict[track_id], list):
-                    anomaly_frames = frames_dict[track_id]
-                    anomaly_points = track_data[track_data['frame'].isin(anomaly_frames)]
-                    if not anomaly_points.empty:
-                        fig.add_trace(go.Scatter(
-                            x=anomaly_points['x'], y=anomaly_points['y'],
-                            mode='markers',
-                            name=f'{anomaly_type.replace("_", " ").title()}',
-                            marker=dict(size=10, symbol='x')
-                        ))
+                if isinstance(frames_dict, dict) and track_id in frames_dict:
+                    frames_list = frames_dict[track_id]
+                    if isinstance(frames_list, list) and frames_list:
+                        anomaly_points = track_data[track_data['frame'].isin(frames_list)]
+                        if not anomaly_points.empty:
+                            fig.add_trace(go.Scatter(
+                                x=anomaly_points['x'], y=anomaly_points['y'],
+                                mode='markers',
+                                name=f'{anomaly_type.replace("_", " ").title()}',
+                                marker=dict(size=10, symbol='x')
+                            ))
             
             fig.update_layout(title=f'Track {track_id} Trajectory', height=400)
             st.plotly_chart(fig, use_container_width=True)
@@ -487,6 +499,8 @@ class AnomalyVisualizer:
                     height=400
                 )
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Track too short for velocity analysis")
     
     def _categorize_tracks(self, anomaly_results: Dict[str, Any]) -> Dict[int, List[str]]:
         """Categorize tracks by anomaly types."""

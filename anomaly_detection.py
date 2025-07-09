@@ -93,11 +93,11 @@ class AnomalyDetector:
             dt[dt == 0] = 1  # Avoid division by zero
             
             velocities = np.sqrt(dx**2 + dy**2) / dt
-            accelerations = np.diff(velocities)
+            accelerations = np.diff(velocities) if len(velocities) > 1 else np.array([0])
             
             # Directional features
             angles = np.arctan2(dy, dx)
-            angle_changes = np.diff(angles)
+            angle_changes = np.diff(angles) if len(angles) > 1 else np.array([0])
             # Handle angle wrapping
             angle_changes = np.where(angle_changes > np.pi, angle_changes - 2*np.pi, angle_changes)
             angle_changes = np.where(angle_changes < -np.pi, angle_changes + 2*np.pi, angle_changes)
@@ -117,7 +117,19 @@ class AnomalyDetector:
             
             msd_slope = 0
             if len(msd_values) > 1:
-                msd_slope = np.polyfit(range(len(msd_values)), msd_values, 1)[0]
+                try:
+                    msd_slope = np.polyfit(range(len(msd_values)), msd_values, 1)[0]
+                except:
+                    msd_slope = 0
+            
+            # Calculate displacement ratio safely
+            total_displacement = np.sum(np.sqrt(dx**2 + dy**2))
+            net_displacement = np.sqrt((x[-1] - x[0])**2 + (y[-1] - y[0])**2)
+            displacement_ratio = net_displacement / total_displacement if total_displacement > 0 else 0
+            
+            # Calculate confinement ratio safely
+            mean_velocity = np.mean(velocities) if len(velocities) > 0 else 0
+            confinement_ratio = np.sqrt(bounding_area) / mean_velocity if mean_velocity > 0 else 0
             
             # Compile features
             features = {
@@ -134,9 +146,9 @@ class AnomalyDetector:
                 'x_range': x_range,
                 'y_range': y_range,
                 'bounding_area': bounding_area,
-                'displacement_ratio': np.sqrt((x[-1] - x[0])**2 + (y[-1] - y[0])**2) / np.sum(np.sqrt(dx**2 + dy**2)) if len(dx) > 0 else 0,
+                'displacement_ratio': displacement_ratio,
                 'msd_slope': msd_slope,
-                'confinement_ratio': np.sqrt(bounding_area) / np.mean(velocities) if np.mean(velocities) > 0 else 0
+                'confinement_ratio': confinement_ratio
             }
             
             features_list.append(features)
@@ -181,13 +193,17 @@ class AnomalyDetector:
             
             # Detect outliers using z-score
             if len(velocities) > 2:
-                z_scores = np.abs(stats.zscore(velocities))
-                anomalous_indices = np.where(z_scores > z_threshold)[0]
-                
-                if len(anomalous_indices) > 0:
-                    # Map back to frame numbers
-                    anomalous_frames = frames[anomalous_indices + 1].tolist()  # +1 because velocities are calculated between frames
-                    velocity_anomalies[track_id] = anomalous_frames
+                try:
+                    z_scores = np.abs(stats.zscore(velocities))
+                    anomalous_indices = np.where(z_scores > z_threshold)[0]
+                    
+                    if len(anomalous_indices) > 0:
+                        # Map back to frame numbers
+                        anomalous_frames = frames[anomalous_indices + 1].tolist()  # +1 because velocities are calculated between frames
+                        velocity_anomalies[track_id] = anomalous_frames
+                except:
+                    # Handle case where z-score calculation fails
+                    continue
         
         return velocity_anomalies
     
@@ -275,7 +291,10 @@ class AnomalyDetector:
             angles = np.arctan2(dy, dx)
             
             # Calculate angle changes
-            angle_changes = np.diff(angles)
+            angle_changes = np.diff(angles) if len(angles) > 1 else np.array([])
+            if len(angle_changes) == 0:
+                continue
+                
             # Handle angle wrapping
             angle_changes = np.where(angle_changes > np.pi, angle_changes - 2*np.pi, angle_changes)
             angle_changes = np.where(angle_changes < -np.pi, angle_changes + 2*np.pi, angle_changes)
@@ -305,38 +324,43 @@ class AnomalyDetector:
         Dict[int, float]
             Dictionary mapping track_id to anomaly score (negative = anomalous)
         """
-        # Extract features
-        features_df = self.extract_features(tracks_df)
-        
-        if len(features_df) < 2:
+        try:
+            # Extract features
+            features_df = self.extract_features(tracks_df)
+            
+            if len(features_df) < 2:
+                return {}
+            
+            # Prepare feature matrix
+            feature_cols = [col for col in features_df.columns if col != 'track_id']
+            X = features_df[feature_cols].values
+            
+            # Handle NaN values
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Scale features
+            X_scaled = self.scaler.fit_transform(X)
+            
+            # Fit Isolation Forest
+            self.isolation_forest = IsolationForest(
+                contamination=self.contamination,
+                random_state=self.random_state,
+                n_estimators=100
+            )
+            
+            anomaly_labels = self.isolation_forest.fit_predict(X_scaled)
+            anomaly_scores = self.isolation_forest.score_samples(X_scaled)
+            
+            # Create results dictionary
+            results = {}
+            for i, track_id in enumerate(features_df['track_id']):
+                results[track_id] = anomaly_scores[i]
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error in ML anomaly detection: {e}")
             return {}
-        
-        # Prepare feature matrix
-        feature_cols = [col for col in features_df.columns if col != 'track_id']
-        X = features_df[feature_cols].values
-        
-        # Handle NaN values
-        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X)
-        
-        # Fit Isolation Forest
-        self.isolation_forest = IsolationForest(
-            contamination=self.contamination,
-            random_state=self.random_state,
-            n_estimators=100
-        )
-        
-        anomaly_labels = self.isolation_forest.fit_predict(X_scaled)
-        anomaly_scores = self.isolation_forest.score_samples(X_scaled)
-        
-        # Create results dictionary
-        results = {}
-        for i, track_id in enumerate(features_df['track_id']):
-            results[track_id] = anomaly_scores[i]
-        
-        return results
     
     def detect_spatial_clustering_anomalies(self, tracks_df: pd.DataFrame, eps: float = 5.0) -> Dict[int, str]:
         """
@@ -354,33 +378,38 @@ class AnomalyDetector:
         Dict[int, str]
             Dictionary mapping track_id to cluster label ('outlier' for anomalies)
         """
-        # Calculate track centroids
-        track_centers = []
-        track_ids = []
-        
-        for track_id in tracks_df['track_id'].unique():
-            track_data = tracks_df[tracks_df['track_id'] == track_id]
-            center_x = track_data['x'].mean()
-            center_y = track_data['y'].mean()
-            track_centers.append([center_x, center_y])
-            track_ids.append(track_id)
-        
-        if len(track_centers) < 2:
+        try:
+            # Calculate track centroids
+            track_centers = []
+            track_ids = []
+            
+            for track_id in tracks_df['track_id'].unique():
+                track_data = tracks_df[tracks_df['track_id'] == track_id]
+                center_x = track_data['x'].mean()
+                center_y = track_data['y'].mean()
+                track_centers.append([center_x, center_y])
+                track_ids.append(track_id)
+            
+            if len(track_centers) < 2:
+                return {}
+            
+            # Perform DBSCAN clustering
+            clustering = DBSCAN(eps=eps, min_samples=2)
+            cluster_labels = clustering.fit_predict(track_centers)
+            
+            # Identify outliers (label = -1)
+            results = {}
+            for i, track_id in enumerate(track_ids):
+                if cluster_labels[i] == -1:
+                    results[track_id] = 'outlier'
+                else:
+                    results[track_id] = f'cluster_{cluster_labels[i]}'
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error in spatial clustering: {e}")
             return {}
-        
-        # Perform DBSCAN clustering
-        clustering = DBSCAN(eps=eps, min_samples=2)
-        cluster_labels = clustering.fit_predict(track_centers)
-        
-        # Identify outliers (label = -1)
-        results = {}
-        for i, track_id in enumerate(track_ids):
-            if cluster_labels[i] == -1:
-                results[track_id] = 'outlier'
-            else:
-                results[track_id] = f'cluster_{cluster_labels[i]}'
-        
-        return results
     
     def classify_anomaly_type(self, track_id: int, velocity_anomalies: Dict, confinement_anomalies: Dict, 
                              directional_anomalies: Dict, ml_scores: Dict, spatial_anomalies: Dict) -> Tuple[str, str, str]:
@@ -493,10 +522,10 @@ class AnomalyDetector:
         anomaly_type, emoji, description = self.classify_anomaly_type(
             track_id,
             anomaly_results.get('velocity_anomalies', {}),
-            anomaly_results.get('confinement_anomalies', {}),
+            anomaly_results.get('confinement_violations', {}),  # Fixed key name
             anomaly_results.get('directional_anomalies', {}),
             anomaly_results.get('ml_anomaly_scores', {}),
-            anomaly_results.get('spatial_anomalies', {})
+            anomaly_results.get('spatial_clustering', {})  # Fixed key name
         )
         
         # Build tooltip data
@@ -519,7 +548,7 @@ class AnomalyDetector:
                 'description': f"High velocity detected at {len(velocity_frames)} time points"
             })
         
-        confinement_frames = anomaly_results.get('confinement_anomalies', {}).get(track_id, [])
+        confinement_frames = anomaly_results.get('confinement_violations', {}).get(track_id, [])
         if confinement_frames:
             tooltip_data['anomaly_details'].append({
                 'type': 'Confinement Break',
@@ -548,7 +577,7 @@ class AnomalyDetector:
                 'description': f"ML anomaly score: {ml_score:.3f} (more negative = more anomalous)"
             })
         
-        spatial_label = anomaly_results.get('spatial_anomalies', {}).get(track_id, 'normal')
+        spatial_label = anomaly_results.get('spatial_clustering', {}).get(track_id, 'normal')
         if spatial_label == 'outlier':
             tooltip_data['anomaly_details'].append({
                 'type': 'Spatial Outlier',
@@ -585,10 +614,10 @@ class AnomalyDetector:
             anomaly_type, emoji, description = self.classify_anomaly_type(
                 track_id,
                 anomaly_results.get('velocity_anomalies', {}),
-                anomaly_results.get('confinement_anomalies', {}),
+                anomaly_results.get('confinement_violations', {}),
                 anomaly_results.get('directional_anomalies', {}),
                 anomaly_results.get('ml_anomaly_scores', {}),
-                anomaly_results.get('spatial_anomalies', {})
+                anomaly_results.get('spatial_clustering', {})
             )
             
             # Count total anomalies
@@ -601,8 +630,8 @@ class AnomalyDetector:
                 if count > 0:
                     anomaly_types_present.append(f"⚡×{count}")
             
-            if track_id in anomaly_results.get('confinement_anomalies', {}):
-                count = len(anomaly_results['confinement_anomalies'][track_id])
+            if track_id in anomaly_results.get('confinement_violations', {}):
+                count = len(anomaly_results['confinement_violations'][track_id])
                 total_anomalies += count
                 if count > 0:
                     anomaly_types_present.append(f"💥×{count}")
@@ -618,8 +647,8 @@ class AnomalyDetector:
                 if score < -0.1:
                     anomaly_types_present.append(f"🤖({score:.2f})")
             
-            if track_id in anomaly_results.get('spatial_anomalies', {}):
-                if anomaly_results['spatial_anomalies'][track_id] == 'outlier':
+            if track_id in anomaly_results.get('spatial_clustering', {}):
+                if anomaly_results['spatial_clustering'][track_id] == 'outlier':
                     anomaly_types_present.append("🎯")
             
             summary_data.append({
@@ -688,19 +717,19 @@ class AnomalyDetector:
             anomaly_types = []
             
             # Check each anomaly type
-            if track_id in results['velocity_anomalies']:
+            if track_id in results.get('velocity_anomalies', {}):
                 anomaly_types.append('velocity')
             
-            if track_id in results['confinement_violations']:
+            if track_id in results.get('confinement_violations', {}):
                 anomaly_types.append('confinement')
             
-            if track_id in results['directional_anomalies']:
+            if track_id in results.get('directional_anomalies', {}):
                 anomaly_types.append('directional')
             
-            if track_id in results['ml_anomaly_scores'] and results['ml_anomaly_scores'][track_id] < 0:
+            if track_id in results.get('ml_anomaly_scores', {}) and results['ml_anomaly_scores'][track_id] < 0:
                 anomaly_types.append('ml_detected')
             
-            if track_id in results['spatial_clustering'] and results['spatial_clustering'][track_id] == 'outlier':
+            if track_id in results.get('spatial_clustering', {}) and results['spatial_clustering'][track_id] == 'outlier':
                 anomaly_types.append('spatial_outlier')
             
             if anomaly_types:
@@ -736,7 +765,8 @@ class AnomalyDetector:
         if not self.anomaly_types:
             return {}
         
-        total_tracks = len(self.anomaly_types)
+        total_anomalous_tracks = len(self.anomaly_types)
+        total_tracks = len(self.anomaly_scores) if self.anomaly_scores else total_anomalous_tracks
         anomaly_counts = {}
         
         # Count anomalies by type
@@ -745,14 +775,26 @@ class AnomalyDetector:
                 anomaly_counts[anomaly_type] = anomaly_counts.get(anomaly_type, 0) + 1
         
         return {
-            'total_anomalous_tracks': total_tracks,
+            'total_anomalous_tracks': total_anomalous_tracks,
+            'total_tracks': total_tracks,
             'anomaly_type_counts': anomaly_counts,
-            'anomaly_percentage': (total_tracks / (total_tracks + len([t for t in self.anomaly_scores if t not in self.anomaly_types]))) * 100 if self.anomaly_scores else 0
+            'anomaly_percentage': (total_anomalous_tracks / total_tracks) * 100 if total_tracks > 0 else 0
         }
 
-def detect_anomalies_iforest(tracks_df):
+
+def detect_anomalies_iforest(tracks_df: pd.DataFrame) -> pd.DataFrame:
     """
     Detect anomalies in tracks using Isolation Forest.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with columns: track_id, frame, x, y
+        
+    Returns
+    -------
+    pd.DataFrame
+        Anomalous tracks data
     """
     print("Detecting anomalies with Isolation Forest...")
     
@@ -760,29 +802,28 @@ def detect_anomalies_iforest(tracks_df):
         return pd.DataFrame()
         
     try:
-        from sklearn.ensemble import IsolationForest
-        
         # Feature extraction (e.g., displacement between frames)
-        tracks_df['dx'] = tracks_df.groupby('track_id')['x'].diff().fillna(0)
-        tracks_df['dy'] = tracks_df.groupby('track_id')['y'].diff().fillna(0)
-        tracks_df['displacement'] = np.sqrt(tracks_df['dx']**2 + tracks_df['dy']**2)
+        tracks_df_copy = tracks_df.copy()
+        tracks_df_copy['dx'] = tracks_df_copy.groupby('track_id')['x'].diff().fillna(0)
+        tracks_df_copy['dy'] = tracks_df_copy.groupby('track_id')['y'].diff().fillna(0)
+        tracks_df_copy['displacement'] = np.sqrt(tracks_df_copy['dx']**2 + tracks_df_copy['dy']**2)
         
         # Calculate speed (displacement per frame)
-        tracks_df['speed'] = tracks_df['displacement']
+        tracks_df_copy['speed'] = tracks_df_copy['displacement']
         
         # Calculate directional change
-        tracks_df['direction'] = np.arctan2(tracks_df['dy'], tracks_df['dx'])
-        tracks_df['direction_change'] = tracks_df.groupby('track_id')['direction'].diff().fillna(0)
+        tracks_df_copy['direction'] = np.arctan2(tracks_df_copy['dy'], tracks_df_copy['dx'])
+        tracks_df_copy['direction_change'] = tracks_df_copy.groupby('track_id')['direction'].diff().fillna(0)
         
         # Select features for anomaly detection
-        features = tracks_df[['displacement', 'speed', 'direction_change']].fillna(0)
+        features = tracks_df_copy[['displacement', 'speed', 'direction_change']].fillna(0)
         
         # Apply Isolation Forest
         model = IsolationForest(contamination='auto', random_state=42)
-        tracks_df['anomaly'] = model.fit_predict(features)
+        tracks_df_copy['anomaly'] = model.fit_predict(features)
         
         # Anomalies are marked as -1 by the model
-        anomalous_tracks = tracks_df[tracks_df['anomaly'] == -1].copy()
+        anomalous_tracks = tracks_df_copy[tracks_df_copy['anomaly'] == -1].copy()
         
         return anomalous_tracks
         
