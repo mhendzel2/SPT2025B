@@ -1240,4 +1240,234 @@ def _summarize_motion_analysis(results):
                 f"{param}_std": np.std(values) for param, values in params.items() if len(values) > 1
             })
     
+    # Add detailed track-by-track classifications for visualization
+    summary['track_classifications'] = {track_id: model for track_id, model in results['classifications'].items()}
+    
+    # Prepare parameter distributions for visualization
+    parameter_distributions = {}
+    for model in results['models']:
+        model_params = {}
+        for param_name in ['D', 'v', 'L', 'alpha', 'K_alpha']:  # Common parameters across models
+            values = []
+            for track_id, model_data in results['model_parameters'].items():
+                if model in model_data and param_name in model_data[model]:
+                    values.append({
+                        'track_id': track_id,
+                        'value': model_data[model][param_name]
+                    })
+            if values:
+                model_params[param_name] = values
+        if model_params:
+            parameter_distributions[model] = model_params
+    
+    summary['parameter_distributions'] = parameter_distributions
+    
     return summary
+
+def prepare_motion_visualization_data(motion_analysis_results):
+    """
+    Prepare motion analysis results for visualization.
+    
+    Parameters
+    ----------
+    motion_analysis_results : dict
+        Results from analyze_motion_models function
+    
+    Returns
+    -------
+    dict
+        Data formatted for visualization
+    """
+    if not motion_analysis_results.get('success', False):
+        return {'success': False, 'error': motion_analysis_results.get('error', 'Unknown error')}
+    
+    viz_data = {
+        'success': True,
+        'motion_types': {
+            'counts': motion_analysis_results.get('summary', {}).get('model_counts', {}),
+            'fractions': motion_analysis_results.get('summary', {}).get('fractions', {})
+        },
+        'track_classifications': motion_analysis_results.get('summary', {}).get('track_classifications', {}),
+        'parameter_distributions': motion_analysis_results.get('summary', {}).get('parameter_distributions', {})
+    }
+    
+    # Generate color mapping for tracks
+    track_colors = {}
+    color_map = {
+        'brownian': '#1f77b4',  # blue
+        'directed': '#ff7f0e',  # orange
+        'confined': '#2ca02c',  # green
+        'anomalous': '#d62728'  # red
+    }
+    
+    for track_id, model in viz_data['track_classifications'].items():
+        track_colors[track_id] = color_map.get(model, '#7f7f7f')  # default gray
+    
+    viz_data['track_colors'] = track_colors
+    
+    # Calculate mean parameter values for each motion type
+    motion_parameters = {}
+    if 'summary' in motion_analysis_results and 'model_parameters' in motion_analysis_results['summary']:
+        for model, params in motion_analysis_results['summary']['model_parameters'].items():
+            motion_parameters[model] = {
+                param.split('_')[0]: value 
+                for param, value in params.items() 
+                if param.endswith('_mean')
+            }
+    
+    viz_data['motion_parameters'] = motion_parameters
+    
+    # Add speed distributions by motion type if available
+    if motion_analysis_results.get('speed_distributions', {}):
+        viz_data['speed_distributions'] = motion_analysis_results['speed_distributions']
+    
+    return viz_data
+
+def calculate_motion_speed_distributions(tracks_df, motion_analysis_results, pixel_size=1.0, frame_interval=1.0):
+    """
+    Calculate speed distributions for different motion types.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data
+    motion_analysis_results : dict
+        Results from analyze_motion_models function
+    pixel_size : float
+        Pixel size in μm
+    frame_interval : float
+        Time between frames in seconds
+    
+    Returns
+    -------
+    dict
+        Speed distributions by motion type
+    """
+    if not motion_analysis_results.get('success', False) or tracks_df.empty:
+        return {'success': False}
+    
+    # Get track classifications
+    classifications = motion_analysis_results.get('classifications', {})
+    if not classifications:
+        return {'success': False, 'error': 'No track classifications found'}
+    
+    # Create empty result structure
+    speed_distributions = {model: [] for model in motion_analysis_results.get('models', [])}
+    
+    # Convert coordinates to physical units if needed
+    if 'x_um' not in tracks_df.columns:
+        tracks_df = tracks_df.copy()
+        tracks_df['x_um'] = tracks_df['x'] * pixel_size
+        tracks_df['y_um'] = tracks_df['y'] * pixel_size
+    
+    # Calculate instantaneous speeds for each track
+    for track_id, model in classifications.items():
+        if model not in speed_distributions:
+            continue
+        
+        # Get track data
+        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        if len(track_data) < 2:
+            continue
+        
+        # Calculate displacements
+        dx = np.diff(track_data['x_um'].values)
+        dy = np.diff(track_data['y_um'].values)
+        dt = np.diff(track_data['frame'].values) * frame_interval
+        
+        # Calculate speeds (μm/s)
+        speeds = np.sqrt(dx**2 + dy**2) / dt
+        
+        # Filter out unrealistic speeds (e.g., from tracking errors)
+        speeds = speeds[speeds < 100]  # 100 μm/s is a reasonable upper limit
+        
+        # Add to distribution
+        speed_distributions[model].extend(speeds.tolist())
+    
+    # Add summary statistics
+    for model, speeds in speed_distributions.items():
+        if speeds:
+            speed_distributions[f"{model}_mean"] = np.mean(speeds)
+            speed_distributions[f"{model}_median"] = np.median(speeds)
+            speed_distributions[f"{model}_std"] = np.std(speeds)
+    
+    return {'success': True, 'speed_distributions': speed_distributions}
+
+def export_motion_analysis_results(motion_analysis_results, output_format='csv', output_path=None):
+    """
+    Export motion analysis results to file.
+    
+    Parameters
+    ----------
+    motion_analysis_results : dict
+        Results from analyze_motion_models function
+    output_format : str
+        Format to export ('csv' or 'json')
+    output_path : str
+        Path to save the output file
+    
+    Returns
+    -------
+    bool
+        True if export was successful
+    """
+    if not motion_analysis_results.get('success', False):
+        return False
+    
+    if output_path is None:
+        import tempfile
+        output_dir = tempfile.gettempdir()
+        output_path = os.path.join(output_dir, f"motion_analysis_results.{output_format}")
+    
+    try:
+        if output_format.lower() == 'csv':
+            # Extract track classifications
+            classifications_df = pd.DataFrame([
+                {'track_id': track_id, 'motion_type': model}
+                for track_id, model in motion_analysis_results.get('classifications', {}).items()
+            ])
+            
+            # Add parameters if available
+            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
+                for model, params in model_params.items():
+                    for param, value in params.items():
+                        # Only add parameters for the best model
+                        if model == motion_analysis_results.get('best_model', {}).get(track_id):
+                            column_name = f"{param}"
+                            classifications_df.loc[
+                                classifications_df['track_id'] == track_id, 
+                                column_name
+                            ] = value
+            
+            # Save to CSV
+            classifications_df.to_csv(output_path, index=False)
+            
+        elif output_format.lower() == 'json':
+            import json
+            
+            # Prepare JSON serializable data
+            json_data = {
+                'summary': motion_analysis_results.get('summary', {}),
+                'classifications': motion_analysis_results.get('classifications', {}),
+                'model_parameters': {}
+            }
+            
+            # Convert numpy types to native Python types
+            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
+                json_data['model_parameters'][str(track_id)] = {}
+                for model, params in model_params.items():
+                    json_data['model_parameters'][str(track_id)][model] = {
+                        param: float(value) for param, value in params.items()
+                    }
+            
+            with open(output_path, 'w') as f:
+                json.dump(json_data, f, indent=2)
+                
+        else:
+            return False
+            
+        return True
+        
+    except Exception as e:
+        print(f"Error exporting motion analysis results: {str(e)}")
+        return False
