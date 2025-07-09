@@ -7849,45 +7849,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     st.error(f"Error loading additional datasets: {str(e)}")
                                     analysis_results = {'success': False, 'error': f'Dataset loading error: {str(e)}'}
                             else:
-                                # Single frequency analysis
-                                msd_data = analyzer.calculate_msd_from_tracks(
+                                # Single dataset analysis - use the proper analysis method
+                                analysis_results = analyzer.analyze_microrheology(
                                     st.session_state.tracks_data,
                                     pixel_size_um=pixel_size_um,
                                     frame_interval_s=frame_interval_s,
-                                    max_lag_frames=max_lag_frames
+                                    max_lag=max_lag_frames
                                 )
-                                
-                                if len(msd_data) > 0:
-                                    # Calculate effective viscosity
-                                    viscosity = analyzer.calculate_effective_viscosity(msd_data)
-                                    
-                                    # Calculate complex modulus at a characteristic frequency
-                                    omega = 2 * np.pi / (frame_interval_s * 10)  # Characteristic frequency
-                                    g_prime, g_double_prime = analyzer.calculate_complex_modulus_gser(msd_data, omega)
-                                    
-                                    analysis_results = {
-                                        'success': True,
-                                        'msd_data': msd_data,
-                                        'viscosity': {
-                                            'effective_pa_s': viscosity
-                                        },
-                                        'moduli': {
-                                            'g_prime_pa': g_prime,
-                                            'g_double_prime_pa': g_double_prime,
-                                            'frequency_hz': omega / (2 * np.pi)
-                                        },
-                                        'parameters': {
-                                            'particle_radius_nm': particle_radius_nm,
-                                            'temperature_K': temperature_K,
-                                            'pixel_size_um': pixel_size_um,
-                                            'frame_interval_s': frame_interval_s
-                                        }
-                                    }
-                                else:
-                                    analysis_results = {
-                                        'success': False,
-                                        'error': 'Failed to calculate MSD data'
-                                    }
                             
                             # Store results
                             st.session_state.analysis_results["microrheology"] = analysis_results

@@ -407,10 +407,44 @@ class AnalysisManager:
             if not MICRORHEOLOGY_AVAILABLE or MicrorheologyAnalyzer is None:
                 return {'success': False, 'error': 'Microrheology module not available'}
             
-            analyzer = MicrorheologyAnalyzer()
-            result = analyzer.analyze_viscoelasticity(tracks_df)
+            # Get parameters
+            if parameters is None:
+                parameters = {}
+            
+            # Get required parameters
+            particle_radius_nm = parameters.get('particle_radius_nm', 50.0)  # Default 50nm
+            temperature_K = parameters.get('temperature_K', 300.0)  # Default room temperature
+            pixel_size_um = parameters.get('pixel_size_um', self.state.get_pixel_size())
+            frame_interval_s = parameters.get('frame_interval_s', self.state.get_frame_interval())
+            max_lag = parameters.get('max_lag', 20)
+            
+            # Convert particle radius to meters
+            particle_radius_m = particle_radius_nm * 1e-9
+            
+            # Initialize analyzer with proper parameters
+            analyzer = MicrorheologyAnalyzer(
+                particle_radius_m=particle_radius_m,
+                temperature_K=temperature_K
+            )
+            
+            # Run analysis
+            result = analyzer.analyze_microrheology(
+                tracks_df,
+                pixel_size_um=pixel_size_um,
+                frame_interval_s=frame_interval_s,
+                max_lag=max_lag
+            )
+            
+            # Enhance result with metadata
             result['analysis_type'] = 'microrheology'
             result['timestamp'] = datetime.now().isoformat()
+            result['parameters'] = {
+                'particle_radius_nm': particle_radius_nm,
+                'temperature_K': temperature_K,
+                'pixel_size_um': pixel_size_um,
+                'frame_interval_s': frame_interval_s,
+                'max_lag': max_lag
+            }
             
             return result
             
