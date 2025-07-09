@@ -53,7 +53,7 @@ def segment_image_channel_watershed(image_channel: np.ndarray,
     distance = ndi.distance_transform_edt(binary_mask)
     
     # Find local maxima for markers (seeds for watershed)
-    coords = peak_local_max(distance, min_distance=min_distance_peaks, labels=binary_mask)
+    coords = peak_local_max(distance, min_distance=min_distance_peaks, indices=binary_mask)
     mask_markers = np.zeros(distance.shape, dtype=bool)
     mask_markers[tuple(coords.T)] = True
     markers, _ = ndi.label(mask_markers)
@@ -568,7 +568,12 @@ def enhanced_watershed_segmentation(image_channel: np.ndarray,
         markers = measure.label(local_minima)
     else:
         # For distance transform, find local maxima
-        coords = peak_local_max(distance, min_distance=min_distance_peaks, labels=binary_mask)
+        coords = peak_local_max(
+            distance, 
+            min_distance=min_distance_peaks, 
+            indices=binary_mask,
+            threshold_abs=0.1 * distance.max()
+        )
         mask_markers = np.zeros(watershed_image.shape, dtype=bool)
         if len(coords) > 0:
             mask_markers[tuple(coords.T)] = True

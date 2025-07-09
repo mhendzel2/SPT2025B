@@ -23,13 +23,9 @@ class PolymerPhysicsModel:
         """
         Phenomenological Rouse-like MSD model for nucleosome diffusion in chromatin.
         
-        MSD(t) = D_macro * t + Gamma * t^alpha
-
-        The factor of $2d$ commonly appearing in Brownian motion MSD
-        expressions is absorbed into ``D_macro`` here.  This keeps the
-        implementation consistent with how diffusion coefficients are
-        estimated elsewhere in the code base.
+        MSD(t) = 4 * D_macro * t + Gamma * t^alpha
         
+        The factor of 4 (for 2D) is included for proper dimensionality.
         For nucleosome diffusion:
         - D_macro: macroscopic diffusion coefficient (long-time behavior)
         - Gamma: amplitude of subdiffusive component (chromatin constraints)
@@ -51,8 +47,8 @@ class PolymerPhysicsModel:
         np.ndarray
             Theoretical MSD values
         """
-        # Ensure positive parameters during fitting
-        return np.abs(D_macro) * t + np.abs(Gamma) * (t ** np.abs(alpha))
+        # Ensure positive parameters during fitting and include proper 2D factor
+        return 4 * np.abs(D_macro) * t + np.abs(Gamma) * (t ** np.abs(alpha))
     
     @staticmethod
     def rouse_msd_model_fixed_alpha(t: np.ndarray, D_macro: float, Gamma: float) -> np.ndarray:
@@ -65,6 +61,8 @@ class PolymerPhysicsModel:
         Confined diffusion model for nucleosomes in chromatin loops.
         
         MSD(t) = L_conf^2 * (1 - exp(-12*D_free*t/L_conf^2))
+        
+        This is the correct 2D formula for confined diffusion.
         
         Parameters
         ----------
@@ -93,10 +91,10 @@ class PolymerPhysicsModel:
         if tau == 0:
             return np.zeros_like(t)
         elif tau == np.inf:
-            return D_free * t
+            return 4 * D_free * t  # Free diffusion with 2D factor
         else:
             return L_conf**2 * (1 - np.exp(-t / tau))
-    
+
     @staticmethod
     def anomalous_diffusion_model(t: np.ndarray, K_alpha: float, alpha: float) -> np.ndarray:
         """
@@ -174,8 +172,8 @@ class PolymerPhysicsModel:
         if len(time_lags) != len(msd_values):
             return {'success': False, 'error': 'time_lags and msd_values must have the same length.'}
         
-        # Remove any zero or negative time lags
-        valid_mask = time_lags > 0
+        # Remove any zero or negative time lags and corresponding MSD values
+        valid_mask = (time_lags > 0) & (msd_values > 0)
         time_lags = time_lags[valid_mask]
         msd_values = msd_values[valid_mask]
         
@@ -190,17 +188,17 @@ class PolymerPhysicsModel:
 
         if initial_guess is None:
             # Intelligent initial guesses for nucleosome diffusion
-            # D_macro from long-time slope
+            # D_macro from long-time slope (divide by 4 to account for 2D factor)
             if len(time_lags) > 2:
-                # Use last quarter of data for slope estimation
                 n_points = max(2, len(time_lags) // 4)
                 slope_times = time_lags[-n_points:]
                 slope_msds = msd_values[-n_points:]
                 
                 if len(slope_times) > 1 and slope_times[-1] > slope_times[0]:
-                    D_macro_guess = (slope_msds[-1] - slope_msds[0]) / (slope_times[-1] - slope_times[0])
+                    slope = (slope_msds[-1] - slope_msds[0]) / (slope_times[-1] - slope_times[0])
+                    D_macro_guess = slope / 4  # Account for the 4D factor in the model
                 else:
-                    D_macro_guess = msd_values[-1] / time_lags[-1] if time_lags[-1] > 0 else 0.01
+                    D_macro_guess = msd_values[-1] / (4 * time_lags[-1]) if time_lags[-1] > 0 else 0.01
             else:
                 D_macro_guess = 0.01
             
@@ -211,7 +209,7 @@ class PolymerPhysicsModel:
             early_idx = max(1, early_idx)
             
             if time_lags[early_idx] > 0:
-                msd_residual = msd_values[early_idx] - D_macro_guess * time_lags[early_idx]
+                msd_residual = msd_values[early_idx] - 4 * D_macro_guess * time_lags[early_idx]
                 Gamma_guess = msd_residual / (time_lags[early_idx] ** 0.5) if msd_residual > 0 else 0.01
             else:
                 Gamma_guess = 0.01
@@ -777,5 +775,7 @@ class ActiveTransportAnalyzer:
             'total_analyzed': total_segments,
             'mean_velocity': np.mean(velocities),
             'mean_straightness': np.mean(straightness_values)
+        }
+        return self.results['transport_modes']
         }
         return self.results['transport_modes']

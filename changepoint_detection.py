@@ -46,12 +46,15 @@ class ChangePointDetector:
             Changepoint detection results
         """
         # Validate input DataFrame
-        if tracks_df.empty or 'track_id' not in tracks_df.columns:
+        required_columns = ['track_id', 'x', 'y']
+        missing_columns = [col for col in required_columns if col not in tracks_df.columns]
+        
+        if tracks_df.empty or missing_columns:
             return {
                 'success': False,
                 'changepoints': pd.DataFrame(),
                 'motion_segments': pd.DataFrame(),
-                'regime_classification': {'success': False, 'error': 'Invalid input data'},
+                'regime_classification': {'success': False, 'error': f'Invalid input data - missing columns: {missing_columns}'},
                 'analysis_parameters': {
                     'window_size': window_size,
                     'min_segment_length': min_segment_length,
@@ -65,7 +68,7 @@ class ChangePointDetector:
         for track_id in tracks_df['track_id'].unique():
             track_data = tracks_df[tracks_df['track_id'] == track_id]
             
-            # Ensure track_data is a DataFrame, not a list
+            # Ensure track_data is a DataFrame and not empty
             if not isinstance(track_data, pd.DataFrame) or track_data.empty:
                 continue
                 
@@ -78,8 +81,8 @@ class ChangePointDetector:
             
             # Extract position data with error handling
             try:
-                x = track_data['x'].values if 'x' in track_data.columns else track_data['X'].values
-                y = track_data['y'].values if 'y' in track_data.columns else track_data['Y'].values
+                x = track_data['x'].values
+                y = track_data['y'].values
                 frames = track_data['frame'].values if 'frame' in track_data.columns else np.arange(len(track_data))
             except (KeyError, AttributeError):
                 continue
@@ -88,6 +91,11 @@ class ChangePointDetector:
             dx = np.diff(x)
             dy = np.diff(y)
             displacements = np.sqrt(dx**2 + dy**2)
+            
+            # Handle case where all displacements are zero
+            if np.all(displacements == 0):
+                continue
+                
             angles = np.arctan2(dy, dx)
             
             # Calculate sliding window statistics
@@ -132,8 +140,8 @@ class ChangePointDetector:
                     start_idx, end_idx = segment['start'], segment['end']
                     
                     if end_idx - start_idx >= min_segment_length:
-                        seg_displacements = displacements[start_idx:end_idx]
-                        seg_angles = angles[start_idx:end_idx] if start_idx < len(angles) else []
+                        seg_displacements = displacements[start_idx:min(end_idx, len(displacements))]
+                        seg_angles = angles[start_idx:min(end_idx, len(angles))] if start_idx < len(angles) else []
                         
                         # Calculate segment statistics
                         segment_stats = {
@@ -142,10 +150,10 @@ class ChangePointDetector:
                             'start_frame': frames[start_idx],
                             'end_frame': frames[min(end_idx, len(frames)-1)],
                             'length': end_idx - start_idx,
-                            'mean_displacement': np.mean(seg_displacements),
-                            'std_displacement': np.std(seg_displacements),
-                            'mean_speed': np.mean(seg_displacements),
-                            'displacement_cv': np.std(seg_displacements) / np.mean(seg_displacements) if np.mean(seg_displacements) > 0 else 0
+                            'mean_displacement': np.mean(seg_displacements) if len(seg_displacements) > 0 else 0,
+                            'std_displacement': np.std(seg_displacements) if len(seg_displacements) > 0 else 0,
+                            'mean_speed': np.mean(seg_displacements) if len(seg_displacements) > 0 else 0,
+                            'displacement_cv': np.std(seg_displacements) / np.mean(seg_displacements) if len(seg_displacements) > 0 and np.mean(seg_displacements) > 0 else 0
                         }
                         
                         if len(seg_angles) > 0:
@@ -153,26 +161,31 @@ class ChangePointDetector:
                             segment_stats['directional_persistence'] = self._calculate_directional_persistence(seg_angles)
                             segment_stats['mean_angle'] = np.mean(seg_angles)
                             segment_stats['angle_std'] = np.std(seg_angles)
+                        else:
+                            segment_stats['directional_persistence'] = 0
+                            segment_stats['mean_angle'] = 0
+                            segment_stats['angle_std'] = 0
                         
                         track_segments.append(segment_stats)
                 
                 # Store changepoints
                 for cp in merged_changepoints:
-                    changepoints_data.append({
-                        'track_id': track_id,
-                        'changepoint_frame': frames[cp['position']] if cp['position'] < len(frames) else frames[-1],
-                        'changepoint_type': cp['type'],
-                        'position_in_track': cp['position']
-                    })
+                    if cp['position'] < len(frames):
+                        changepoints_data.append({
+                            'track_id': track_id,
+                            'changepoint_frame': frames[cp['position']],
+                            'changepoint_type': cp['type'],
+                            'position_in_track': cp['position']
+                        })
         
-        # Convert track_segments list to DataFrame first
+        # Convert track_segments list to DataFrame
         motion_segments_df = pd.DataFrame(track_segments) if track_segments else pd.DataFrame()
         
         # Classify motion regimes using the DataFrame
         regime_classification = self._classify_motion_regimes(motion_segments_df)
         
         return {
-            'success': True if changepoints_data else False,
+            'success': True if changepoints_data or track_segments else False,
             'changepoints': pd.DataFrame(changepoints_data) if changepoints_data else pd.DataFrame(),
             'motion_segments': motion_segments_df,
             'regime_classification': regime_classification,

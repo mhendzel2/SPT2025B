@@ -49,10 +49,10 @@ def segment_image_channel_otsu(image_channel: np.ndarray, min_object_size: int =
         raise ValueError("Image channel for segmentation must be 2D.")
 
     try:
-        thresh = filters.threshold_otsu(image_channel)
+        thresh = threshold_otsu(image_channel)
         binary_mask = image_channel > thresh
-    except ValueError:  # Otsu can fail on flat images
-        # Fallback: if Otsu fails, assume no distinct compartments
+    except ValueError:        
+        # Otsu fails on flat images
         return []
 
     # Clean up mask
@@ -65,39 +65,33 @@ def segment_image_channel_otsu(image_channel: np.ndarray, min_object_size: int =
 
     segmented_compartments = []
     for i, props in enumerate(region_properties):
-        # Get contour (exterior boundary)
-        # Note: find_contours returns N x 2 array of (row, col) i.e. (y, x)
-        # We'll store them as (x,y) for consistency with track data
-        contours = measure.find_contours(labeled_regions == props.label, 0.5)
+        # Extract contour
+        mask = (labeled_regions == props.label)
+        contours = measure.find_contours(mask.astype(float), 0.5)
         
-        # For simplicity, we take the longest contour if multiple are returned
-        main_contour_pixels = []
-        if contours:
-            longest_contour = max(contours, key=len)
-            main_contour_pixels = [[pt[1], pt[0]] for pt in longest_contour]  # Convert to (x,y)
-
-        min_row, min_col, max_row, max_col = props.bbox
-        
-        compartment = {
-            'id': f"compartment_{i}",
-            'contour_pixels': main_contour_pixels,  # List of [x,y] pixel coordinates
-            'contour_um': [[pt[0] * pixel_size, pt[1] * pixel_size] for pt in main_contour_pixels],
-            'bbox_pixels': {'x1': min_col, 'y1': min_row, 'x2': max_col, 'y2': max_row},
-            'bbox_um': {
-                'x1': min_col * pixel_size, 'y1': min_row * pixel_size,
-                'x2': max_col * pixel_size, 'y2': max_row * pixel_size
-            },
-            'centroid_pixels': {'x': props.centroid[1], 'y': props.centroid[0]},  # (x,y)
-            'centroid_um': {'x': props.centroid[1] * pixel_size, 'y': props.centroid[0] * pixel_size},
-            'area_pixels': props.area,
-            'area_um2': props.area * (pixel_size**2),
-            'mean_intensity': props.mean_intensity,
-            'perimeter_pixels': props.perimeter,
-            'perimeter_um': props.perimeter * pixel_size,
-            'solidity': props.solidity,
-            'eccentricity': props.eccentricity
-        }
-        segmented_compartments.append(compartment)
+        if len(contours) > 0:
+            contour = contours[0]  # Take the largest contour
+            contour_um = contour * pixel_size
+            
+            # Calculate properties
+            centroid_um = np.array(props.centroid) * pixel_size
+            area_um2 = props.area * (pixel_size ** 2)
+            bbox_um = np.array(props.bbox) * pixel_size
+            
+            compartment = {
+                'id': f'otsu_{i+1}',
+                'method': 'otsu',
+                'centroid_um': centroid_um,
+                'area_um2': area_um2,
+                'bbox_um': bbox_um,
+                'contour_um': contour_um.tolist(),
+                'mean_intensity': props.intensity_mean,
+                'max_intensity': props.intensity_max,
+                'eccentricity': props.eccentricity,
+                'solidity': props.solidity,
+                'perimeter_um': props.perimeter * pixel_size
+            }
+            segmented_compartments.append(compartment)
         
     return segmented_compartments
 
@@ -121,33 +115,33 @@ def segment_image_channel_simple_threshold(image_channel: np.ndarray, threshold_
 
     segmented_compartments = []
     for i, props in enumerate(region_properties):
-        contours = measure.find_contours(labeled_regions == props.label, 0.5)
-        main_contour_pixels = []
-        if contours:
-            longest_contour = max(contours, key=len)
-            main_contour_pixels = [[pt[1], pt[0]] for pt in longest_contour] 
-
-        min_row, min_col, max_row, max_col = props.bbox
-        compartment = {
-            'id': f"compartment_{i}",
-            'contour_pixels': main_contour_pixels,
-            'contour_um': [[pt[0] * pixel_size, pt[1] * pixel_size] for pt in main_contour_pixels],
-            'bbox_pixels': {'x1': min_col, 'y1': min_row, 'x2': max_col, 'y2': max_row},
-            'bbox_um': {
-                'x1': min_col * pixel_size, 'y1': min_row * pixel_size,
-                'x2': max_col * pixel_size, 'y2': max_row * pixel_size
-            },
-            'centroid_pixels': {'x': props.centroid[1], 'y': props.centroid[0]},
-            'centroid_um': {'x': props.centroid[1] * pixel_size, 'y': props.centroid[0] * pixel_size},
-            'area_pixels': props.area,
-            'area_um2': props.area * (pixel_size**2),
-            'mean_intensity': props.mean_intensity,
-            'perimeter_pixels': props.perimeter,
-            'perimeter_um': props.perimeter * pixel_size,
-            'solidity': props.solidity,
-            'eccentricity': props.eccentricity
-        }
-        segmented_compartments.append(compartment)
+        # Extract contour
+        mask = (labeled_regions == props.label)
+        contours = measure.find_contours(mask.astype(float), 0.5)
+        
+        if len(contours) > 0:
+            contour = contours[0]
+            contour_um = contour * pixel_size
+            
+            # Calculate properties
+            centroid_um = np.array(props.centroid) * pixel_size
+            area_um2 = props.area * (pixel_size ** 2)
+            bbox_um = np.array(props.bbox) * pixel_size
+            
+            compartment = {
+                'id': f'threshold_{i+1}',
+                'method': 'simple_threshold',
+                'centroid_um': centroid_um,
+                'area_um2': area_um2,
+                'bbox_um': bbox_um,
+                'contour_um': contour_um.tolist(),
+                'mean_intensity': props.intensity_mean,
+                'max_intensity': props.intensity_max,
+                'eccentricity': props.eccentricity,
+                'solidity': props.solidity,
+                'perimeter_um': props.perimeter * pixel_size
+            }
+            segmented_compartments.append(compartment)
         
     return segmented_compartments
 
@@ -180,33 +174,33 @@ def segment_image_channel_adaptive_threshold(image_channel: np.ndarray, block_si
 
     segmented_compartments = []
     for i, props in enumerate(region_properties):
-        contours = measure.find_contours(labeled_regions == props.label, 0.5)
-        main_contour_pixels = []
-        if contours:
-            longest_contour = max(contours, key=len)
-            main_contour_pixels = [[pt[1], pt[0]] for pt in longest_contour] 
-
-        min_row, min_col, max_row, max_col = props.bbox
-        compartment = {
-            'id': f"compartment_{i}",
-            'contour_pixels': main_contour_pixels,
-            'contour_um': [[pt[0] * pixel_size, pt[1] * pixel_size] for pt in main_contour_pixels],
-            'bbox_pixels': {'x1': min_col, 'y1': min_row, 'x2': max_col, 'y2': max_row},
-            'bbox_um': {
-                'x1': min_col * pixel_size, 'y1': min_row * pixel_size,
-                'x2': max_col * pixel_size, 'y2': max_row * pixel_size
-            },
-            'centroid_pixels': {'x': props.centroid[1], 'y': props.centroid[0]},
-            'centroid_um': {'x': props.centroid[1] * pixel_size, 'y': props.centroid[0] * pixel_size},
-            'area_pixels': props.area,
-            'area_um2': props.area * (pixel_size**2),
-            'mean_intensity': props.mean_intensity,
-            'perimeter_pixels': props.perimeter,
-            'perimeter_um': props.perimeter * pixel_size,
-            'solidity': props.solidity,
-            'eccentricity': props.eccentricity
-        }
-        segmented_compartments.append(compartment)
+        # Extract contour
+        mask = (labeled_regions == props.label)
+        contours = measure.find_contours(mask.astype(float), 0.5)
+        
+        if len(contours) > 0:
+            contour = contours[0]
+            contour_um = contour * pixel_size
+            
+            # Calculate properties
+            centroid_um = np.array(props.centroid) * pixel_size
+            area_um2 = props.area * (pixel_size ** 2)
+            bbox_um = np.array(props.bbox) * pixel_size
+            
+            compartment = {
+                'id': f'compartment_{i}',
+                'method': 'adaptive_threshold',
+                'centroid_um': centroid_um,
+                'area_um2': area_um2,
+                'bbox_um': bbox_um,
+                'contour_um': contour_um.tolist(),
+                'mean_intensity': props.intensity_mean,
+                'max_intensity': props.intensity_max,
+                'eccentricity': props.eccentricity,
+                'solidity': props.solidity,
+                'perimeter_um': props.perimeter * pixel_size
+            }
+            segmented_compartments.append(compartment)
         
     return segmented_compartments
 
@@ -423,41 +417,48 @@ def density_map_threshold(
 
     # 4) Density classes (only within ROI), now with background subtraction
     if num_classes is not None and num_classes > 1:
-        # 4a) Smooth for classification
-        smooth_cls = gaussian(image, sigma=gaussian_sigma_density)
-
-        # 4b) Background subtraction on the smoothed image
-        background_cls = morphology.opening(smooth_cls, morphology.disk(disk_radius))
-        hp_cls = smooth_cls - background_cls
-
-        # 4c) (Optional) normalize the background-subtracted signal
-        maxv_cls = hp_cls.max() if hp_cls.max() != 0 else 1.0
-        hp_cls = hp_cls / maxv_cls
-
-        # 4d) Prepare the class array - initialize to 0 (outside nucleus)
-        classes = np.zeros(hp_cls.shape, dtype=float)
-
-        # 4e) Determine which pixels to classify (nuclear region)
-        mask_idx = roi_mask if roi_mask is not None else mask_in
-
-        # 4f) Bin the high-pass values into num_classes bins
-        if binning == 'quantile':
-            vals = hp_cls[mask_idx]
-            if len(vals) > 0:
-                edges = np.quantile(vals, np.linspace(0, 1, num_classes + 1))
-                scaled = np.digitize(vals, edges[1:-1])
-            else:
-                scaled = np.array([])
-        else:
-            vals = hp_cls[mask_idx]
-            scaled = np.floor(vals * num_classes).astype(int)
-            scaled = np.clip(scaled, 0, num_classes - 1)
-
-        # 4g) Assign classes (1..num_classes) within nucleus, 0 outside
-        if len(scaled) > 0:
-            classes[mask_idx] = (scaled + 1).astype(float)
+        # Build density image with background subtraction
+        smooth_density = gaussian(image, sigma=gaussian_sigma_density)
+        background_density = morphology.opening(smooth_density, morphology.disk(disk_radius))
+        density_image = smooth_density - background_density
         
-        result['classes'] = classes
+        # Apply ROI mask if provided
+        if roi_mask is not None:
+            density_image = density_image * roi_mask
+        else:
+            # Use mask_in as ROI
+            density_image = density_image * mask_in
+        
+        # Get valid density values
+        valid_mask = density_image > 0
+        valid_densities = density_image[valid_mask]
+        
+        if len(valid_densities) > 0:
+            # Create class boundaries
+            if binning == 'equal':
+                # Equal width bins
+                min_val, max_val = valid_densities.min(), valid_densities.max()
+                class_boundaries = np.linspace(min_val, max_val, num_classes + 1)
+            else:  # quantile
+                # Equal count bins
+                class_boundaries = np.percentile(valid_densities, 
+                                               np.linspace(0, 100, num_classes + 1))
+            
+            # Assign classes
+            classes = np.zeros_like(image, dtype=int)
+            for i in range(num_classes):
+                lower = class_boundaries[i]
+                upper = class_boundaries[i + 1]
+                
+                if i == num_classes - 1:  # Last class includes upper boundary
+                    class_mask = (density_image >= lower) & (density_image <= upper)
+                else:
+                    class_mask = (density_image >= lower) & (density_image < upper)
+                
+                classes[class_mask] = i + 1
+            
+            result['classes'] = classes
+            result['class_boundaries'] = class_boundaries
 
     return result
 
@@ -544,41 +545,35 @@ def enhanced_threshold_image(
     info = {}
     
     if method == 'otsu':
-        t = threshold_otsu(image)
-        mask = image > t
-        info['threshold_value'] = float(t)
+        threshold_val = threshold_otsu(image)
+        mask = image > threshold_val
+        info['threshold'] = threshold_val
 
     elif method == 'triangle':
-        t = threshold_triangle(image)
-        mask = image > t
-        info['threshold_value'] = float(t)
+        threshold_val = threshold_triangle(image)
+        mask = image > threshold_val
+        info['threshold'] = threshold_val
 
     elif method == 'manual':
         if manual_threshold is None:
             raise ValueError("manual_threshold must be provided for manual method")
         mask = image > manual_threshold
-        info['threshold_value'] = float(manual_threshold)
+        info['threshold'] = manual_threshold
 
     elif method == 'density_map':
-        dm = density_map_threshold(
-            image,
-            gaussian_sigma_hp=kwargs.get('gaussian_sigma_hp', 2),
-            gaussian_sigma_density=kwargs.get('gaussian_sigma_density', None),
-            disk_radius=kwargs.get('disk_radius', 10),
-            pcutoff_in=kwargs.get('pcutoff_in', 0.10),
-            pcutoff_out=kwargs.get('pcutoff_out', 0.10),
-            roi_mask=kwargs.get('roi_mask', None),
-            num_classes=kwargs.get('num_classes', None),
-            binning=kwargs.get('binning', 'equal')
-        )
-        mask = dm['mask_in']
-        info['mask_out'] = dm['mask_out']
-        info['hp'] = dm['hp']
-        if 'classes' in dm:
-            info['classes'] = dm['classes']
+        density_params = {
+            'gaussian_sigma_hp': kwargs.get('gaussian_sigma_hp', 2.0),
+            'disk_radius': kwargs.get('disk_radius', 15),
+            'pcutoff_in': kwargs.get('pcutoff_in', 0.15),
+            'pcutoff_out': kwargs.get('pcutoff_out', 0.05)
+        }
+        
+        density_result = density_map_threshold(image, **density_params)
+        mask = density_result['mask_in']
+        info.update(density_result)
 
     else:
-        raise ValueError(f"Unknown method '{method}' for enhanced_threshold_image")
+        raise ValueError(f"Unknown thresholding method: {method}")
 
     # Post-process all methods: close, remove small, fill holes
     mask = binary_closing(mask, disk(closing_disk_size))
@@ -589,18 +584,12 @@ def enhanced_threshold_image(
     # Apply largest object selection if requested
     if largest_object_only:
         mask = select_largest_object(mask)
-        info['largest_object_selected'] = True
-        info['final_objects'] = 1
     else:
-        # Count final objects
-        labeled = label(mask)
-        info['final_objects'] = labeled.max()
+        pass  # Keep all objects
     
     # Apply boundary smoothing if requested
     if smooth_boundary:
         mask = smooth_binary_boundary(mask, smoothing_iterations)
-        info['boundary_smoothed'] = True
-        info['smoothing_iterations'] = smoothing_iterations
 
     return mask, info
 
@@ -1782,7 +1771,6 @@ def detect_nuclear_boundaries(image: np.ndarray, params: Dict[str, Any]) -> np.n
     elif method == 'Manual':
         threshold = params.get('threshold', np.mean(image))
     else:
-        # Default to Otsu
         threshold = threshold_otsu(image)
     
     # Create binary mask
@@ -1831,7 +1819,7 @@ def segment_nuclear_interior_with_density_map(image: np.ndarray, nuclear_boundar
     try:
         density_results = density_map_threshold(
             masked_image,
-            sigma_hp=params.get('sigma_hp', 2.0),
+            gaussian_sigma_hp=params.get('sigma_hp', 2.0),
             disk_radius=params.get('disk_radius', 15),
             pcutoff_in=params.get('pcutoff_in', 0.15),
             pcutoff_out=params.get('pcutoff_out', 0.05)
@@ -1887,6 +1875,18 @@ def segment_nuclear_interior_with_density_map(image: np.ndarray, nuclear_boundar
     internal_class1 = internal_class1 & nuclear_regions
     internal_class2 = internal_class2 & nuclear_regions
     
+    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
+    internal_class2 = binary_closing(internal_class2, disk(2))
+    
+    # Remove very small objects
+    internal_class1 = remove_small_objects(internal_class1, min_size=50)
+    internal_class2 = remove_small_objects(internal_class2, min_size=50)
+    
+    # Ensure classes are only within nuclear regions
+    internal_class1 = internal_class1 & nuclear_regions
+    internal_class2 = internal_class2 & nuclear_regions
+    
+    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
     return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
                 
                 internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures

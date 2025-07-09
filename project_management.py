@@ -6,14 +6,10 @@ Enhanced with persistent file-based storage and robust data management.
 
 import os
 import json
-import uuid
 import datetime
-from typing import Dict, List, Any, Optional
+import uuid
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-import seaborn as sns
+from typing import Dict, List, Any, Optional
 from scipy import stats
 
 class FileObject:
@@ -29,8 +25,17 @@ class FileObject:
         if save_path and self.track_data is not None and not self.track_data.empty:
             track_data_file = f"{self.id}_tracks.csv"
             track_data_path = os.path.join(save_path, track_data_file)
+            
+            # Ensure directory exists
             os.makedirs(os.path.dirname(track_data_path), exist_ok=True)
-            self.track_data.to_csv(track_data_path, index=False)
+            
+            # Save track data to CSV
+            try:
+                self.track_data.to_csv(track_data_path, index=False)
+            except Exception as e:
+                print(f"Warning: Could not save track data for {self.file_name}: {e}")
+                track_data_file = None
+        
         return {
             "id": self.id,
             "file_name": self.file_name,
@@ -46,7 +51,8 @@ class FileObject:
             if os.path.exists(track_data_path):
                 try:
                     tracks_df = pd.read_csv(track_data_path)
-                except Exception:
+                except Exception as e:
+                    print(f"Warning: Could not load track data from {track_data_path}: {e}")
                     tracks_df = pd.DataFrame()
         return cls(data['id'], data['file_name'], tracks_df, data['upload_date'])
 
@@ -60,120 +66,130 @@ class Condition:
 
     def to_dict(self, save_path: str = None) -> Dict:
         return {
-            "id": self.id, "name": self.name, "description": self.description,
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
             "files": {fid: f.to_dict(save_path) for fid, f in self.files.items()}
         }
 
     @classmethod
     def from_dict(cls, data: Dict, project_path: str = None):
-        condition = cls(data['id'], data['name'], data.get('description', ""))
-        for fid, fdata in data.get('files', {}).items():
+        condition = cls(data.get("id"), data.get("name", ""), data.get("description", ""))
+        for fid, fdata in data.get("files", {}).items():
             condition.files[fid] = FileObject.from_dict(fdata, project_path)
         return condition
 
     def pool_tracks(self) -> pd.DataFrame:
-        """
-        Pool all tracks from files in this condition using vectorized operations.
-        Efficiently handles track ID conflicts by reassigning unique IDs.
-        """
-        if not self.files:
-            return pd.DataFrame()
-        
+        """Pool all tracks from all files in this condition."""
         all_tracks = []
-        current_max_track_id = 0
-        
         for file_obj in self.files.values():
             if file_obj.track_data is not None and not file_obj.track_data.empty:
-                df = file_obj.track_data.copy()
-                
-                # Vectorized track ID reassignment to avoid conflicts
-                if 'track_id' in df.columns:
-                    # Shift all track IDs by current maximum
-                    df['track_id'] = df['track_id'] + current_max_track_id
-                    current_max_track_id = df['track_id'].max() + 1
-                
-                # Add file metadata
-                df['source_file'] = file_obj.file_name
-                df['file_id'] = file_obj.id
-                
-                all_tracks.append(df)
+                tracks_copy = file_obj.track_data.copy()
+                tracks_copy['file_id'] = file_obj.id
+                tracks_copy['file_name'] = file_obj.file_name
+                all_tracks.append(tracks_copy)
         
         if all_tracks:
-            # Vectorized concatenation - much faster than iterrows()
-            return pd.concat(all_tracks, ignore_index=True)
-        
-        return pd.DataFrame()
+            pooled = pd.concat(all_tracks, ignore_index=True)
+            return pooled
+        else:
+            return pd.DataFrame()
 
     def compare_conditions(self, metric: str = "diffusion_coefficient", 
                           test_type: str = "auto", alpha: float = 0.05) -> Dict[str, Any]:
-        """
-        Compare a specific metric across all conditions with improved statistical rigor.
+        """Compare this condition against itself or provide summary statistics."""
+        pooled_data = self.pool_tracks()
         
-        If test_type is 'auto', it performs a Shapiro-Wilk test for normality.
-        If data is normal, appropriate parametric tests are used. Otherwise, non-parametric tests are used.
-        """
-        pooled_tracks = self.pool_tracks()
+        if pooled_data.empty:
+            return {
+                'success': False,
+                'error': 'No data available for comparison',
+                'condition_name': self.name
+            }
         
-        if pooled_tracks.empty:
-            return {"success": False, "error": "No data available for comparison"}
-        
-        # Extract metric values (this would need to be calculated based on the actual metric)
-        # For now, using a placeholder - in practice, this would call the appropriate analysis function
-        if metric == "diffusion_coefficient":
-            # This would be replaced with actual diffusion coefficient calculation
-            metric_values = np.random.normal(1.0, 0.3, len(pooled_tracks))
-        else:
-            return {"success": False, "error": f"Metric '{metric}' not implemented"}
-        
-        if len(metric_values) < 3:
-            return {"success": False, "error": "Need at least 3 data points for statistical testing"}
-        
-        # Automatic test selection based on normality
-        if test_type == "auto":
-            # Check normality using Shapiro-Wilk test
-            normality_stat, normality_p = stats.shapiro(metric_values)
-            is_normal = normality_p > alpha
+        # Calculate basic statistics
+        if metric in pooled_data.columns:
+            values = pooled_data[metric].dropna()
             
-            if is_normal:
-                test_name = "One-sample t-test (normal data)"
-                test_stat, p_value = stats.ttest_1samp(metric_values, 0)
-            else:
-                test_name = "Wilcoxon signed-rank test (non-normal data)"
-                test_stat, p_value = stats.wilcoxon(metric_values - np.median(metric_values))
-                
-        elif test_type == "t-test":
-            test_name = "One-sample t-test"
-            test_stat, p_value = stats.ttest_1samp(metric_values, 0)
-            is_normal = "user_specified"
-        elif test_type == "wilcoxon":
-            test_name = "Wilcoxon signed-rank test"
-            test_stat, p_value = stats.wilcoxon(metric_values - np.median(metric_values))
-            is_normal = "user_specified"
+            if len(values) == 0:
+                return {
+                    'success': False,
+                    'error': f'No valid values found for metric {metric}',
+                    'condition_name': self.name
+                }
+            
+            statistics = {
+                'mean': float(values.mean()),
+                'median': float(values.median()),
+                'std': float(values.std()),
+                'min': float(values.min()),
+                'max': float(values.max()),
+                'n_values': len(values),
+                'condition_name': self.name
+            }
+            
+            return {
+                'success': True,
+                'statistics': statistics,
+                'metric': metric
+            }
         else:
-            return {"success": False, "error": f"Unsupported test type: '{test_type}'"}
+            return {
+                'success': False,
+                'error': f'Metric {metric} not found in data',
+                'condition_name': self.name,
+                'available_columns': list(pooled_data.columns)
+            }
 
+class Project:
+    """Represents a full SPT project, now with a save method."""
+    def __init__(self, name: str = "New Project", description: str = ""):
+        self.id = str(uuid.uuid4())
+        self.name = name
+        self.description = description
+        self.creation_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.last_modified = self.creation_date
+        self.conditions: Dict[str, Condition] = {}
+
+    def save(self, base_path: str):
+        """Saves the project to its designated file path."""
+        project_dir = os.path.join(base_path, self.id)
+        os.makedirs(project_dir, exist_ok=True)
+        project_file_path = os.path.join(project_dir, "project.json")
+        save_project(self, project_file_path)
+
+    def update_last_modified(self):
+        self.last_modified = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def to_dict(self, save_path: str = None) -> Dict:
         return {
-            "success": True,
-            "metric": metric,
-            "test_name": test_name,
-            "normality_assumed": is_normal if test_type == 'auto' else 'user_specified',
-            "statistic": float(test_stat),
-            "p_value": float(p_value),
-            "n_samples": len(metric_values),
-            "mean": float(np.mean(metric_values)),
-            "std": float(np.std(metric_values)),
-            "median": float(np.median(metric_values)),
-            "significant": p_value < alpha,
-            "alpha": alpha
+            "id": self.id, 
+            "name": self.name, 
+            "description": self.description,
+            "creation_date": self.creation_date, 
+            "last_modified": self.last_modified,
+            "conditions": {cid: c.to_dict(save_path) for cid, c in self.conditions.items()}
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict, project_path: str = None) -> 'Project':
+        project = cls(data.get("name", "Unknown"), data.get("description", ""))
+        project.id = data.get("id", str(uuid.uuid4()))
+        project.creation_date = data.get("creation_date", project.creation_date)
+        project.last_modified = data.get("last_modified", project.last_modified)
+        for cid, cdata in data.get("conditions", {}).items():
+            project.conditions[cid] = Condition.from_dict(cdata, project_path)
+        return project
 
 def save_project(project: 'Project', project_path: str) -> None:
     """Saves a project to a JSON file and associated data to CSV."""
     try:
         project_dir = os.path.dirname(project_path)
         os.makedirs(project_dir, exist_ok=True)
+        
         # Pass the directory where the csv should be saved
         project_data = project.to_dict(save_path=project_dir)
+        
         with open(project_path, 'w') as f:
             json.dump(project_data, f, indent=2)
     except Exception as e:
@@ -190,131 +206,6 @@ def load_project(project_path: str) -> 'Project':
         return Project.from_dict(project_data, project_path)
     except Exception as e:
         raise ValueError(f"Failed to load project from {project_path}: {str(e)}")
-
-class Project:
-    """Represents a full SPT project, now with a save method."""
-    def __init__(self, name: str = "New Project", description: str = ""):
-        self.id = str(uuid.uuid4())
-        self.name = name
-        self.description = description
-        self.creation_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.last_modified = self.creation_date
-        self.conditions: Dict[str, Condition] = {}
-
-    def save(self, base_path: str):
-        """Saves the project to its designated file path."""
-        project_file_path = os.path.join(base_path, self.id, "project.json")
-        save_project(self, project_file_path)
-
-    def update_last_modified(self):
-        self.last_modified = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    def to_dict(self, save_path: str = None) -> Dict:
-        return {
-            "id": self.id, "name": self.name, "description": self.description,
-            "creation_date": self.creation_date, "last_modified": self.last_modified,
-            "conditions": {cid: c.to_dict(save_path) for cid, c in self.conditions.items()}
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict, project_path: str = None) -> 'Project':
-        project = cls(data.get("name", "Unknown"), data.get("description", ""))
-        project.id = data.get("id", str(uuid.uuid4()))
-        project.creation_date = data.get("creation_date")
-        project.last_modified = data.get("last_modified")
-        for cid, cdata in data.get("conditions", {}).items():
-            project.conditions[cid] = Condition.from_dict(cdata, project_path)
-        return project
-
-    def pool_tracks_from_condition(self, condition_id: str) -> pd.DataFrame:
-        """Pool all tracks from a specific condition."""
-        if condition_id in self.conditions:
-            return self.conditions[condition_id].pool_tracks()
-        return pd.DataFrame()
-
-    def compare_conditions(self, metric: str = "diffusion_coefficient", 
-                          test_type: str = "auto", alpha: float = 0.05) -> Dict[str, Any]:
-        """
-        Compare a specific metric across all conditions with improved statistical rigor.
-        
-        If test_type is 'auto', it performs a Shapiro-Wilk test for normality.
-        If data is normal, ANOVA is used. Otherwise, Kruskal-Wallis is used.
-        """
-        if len(self.conditions) < 2:
-            return {"success": False, "error": "Need at least two conditions for comparison"}
-        
-        cond_metrics = {}
-        
-        for cond_id, condition in self.conditions.items():
-            pooled_tracks = condition.pool_tracks()
-            if not pooled_tracks.empty:
-                # Extract metric values (placeholder implementation)
-                if metric == "diffusion_coefficient":
-                    # This would be replaced with actual diffusion coefficient calculation
-                    metric_values = np.random.normal(1.0, 0.3, len(pooled_tracks))
-                    cond_metrics[cond_id] = metric_values
-        
-        if len(cond_metrics) < 2:
-            return {"success": False, "error": "Need at least two conditions with valid data for comparison"}
-        
-        values = list(cond_metrics.values())
-        condition_names = [self.conditions[k].name for k in cond_metrics.keys()]
-        
-        # Automatic test selection based on normality
-        if test_type == "auto":
-            # Check normality for each group using Shapiro-Wilk test
-            is_normal = all(stats.shapiro(v).pvalue > alpha for v in values if len(v) >= 3)
-            
-            if len(values) == 2:
-                # For two groups
-                test_name = "Two-sample t-test" if is_normal else "Mann-Whitney U test"
-                if is_normal:
-                    test_stat, p_value = stats.ttest_ind(values[0], values[1])
-                else:
-                    test_stat, p_value = stats.mannwhitneyu(values[0], values[1])
-            else:
-                # For multiple groups
-                test_name = "One-way ANOVA" if is_normal else "Kruskal-Wallis H-test"
-                if is_normal:
-                    test_stat, p_value = stats.f_oneway(*values)
-                else:
-                    test_stat, p_value = stats.kruskal(*values)
-                    
-        elif test_type == "t-test" and len(values) == 2:
-            test_name = "Two-sample t-test"
-            test_stat, p_value = stats.ttest_ind(values[0], values[1])
-            is_normal = "user_specified"
-        elif test_type == "anova" and len(values) > 2:
-            test_name = "One-way ANOVA"
-            test_stat, p_value = stats.f_oneway(*values)
-            is_normal = "user_specified"
-        elif test_type == "kruskal":
-            test_name = "Kruskal-Wallis H-test"
-            test_stat, p_value = stats.kruskal(*values)
-            is_normal = "user_specified"
-        else:
-            return {"success": False, "error": f"Unsupported or invalid test type: '{test_type}' for {len(values)} groups."}
-
-        return {
-            "success": True,
-            "metric": metric,
-            "test_name": test_name,
-            "normality_assumed": is_normal if test_type == 'auto' else 'user_specified',
-            "statistic": float(test_stat),
-            "p_value": float(p_value),
-            "n_conditions": len(values),
-            "condition_names": condition_names,
-            "condition_stats": {
-                name: {
-                    "n": len(vals),
-                    "mean": float(np.mean(vals)),
-                    "std": float(np.std(vals)),
-                    "median": float(np.median(vals))
-                } for name, vals in zip(condition_names, values)
-            },
-            "significant": p_value < alpha,
-            "alpha": alpha
-        }
 
 class ProjectManager:
     """
@@ -335,12 +226,19 @@ class ProjectManager:
         """Loads a project from the projects directory."""
         project_path = os.path.join(self.projects_dir, project_id, "project.json")
         if os.path.exists(project_path):
-            return load_project(project_path)
+            try:
+                return load_project(project_path)
+            except Exception as e:
+                print(f"Error loading project {project_id}: {e}")
+                return None
         return None
 
     def list_projects(self) -> List[Dict[str, Any]]:
         """Lists all available projects by reading their JSON files."""
         projects = []
+        if not os.path.exists(self.projects_dir):
+            return projects
+            
         for project_id in os.listdir(self.projects_dir):
             project_path = os.path.join(self.projects_dir, project_id, "project.json")
             if os.path.exists(project_path):
@@ -350,11 +248,31 @@ class ProjectManager:
                         projects.append({
                             'id': data.get('id', project_id),
                             'name': data.get('name', 'Untitled'),
+                            'description': data.get('description', ''),
+                            'creation_date': data.get('creation_date', ''),
                             'last_modified': data.get('last_modified', '1970-01-01 00:00:00')
                         })
-                except Exception:
+                except Exception as e:
+                    print(f"Error reading project {project_id}: {e}")
                     continue
         return sorted(projects, key=lambda p: p['last_modified'], reverse=True)
+
+    def add_file_to_condition(self, project: 'Project', condition_id: str, 
+                             file_name: str, tracks_df: pd.DataFrame) -> str:
+        """Add a file to a project condition."""
+        if condition_id not in project.conditions:
+            raise ValueError(f"Condition {condition_id} not found")
+        
+        file_id = str(uuid.uuid4())
+        upload_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        file_obj = FileObject(file_id, file_name, tracks_df, upload_date)
+        project.conditions[condition_id].files[file_id] = file_obj
+        
+        project.update_last_modified()
+        project.save(self.projects_dir)
+        
+        return file_id
 
     def remove_file_from_project(self, project: 'Project', condition_id: str, file_id: str) -> Dict[str, Any]:
         """
@@ -599,6 +517,132 @@ class ProjectManager:
                         ax.text(0.1, y_pos, f'{key}: {value}', 
                                 ha='left', va='center', fontsize=12)
                         y_pos -= 0.05
+                    
+                    ax.axis('off')
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+        
+        return filepath
+    
+    def _generate_project_summary(self, conditions_results: Dict) -> Dict[str, Any]:
+        """Generate summary statistics across all conditions."""
+        summary = {
+            'total_conditions': len(conditions_results),
+            'successful_conditions': 0,
+            'failed_conditions': 0,
+            'total_analyses': 0
+        }
+        
+        for condition_name, result in conditions_results.items():
+            if result.get('success', True):
+                summary['successful_conditions'] += 1
+                if 'analysis_results' in result:
+                    summary['total_analyses'] += len(result['analysis_results'])
+            else:
+                summary['failed_conditions'] += 1
+        
+        return summary
+
+def pm_list_available_projects(projects_dir):
+    """List available projects in the projects directory."""
+    import os
+    projects = []
+    if os.path.exists(projects_dir):
+        for item in os.listdir(projects_dir):
+            project_path = os.path.join(projects_dir, item)
+            if os.path.isdir(project_path):
+                config_path = os.path.join(project_path, "project_config.json")
+                if os.path.exists(config_path):
+                    try:
+                        with open(config_path, 'r') as f:
+                            import json
+                            config = json.load(f)
+                            projects.append({
+                                'name': config.get('name', item),
+                                'path': project_path,
+                                'description': config.get('description', ''),
+                                'created': config.get('created', ''),
+                                'last_modified': config.get('last_modified', '')
+                            })
+                    except Exception:
+                        pass
+    return projects
+
+def list_available_projects(projects_dir: str) -> List[Dict[str, Any]]:
+    """List available projects using the ProjectManager class."""
+    manager = ProjectManager(projects_dir)
+    return manager.list_projects()
+
+class ProjectManagerCompat:
+    """Compatibility wrapper for project management functions."""
+    
+    def __init__(self):
+        self.projects_dir = "./projects"
+    
+    def list_available_projects(self, projects_dir):
+        """List available projects."""
+        return pm_list_available_projects(projects_dir)
+
+def remove_file_from_project(project: 'Project', condition_id: str, file_id: str, base_path: str) -> Dict[str, Any]:
+    """
+    Remove a file from a project condition and delete its associated data file from disk.
+    
+    Parameters
+    ----------
+    project : Project
+        The project to remove file from
+    condition_id : str
+        ID of the condition containing the file
+    file_id : str
+        ID of the file to remove
+    base_path : str
+        The base directory where projects are stored, needed to locate the CSV file.
+    """
+    try:
+        if condition_id not in project.conditions:
+            return {"success": False, "error": f"Condition {condition_id} not found"}
+        
+        condition = project.conditions[condition_id]
+        if file_id not in condition.files:
+            return {"success": False, "error": f"File {file_id} not found in condition"}
+
+        # Get file object before deleting its record
+        file_obj = condition.files[file_id]
+        file_name = file_obj.file_name
+        
+        # Delete the associated CSV file
+        file_dict = file_obj.to_dict()
+        track_data_filename = file_dict.get('track_data_file')
+        
+        if track_data_filename:
+            # Construct the full path to the data file
+            project_dir = os.path.join(base_path, project.id)
+            track_data_path = os.path.join(project_dir, track_data_filename)
+            if os.path.exists(track_data_path):
+                os.remove(track_data_path)
+
+        # Now, remove the file record from the project
+        del condition.files[file_id]
+        project.update_last_modified()
+        project.save(base_path)
+        
+        return {
+            "success": True,
+            "message": f"Successfully removed file '{file_name}' and its data from condition '{condition.name}'"
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def pool_tracks_from_condition(project: 'Project', condition_id: str) -> pd.DataFrame:
+    """
+    Pool all tracks from files in a specific condition using vectorized operations.
+    Enhanced with conflict resolution for track IDs across multiple files.
+    """
+    if condition_id not in project.conditions:
+        return pd.DataFrame()
+    
+    return project.conditions[condition_id].pool_tracks()
                     
                     ax.axis('off')
                     pdf.savefig(fig, bbox_inches='tight')

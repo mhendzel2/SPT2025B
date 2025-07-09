@@ -45,9 +45,7 @@ DEFAULT_CM = "viridis"
 def _assert_cols(df: pd.DataFrame, required: List[str], func: str) -> None:
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(
-            f"{func} – missing required columns: {', '.join(missing)}"
-        )
+        raise ValueError(f"{func} – missing required columns: {', '.join(missing)}")
 
 
 def _empty_fig(msg: str) -> go.Figure:
@@ -79,7 +77,7 @@ def plot_tracks(
 ) -> go.Figure:
     """
     2‑D trajectory plot (Plotly).
-    Required columns – track_id, frame, x, y
+    Required columns – track_id, frame, x, y
     """
     if tracks.empty:
         return _empty_fig("No track data available")
@@ -105,7 +103,7 @@ def plot_tracks(
                     x=tdf["x"],
                     y=tdf["y"],
                     mode="lines+markers",
-                    name=f"Track {tid}",
+                    name=f"Track {tid}",
                     line=dict(color=colour, width=1),
                     marker=dict(color=colour, size=4),
                     showlegend=len(track_ids) <= 25,
@@ -138,7 +136,7 @@ def plot_tracks(
                     x=tdf["x"],
                     y=tdf["y"],
                     mode="lines+markers",
-                    name=f"Track {tid}",
+                    name=f"Track {tid}",
                     marker=dict(
                         color=tdf[color_by],
                         colorscale=colormap,
@@ -158,9 +156,9 @@ def plot_tracks(
             )
 
     fig.update_layout(
-        title=f"Particle Tracks ({len(track_ids)} tracks)",
-        xaxis_title="X (px)",
-        yaxis_title="Y (px)",
+        title=f"Particle Tracks ({len(track_ids)} tracks)",
+        xaxis_title="X (px)",
+        yaxis_title="Y (px)",
         yaxis_scaleanchor="x",
         template="plotly_white",
     )
@@ -500,7 +498,6 @@ def plot_diffusion_coefficients(tracks: Union[pd.DataFrame, Dict[str, Any]]) -> 
     # Handle case where tracks is a dictionary (diffusion analysis results)
     if isinstance(tracks, dict):
         if "diffusion_coefficients" in tracks:
-            # Extract diffusion coefficients from analysis results
             coeffs = tracks["diffusion_coefficients"]
             if isinstance(coeffs, (list, np.ndarray)):
                 data = pd.Series(coeffs).dropna()
@@ -508,32 +505,69 @@ def plot_diffusion_coefficients(tracks: Union[pd.DataFrame, Dict[str, Any]]) -> 
                 data = coeffs.dropna()
             else:
                 return _empty_fig("Invalid diffusion coefficient format in results")
+        elif "coefficient_values" in tracks:
+            coeffs = tracks["coefficient_values"]
+            if isinstance(coeffs, (list, np.ndarray)):
+                data = pd.Series(coeffs).dropna()
+            elif isinstance(coeffs, pd.Series):
+                data = coeffs.dropna()
+            else:
+                return _empty_fig("Invalid diffusion coefficient format in results")
         else:
-            return _empty_fig("No diffusion coefficients in analysis results")
+            return _empty_fig("No diffusion coefficients found in analysis results")
     else:
         # Handle DataFrame input
-        if tracks.empty or "diffusion_coefficient" not in tracks:
-            return _empty_fig("No diffusion coefficients")
-        data = tracks["diffusion_coefficient"].dropna()
+        if tracks.empty:
+            return _empty_fig("No track data provided")
+        
+        possible_cols = ['diffusion_coefficient', 'D', 'diffusion_coeff', 'coefficient']
+        diff_col = None
+        
+        for col in possible_cols:
+            if col in tracks.columns:
+                diff_col = col
+                break
+        
+        if diff_col is None:
+            return _empty_fig("No diffusion coefficient column found in data")
+        
+        data = tracks[diff_col].dropna()
     
+    # Filter out invalid values
     data = data[data > 0]
     if data.empty:
-        return _empty_fig("All diffusion coefficients are 0 / NaN")
+        return _empty_fig("All diffusion coefficients are 0 or invalid")
 
+    # Create histogram
     fig = _generic_histogram(
         pd.DataFrame({"D": data}),
         "D",
         title="Diffusion coefficient distribution",
-        xlabel="D (px²/s)",
+        xlabel="D (px²/s)",
         colour=QualColours[0],
         log_x=True,
     )
+    
+    # Add mean line
+    mean_val = data.mean()
     fig.add_vline(
-        x=data.mean(),
+        x=mean_val,
         line_dash="dash",
         line_color="red",
-        annotation_text=f"Mean = {data.mean():.2e}",
+        annotation_text=f"Mean = {mean_val:.2e}",
+        annotation_position="top left"
     )
+    
+    # Add median line
+    median_val = data.median()
+    fig.add_vline(
+        x=median_val,
+        line_dash="dot",
+        line_color="blue",
+        annotation_text=f"Median = {median_val:.2e}",
+        annotation_position="top right"
+    )
+    
     return fig
 
 
@@ -547,58 +581,106 @@ def plot_active_transport(
     """Return dict with 'speeds', 'directions' etc."""
     figs: Dict[str, go.Figure] = {}
 
-    if not transport.get("success") or transport.get("directed_segments") is None:
-        return {"empty": _empty_fig("No active‑transport results")}
+    if not transport.get("success", False):
+        return {"empty": _empty_fig("Active transport analysis failed")}
+    
+    # Handle different possible key names for directed segments
+    seg_data = None
+    for key in ["directed_segments", "segments", "transport_segments"]:
+        if key in transport and transport[key] is not None:
+            seg_data = transport[key]
+            break
+    
+    if seg_data is None:
+        return {"empty": _empty_fig("No active‑transport results found")}
 
-    seg = transport["directed_segments"]
+    # Handle both DataFrame and dict formats
+    if isinstance(seg_data, dict):
+        if "speeds" in seg_data and "angles" in seg_data:
+            # Create DataFrame from dict
+            seg = pd.DataFrame({
+                "speed": seg_data["speeds"],
+                "angle": seg_data["angles"]
+            })
+        else:
+            return {"empty": _empty_fig("Invalid transport segment format")}
+    else:
+        seg = seg_data
+
     if seg.empty:
-        return {"empty": _empty_fig("No directed segments")}
+        return {"empty": _empty_fig("No directed segments found")}
 
-    # speed histogram
-    figs["speeds"] = _generic_histogram(
-        seg,
-        "speed",
-        title="Directed‑segment speeds",
-        xlabel="Speed (µm/s)",
-        colour=QualColours[0],
-    )
+    # Speed histogram
+    if "speed" in seg.columns:
+        figs["speeds"] = _generic_histogram(
+            seg,
+            "speed",
+            title="Directed‑segment speeds",
+            xlabel="Speed (µm/s)",
+            colour=QualColours[0],
+        )
 
-    # polar histogram of angles – custom
-    if "angle" in seg.columns:
-        theta = np.degrees(seg["angle"])
-        bins = np.linspace(-180, 180, 19)  # 18 × 20°
-        counts, edges = np.histogram(theta, bins=bins)
-        centres = (edges[:-1] + edges[1:]) / 2
+    # Polar histogram of angles
+    angle_col = None
+    for col in ["angle", "angles", "direction", "theta"]:
+        if col in seg.columns:
+            angle_col = col
+            break
+    
+    if angle_col is not None:
+        theta = np.degrees(seg[angle_col])
+        # Handle NaN values
+        theta = theta[~np.isnan(theta)]
+        
+        if len(theta) > 0:
+            bins = np.linspace(-180, 180, 19)  # 18 × 20°
+            counts, edges = np.histogram(theta, bins=bins)
+            centres = (edges[:-1] + edges[1:]) / 2
 
-        polar = go.Figure()
-        polar.add_trace(
-            go.Scatterpolar(
-                r=counts,
-                theta=centres,
-                mode="lines",
-                fill="toself",
-                line_color=QualColours[1],
+            polar = go.Figure()
+            polar.add_trace(
+                go.Scatterpolar(
+                    r=counts,
+                    theta=centres,
+                    mode="lines",
+                    fill="toself",
+                    line_color=QualColours[1],
+                    name="Direction distribution"
+                )
             )
-        )
-        polar.update_layout(
-            title="Directed‑motion directionality",
-            polar=dict(radialaxis=dict(showticklabels=False)),
-            template="plotly_white",
-        )
-        figs["directions"] = polar
+            polar.update_layout(
+                title="Directed‑motion directionality",
+                polar=dict(
+                    radialaxis=dict(
+                        showticklabels=False,
+                        range=[0, max(counts) * 1.1] if max(counts) > 0 else [0, 1]
+                    )
+                ),
+                template="plotly_white",
+            )
+            figs["directions"] = polar
+
+    # Add summary statistics if available
+    if "speed" in seg.columns:
+        speed_data = seg["speed"].dropna()
+        if len(speed_data) > 0:
+            summary_text = f"Mean speed: {speed_data.mean():.2f} µm/s<br>"
+            summary_text += f"Median speed: {speed_data.median():.2f} µm/s<br>"
+            summary_text += f"N segments: {len(speed_data)}"
+            
+            # Add text annotation to speed plot
+            if "speeds" in figs:
+                figs["speeds"].add_annotation(
+                    text=summary_text,
+                    xref="paper", yref="paper",
+                    x=0.7, y=0.9,
+                    showarrow=False,
+                    bgcolor="white",
+                    bordercolor="black",
+                    borderwidth=1
+                )
 
     return figs
-
-
-# Alias for backwards compatibility
-def plot_motion_analysis(
-    transport: Dict[str, Any],
-) -> Dict[str, go.Figure]:
-    """
-    Alias for plot_active_transport for backwards compatibility.
-    Return dict with 'speeds', 'directions' etc.
-    """
-    return plot_active_transport(transport)
 
 
 # ------------------------------------------------------------------ #
@@ -651,23 +733,29 @@ def fig_to_base64(fig: Union[go.Figure, MplFigure], fmt: str = "png") -> str:
     if fmt not in valid:
         raise ValueError(f"Format must be one of {valid}")
 
-    if isinstance(fig, go.Figure):
-        img_bytes = fig.to_image(format="png" if fmt == "jpg" else fmt, scale=2)
-    else:
-        buf = io.BytesIO()
-        fig.savefig(buf, format=fmt, dpi=150, bbox_inches="tight")
-        buf.seek(0)
-        img_bytes = buf.read()
-    return base64.b64encode(img_bytes).decode("utf-8")
+    try:
+        if isinstance(fig, go.Figure):
+            img_bytes = fig.to_image(format="png" if fmt == "jpg" else fmt, scale=2)
+        else:
+            buf = io.BytesIO()
+            fig.savefig(buf, format=fmt, dpi=150, bbox_inches="tight")
+            buf.seek(0)
+            img_bytes = buf.read()
+        return base64.b64encode(img_bytes).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to encode figure as {fmt}: {str(e)}")
 
 
 def download_bytes(
     fig: Union[go.Figure, MplFigure], *, fmt: str = "png"
 ) -> bytes:
     """Return raw bytes so a UI layer can expose them to users."""
-    if isinstance(fig, go.Figure):
-        return fig.to_image(format=fmt, scale=2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format=fmt, dpi=300, bbox_inches="tight")
-    buf.seek(0)
-    return buf.read()
+    try:
+        if isinstance(fig, go.Figure):
+            return fig.to_image(format=fmt, scale=2)
+        buf = io.BytesIO()
+        fig.savefig(buf, format=fmt, dpi=300, bbox_inches="tight")
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        raise ValueError(f"Failed to generate {fmt} bytes: {str(e)}")
