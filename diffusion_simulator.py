@@ -26,6 +26,7 @@ class DiffusionSimulator:
         self.simulation_params: Dict[str, Any] = {}
         self.pixel_size_nm: float = 1.0  # 1nm scaling as requested
         self.optical_slice_thickness_nm: float = 200.0  # Default 200nm thickness
+        self.all_trajectories: List[np.ndarray] = []
     
     def set_optical_slice_thickness(self, thickness_nm: float) -> None:
         """Set optical slice thickness in nanometers (100-700nm in 50nm steps)."""
@@ -106,6 +107,54 @@ class DiffusionSimulator:
             
         return boundary_map
     
+    def _find_valid_starting_position(self, container_dims: Tuple[int, int, int], 
+                                    boundary_map: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+        """Find a valid starting position that's not in a boundary."""
+        max_tries = 1000
+        for _ in range(max_tries):
+            start_pos = np.random.rand(3) * container_dims
+            
+            if boundary_map is None:
+                return start_pos
+            
+            px, py, pz = int(start_pos[0]) % container_dims[0], int(start_pos[1]) % container_dims[1], int(start_pos[2]) % container_dims[2]
+            
+            if boundary_map[px, py, pz] == 0:
+                return start_pos
+        
+        return None
+    
+    def _is_valid_position(self, pos: np.ndarray, container_dims: Tuple[int, int, int], 
+                          boundary_map: Optional[np.ndarray] = None) -> bool:
+        """Check if position is valid (within bounds and not in boundary)."""
+        px, py, pz = int(pos[0]), int(pos[1]), int(pos[2])
+        
+        if not (0 <= px < container_dims[0] and 0 <= py < container_dims[1] and 0 <= pz < container_dims[2]):
+            return False
+        
+        if boundary_map is not None and boundary_map[px, py, pz] == 1:
+            return False
+        
+        return True
+    
+    def _check_partition_crossing(self, current_region: int, new_region: int) -> bool:
+        """Check if particle can cross from current region to new region based on partition coefficients."""
+        if current_region == new_region:
+            return True
+        
+        # Check for specific region-to-region partition coefficient
+        partition_key = f"{current_region}_to_{new_region}"
+        if partition_key in self.partition_coefficients:
+            partition_prob = self.partition_coefficients[partition_key]
+            return np.random.rand() < partition_prob
+        
+        # Check for general region partition coefficient
+        if new_region in self.partition_coefficients:
+            partition_prob = self.partition_coefficients[new_region]
+            return np.random.rand() < partition_prob
+        
+        return True
+    
     def run_single_simulation(self, particle_diameter: float, mobility: float, 
                             num_steps: int, boundary_map: Optional[np.ndarray] = None) -> float:
         """Run single particle diffusion simulation with partition coefficient support."""
@@ -117,21 +166,16 @@ class DiffusionSimulator:
         else:
             container_dims = boundary_map.shape
         
-        start_pos = np.random.rand(3) * container_dims
-        if boundary_map is not None:
-            max_tries, tries = 1000, 0
-            while (boundary_map[int(start_pos[0]) % container_dims[0],
-                             int(start_pos[1]) % container_dims[1],
-                             int(start_pos[2]) % container_dims[2]] == 1):
-                start_pos = np.random.rand(3) * container_dims
-                tries += 1
-                if tries > max_tries:
-                    return np.nan
+        # Find valid starting position
+        start_pos = self._find_valid_starting_position(container_dims, boundary_map)
+        if start_pos is None:
+            return np.nan
         
         current_pos = np.copy(start_pos)
         trajectory = [current_pos.copy()]
         current_region = None
         
+        # Determine starting region
         if self.region_map is not None:
             px, py, pz = int(start_pos[0]) % container_dims[0], int(start_pos[1]) % container_dims[1], int(start_pos[2]) % container_dims[2]
             if (0 <= px < self.region_map.shape[0] and 
@@ -139,122 +183,205 @@ class DiffusionSimulator:
                 0 <= pz < self.region_map.shape[2]):
                 current_region = self.region_map[px, py, pz]
         
-        for _ in range(num_steps):
-            random_step = (np.random.rand(3) - 0.5) * 2
-            random_step = random_step / np.linalg.norm(random_step) * mobility
+        # Simulation loop
+        for step in range(num_steps):
+            # Generate random step with size dependent on mobility
+            random_direction = np.random.normal(0, 1, 3)
+            random_direction = random_direction / np.linalg.norm(random_direction)
+            step_size = np.random.exponential(mobility)
+            random_step = random_direction * step_size
+            
             proposed_pos = current_pos + random_step
             
-            px_int, py_int, pz_int = int(proposed_pos[0]), int(proposed_pos[1]), int(proposed_pos[2])
-            if not (0 <= px_int < container_dims[0] and 
-                   0 <= py_int < container_dims[1] and 
-                   0 <= pz_int < container_dims[2]):
+            # Check if proposed position is valid
+            if not self._is_valid_position(proposed_pos, container_dims, boundary_map):
                 continue
             
-            if boundary_map is not None and boundary_map[px_int, py_int, pz_int] == 1:
-                continue
-            
+            # Check region crossing if region map exists
             if self.region_map is not None:
-                if (0 <= px_int < self.region_map.shape[0] and 
-                    0 <= py_int < self.region_map.shape[1] and 
-                    0 <= pz_int < self.region_map.shape[2]):
+                px, py, pz = int(proposed_pos[0]), int(proposed_pos[1]), int(proposed_pos[2])
+                if (0 <= px < self.region_map.shape[0] and 
+                    0 <= py < self.region_map.shape[1] and 
+                    0 <= pz < self.region_map.shape[2]):
                     
-                    new_region = self.region_map[px_int, py_int, pz_int]
+                    new_region = self.region_map[px, py, pz]
                     
                     if current_region is not None and new_region != current_region:
-                        partition_key = f"{current_region}_to_{new_region}"
-                        if partition_key in self.partition_coefficients:
-                            partition_prob = self.partition_coefficients[partition_key]
-                            if np.random.rand() > partition_prob:
-                                continue
-                        elif new_region in self.partition_coefficients:
-                            partition_prob = self.partition_coefficients[new_region]
-                            if np.random.rand() > partition_prob:
-                                continue
+                        if not self._check_partition_crossing(current_region, new_region):
+                            continue
                     
                     current_region = new_region
             
+            # Accept the move
             current_pos = proposed_pos
             trajectory.append(current_pos.copy())
         
         self.trajectory = np.array(trajectory)
         
-        return np.sum((current_pos - start_pos)**2)
+        # Calculate final displacement squared
+        final_displacement_sq = np.sum((current_pos - start_pos)**2)
+        return final_displacement_sq
     
     def run_multi_particle_simulation(self, particle_diameters: List[float], 
                                     mobility: float, num_steps: int, 
                                     num_particles_per_size: int = 10) -> pd.DataFrame:
         """Run simulation for multiple particle sizes."""
         results = []
-        all_trajectories = []
+        self.all_trajectories = []
         
         for diameter in particle_diameters:
             for particle_idx in range(num_particles_per_size):
-                final_displacement = self.run_single_simulation(diameter, mobility, num_steps)
+                final_displacement_sq = self.run_single_simulation(diameter, mobility, num_steps)
+                
+                # Calculate diffusion coefficient using Einstein relation
+                # D = <r²>/(6*t) for 3D diffusion
+                time_interval = num_steps * 1.0  # Assuming unit time steps
+                diffusion_coefficient = final_displacement_sq / (6 * time_interval) if not np.isnan(final_displacement_sq) else np.nan
                 
                 results.append({
                     'particle_diameter': diameter,
                     'particle_id': f"{diameter}nm_{particle_idx}",
-                    'final_displacement_sq': final_displacement,
-                    'diffusion_coefficient': final_displacement / (6 * num_steps) if not np.isnan(final_displacement) else np.nan
+                    'final_displacement_sq': final_displacement_sq,
+                    'diffusion_coefficient': diffusion_coefficient,
+                    'mobility': mobility,
+                    'num_steps': num_steps
                 })
                 
                 if self.trajectory is not None:
-                    all_trajectories.append(self.trajectory.copy())
+                    self.all_trajectories.append(self.trajectory.copy())
         
         self.simulation_results = pd.DataFrame(results)
+        
+        # Store simulation parameters
+        self.simulation_params = {
+            'particle_diameters': particle_diameters,
+            'mobility': mobility,
+            'num_steps': num_steps,
+            'num_particles_per_size': num_particles_per_size,
+            'pixel_size_nm': self.pixel_size_nm,
+            'optical_slice_thickness_nm': self.optical_slice_thickness_nm
+        }
+        
         return self.simulation_results
     
-    def convert_to_tracks_format(self, max_particles: int = 10) -> pd.DataFrame:
+    def convert_to_tracks_format(self, trajectory_idx: int = 0) -> pd.DataFrame:
         """Convert simulation trajectory to SPT tracks format."""
-        if self.trajectory is None:
-            raise ValueError("No trajectory data available")
+        if not self.all_trajectories or trajectory_idx >= len(self.all_trajectories):
+            if self.trajectory is None:
+                raise ValueError("No trajectory data available")
+            trajectory = self.trajectory
+        else:
+            trajectory = self.all_trajectories[trajectory_idx]
         
         data = []
-        for frame_idx, pos in enumerate(self.trajectory):
+        for frame_idx, pos in enumerate(trajectory):
             data.append({
-                'track_id': 0,
+                'track_id': trajectory_idx,
                 'frame': frame_idx,
-                'x': pos[0],
-                'y': pos[1],
-                'z': pos[2],
-                'Quality': 1.0
+                'x': pos[0] * self.pixel_size_nm,  # Convert to nm
+                'y': pos[1] * self.pixel_size_nm,
+                'z': pos[2] * self.pixel_size_nm,
+                'Quality': 1.0,
+                'particle_id': trajectory_idx
             })
         
         return pd.DataFrame(data)
     
-    def calculate_msd(self, max_lag: Optional[int] = None) -> Dict[str, np.ndarray]:
-        """Calculate MSD from simulation trajectory with proper scaling."""
-        if self.trajectory is None:
+    def convert_all_to_tracks_format(self) -> pd.DataFrame:
+        """Convert all simulation trajectories to SPT tracks format."""
+        if not self.all_trajectories:
             raise ValueError("No trajectory data available")
         
-        n_frames = len(self.trajectory)
+        all_data = []
+        for traj_idx, trajectory in enumerate(self.all_trajectories):
+            for frame_idx, pos in enumerate(trajectory):
+                all_data.append({
+                    'track_id': traj_idx,
+                    'frame': frame_idx,
+                    'x': pos[0] * self.pixel_size_nm,
+                    'y': pos[1] * self.pixel_size_nm,
+                    'z': pos[2] * self.pixel_size_nm,
+                    'Quality': 1.0,
+                    'particle_id': traj_idx
+                })
+        
+        return pd.DataFrame(all_data)
+    
+    def calculate_msd(self, trajectory_idx: Optional[int] = None, max_lag: Optional[int] = None) -> Dict[str, np.ndarray]:
+        """Calculate MSD from simulation trajectory with proper scaling."""
+        if trajectory_idx is not None and trajectory_idx < len(self.all_trajectories):
+            trajectory = self.all_trajectories[trajectory_idx]
+        elif self.trajectory is not None:
+            trajectory = self.trajectory
+        else:
+            raise ValueError("No trajectory data available")
+        
+        n_frames = len(trajectory)
         if max_lag is None:
             max_lag = n_frames // 2
         else:
             max_lag = min(max_lag, n_frames - 1)
         
-        lag_times = range(1, max_lag + 1)
+        lag_times = np.arange(1, max_lag + 1)
         msd_values = []
         
         for lag in lag_times:
-            displacements = self.trajectory[lag:] - self.trajectory[:-lag]
+            displacements = trajectory[lag:] - trajectory[:-lag]
             squared_displacements = np.sum(displacements**2, axis=1) * (self.pixel_size_nm ** 2)
             msd_values.append(np.mean(squared_displacements))
         
         return {
-            'lag_time': np.array(lag_times),
+            'lag_time': lag_times,
             'msd': np.array(msd_values)
         }
     
-    def get_region_occupancy_stats(self) -> Dict[str, Any]:
+    def calculate_ensemble_msd(self, max_lag: Optional[int] = None) -> Dict[str, np.ndarray]:
+        """Calculate ensemble MSD from all trajectories."""
+        if not self.all_trajectories:
+            raise ValueError("No trajectory data available")
+        
+        # Find minimum trajectory length
+        min_length = min(len(traj) for traj in self.all_trajectories)
+        
+        if max_lag is None:
+            max_lag = min_length // 2
+        else:
+            max_lag = min(max_lag, min_length - 1)
+        
+        lag_times = np.arange(1, max_lag + 1)
+        ensemble_msd = []
+        
+        for lag in lag_times:
+            all_msd_values = []
+            for trajectory in self.all_trajectories:
+                if len(trajectory) > lag:
+                    displacements = trajectory[lag:] - trajectory[:-lag]
+                    squared_displacements = np.sum(displacements**2, axis=1) * (self.pixel_size_nm ** 2)
+                    all_msd_values.extend(squared_displacements)
+            
+            ensemble_msd.append(np.mean(all_msd_values))
+        
+        return {
+            'lag_time': lag_times,
+            'msd': np.array(ensemble_msd)
+        }
+    
+    def get_region_occupancy_stats(self, trajectory_idx: Optional[int] = None) -> Dict[str, Any]:
         """Calculate time spent in each region during simulation."""
-        if self.trajectory is None or self.region_map is None:
+        if trajectory_idx is not None and trajectory_idx < len(self.all_trajectories):
+            trajectory = self.all_trajectories[trajectory_idx]
+        elif self.trajectory is not None:
+            trajectory = self.trajectory
+        else:
+            return {}
+        
+        if self.region_map is None:
             return {}
         
         region_times = {}
-        total_steps = len(self.trajectory)
+        total_steps = len(trajectory)
         
-        for i, pos in enumerate(self.trajectory):
+        for i, pos in enumerate(trajectory):
             px, py, pz = int(pos[0]), int(pos[1]), int(pos[2])
             if (0 <= px < self.region_map.shape[0] and 
                 0 <= py < self.region_map.shape[1] and 
@@ -267,49 +394,230 @@ class DiffusionSimulator:
                     region_times[region_name] = 0
                 region_times[region_name] += 1
         
+        # Convert to percentages
         for region_name in region_times:
-            region_times[region_name] = region_times[region_name] / total_steps
+            region_times[region_name] = region_times[region_name] / total_steps * 100
         
         return region_times
     
-    def plot_trajectory(self, mode: str = '3d') -> go.Figure:
+    def get_simulation_summary(self) -> Dict[str, Any]:
+        """Get summary statistics of the simulation."""
+        if self.simulation_results is None:
+            return {}
+        
+        summary = {
+            'total_particles': len(self.simulation_results),
+            'particle_diameters': self.simulation_results['particle_diameter'].unique().tolist(),
+            'mean_diffusion_coefficient': self.simulation_results['diffusion_coefficient'].mean(),
+            'std_diffusion_coefficient': self.simulation_results['diffusion_coefficient'].std(),
+            'successful_simulations': self.simulation_results['diffusion_coefficient'].notna().sum(),
+            'failed_simulations': self.simulation_results['diffusion_coefficient'].isna().sum(),
+            'simulation_parameters': self.simulation_params
+        }
+        
+        return summary
+    
+    def plot_trajectory(self, trajectory_idx: Optional[int] = None, mode: str = '3d') -> go.Figure:
         """Plot simulation trajectory."""
-        if self.trajectory is None:
+        if trajectory_idx is not None and trajectory_idx < len(self.all_trajectories):
+            trajectory = self.all_trajectories[trajectory_idx]
+        elif self.trajectory is not None:
+            trajectory = self.trajectory
+        else:
             raise ValueError("No trajectory data available")
+        
+        # Convert to nm for plotting
+        trajectory_nm = trajectory * self.pixel_size_nm
         
         if mode == '3d':
             fig = go.Figure()
+            
+            # Plot trajectory
             fig.add_trace(go.Scatter3d(
-                x=self.trajectory[:, 0],
-                y=self.trajectory[:, 1],
-                z=self.trajectory[:, 2],
+                x=trajectory_nm[:, 0],
+                y=trajectory_nm[:, 1],
+                z=trajectory_nm[:, 2],
                 mode='lines+markers',
-                marker=dict(size=3),
-                line=dict(width=2),
-                name='Simulated Particle'
+                marker=dict(size=3, color='blue'),
+                line=dict(width=2, color='blue'),
+                name='Particle Trajectory'
             ))
+            
+            # Mark start and end points
+            fig.add_trace(go.Scatter3d(
+                x=[trajectory_nm[0, 0]],
+                y=[trajectory_nm[0, 1]],
+                z=[trajectory_nm[0, 2]],
+                mode='markers',
+                marker=dict(size=8, color='green', symbol='circle'),
+                name='Start'
+            ))
+            
+            fig.add_trace(go.Scatter3d(
+                x=[trajectory_nm[-1, 0]],
+                y=[trajectory_nm[-1, 1]],
+                z=[trajectory_nm[-1, 2]],
+                mode='markers',
+                marker=dict(size=8, color='red', symbol='circle'),
+                name='End'
+            ))
+            
             fig.update_layout(
-                title="Simulated Particle Trajectory",
+                title="Simulated Particle Trajectory (3D)",
                 scene=dict(
-                    xaxis_title="X Position",
-                    yaxis_title="Y Position",
-                    zaxis_title="Z Position"
-                )
+                    xaxis_title="X Position (nm)",
+                    yaxis_title="Y Position (nm)",
+                    zaxis_title="Z Position (nm)"
+                ),
+                width=800,
+                height=600
             )
         else:
             fig = go.Figure()
+            
+            # Plot trajectory
             fig.add_trace(go.Scatter(
-                x=self.trajectory[:, 0],
-                y=self.trajectory[:, 1],
+                x=trajectory_nm[:, 0],
+                y=trajectory_nm[:, 1],
                 mode='lines+markers',
-                marker=dict(size=5),
-                line=dict(width=2),
-                name='Simulated Particle'
+                marker=dict(size=3, color='blue'),
+                line=dict(width=2, color='blue'),
+                name='Particle Trajectory'
             ))
+            
+            # Mark start and end points
+            fig.add_trace(go.Scatter(
+                x=[trajectory_nm[0, 0]],
+                y=[trajectory_nm[0, 1]],
+                mode='markers',
+                marker=dict(size=10, color='green', symbol='circle'),
+                name='Start'
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=[trajectory_nm[-1, 0]],
+                y=[trajectory_nm[-1, 1]],
+                mode='markers',
+                marker=dict(size=10, color='red', symbol='circle'),
+                name='End'
+            ))
+            
             fig.update_layout(
                 title="Simulated Particle Trajectory (XY Plane)",
-                xaxis_title="X Position",
-                yaxis_title="Y Position"
+                xaxis_title="X Position (nm)",
+                yaxis_title="Y Position (nm)",
+                width=800,
+                height=600
             )
+        
+        return fig
+    
+    def plot_msd_analysis(self, trajectory_idx: Optional[int] = None) -> go.Figure:
+        """Plot MSD analysis with fitting."""
+        try:
+            if trajectory_idx is not None:
+                msd_data = self.calculate_msd(trajectory_idx)
+            else:
+                msd_data = self.calculate_ensemble_msd()
+            
+            fig = go.Figure()
+            
+            # Plot MSD data
+            fig.add_trace(go.Scatter(
+                x=msd_data['lag_time'],
+                y=msd_data['msd'],
+                mode='markers+lines',
+                name='MSD Data',
+                marker=dict(size=6, color='blue')
+            ))
+            
+            # Fit linear regression for diffusion coefficient
+            if len(msd_data['lag_time']) > 1:
+                slope, intercept = np.polyfit(msd_data['lag_time'], msd_data['msd'], 1)
+                fitted_line = slope * msd_data['lag_time'] + intercept
+                
+                fig.add_trace(go.Scatter(
+                    x=msd_data['lag_time'],
+                    y=fitted_line,
+                    mode='lines',
+                    name=f'Linear Fit (D = {slope/6:.3e} nm²/step)',
+                    line=dict(dash='dash', color='red')
+                ))
+            
+            fig.update_layout(
+                title="Mean Square Displacement Analysis",
+                xaxis_title="Lag Time (steps)",
+                yaxis_title="MSD (nm²)",
+                width=800,
+                height=600
+            )
+            
+            return fig
+            
+        except Exception as e:
+            # Return empty figure if MSD calculation fails
+            fig = go.Figure()
+            fig.update_layout(
+                title=f"MSD Analysis Error: {str(e)}",
+                xaxis_title="Lag Time (steps)",
+                yaxis_title="MSD (nm²)"
+            )
+            return fig
+    
+    def plot_diffusion_coefficients(self) -> go.Figure:
+        """Plot diffusion coefficients by particle size."""
+        if self.simulation_results is None:
+            raise ValueError("No simulation results available")
+        
+        fig = go.Figure()
+        
+        # Box plot of diffusion coefficients by particle diameter
+        for diameter in self.simulation_results['particle_diameter'].unique():
+            data = self.simulation_results[
+                self.simulation_results['particle_diameter'] == diameter
+            ]['diffusion_coefficient'].dropna()
+            
+            fig.add_trace(go.Box(
+                y=data,
+                name=f'{diameter} nm',
+                boxpoints='all',
+                jitter=0.3,
+                pointpos=-1.8
+            ))
+        
+        fig.update_layout(
+            title="Diffusion Coefficients by Particle Size",
+            xaxis_title="Particle Diameter",
+            yaxis_title="Diffusion Coefficient (nm²/step)",
+            width=800,
+            height=600
+        )
+        
+        return fig
+    
+    def plot_region_occupancy(self, trajectory_idx: Optional[int] = None) -> go.Figure:
+        """Plot region occupancy statistics."""
+        region_stats = self.get_region_occupancy_stats(trajectory_idx)
+        
+        if not region_stats:
+            fig = go.Figure()
+            fig.update_layout(title="No region data available")
+            return fig
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=list(region_stats.keys()),
+            y=list(region_stats.values()),
+            name='Region Occupancy'
+        ))
+        
+        fig.update_layout(
+            title="Region Occupancy Statistics",
+            xaxis_title="Region",
+            yaxis_title="Time Spent (%)",
+            width=800,
+            height=600
+        )
         
         return fig
