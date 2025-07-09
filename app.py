@@ -79,7 +79,8 @@ from multi_channel_analysis import (
 from analysis import (
     calculate_msd, analyze_diffusion, analyze_motion, analyze_clustering,
     analyze_dwell_time, analyze_gel_structure, analyze_diffusion_population,
-    analyze_crowding, analyze_active_transport, analyze_boundary_crossing
+    analyze_crowding, analyze_active_transport, analyze_boundary_crossing, 
+    analyze_polymer_physics
 )
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,

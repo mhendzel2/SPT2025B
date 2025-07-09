@@ -2895,3 +2895,119 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
     results['total_tracks'] = len(tracks_df['track_id'].unique()) if 'track_id' in tracks_df.columns else 0
     
     return results
+
+
+# --- Polymer Physics Analysis ---
+
+def analyze_polymer_physics(tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0) -> Dict[str, Any]:
+    """
+    Analyze polymer physics characteristics based on particle trajectories.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data in standard format
+    pixel_size : float
+        Pixel size in micrometers
+    frame_interval : float
+        Time between frames in seconds
+        
+    Returns
+    -------
+    dict
+        Dictionary containing polymer physics analysis results
+    """
+    import numpy as np
+    from scipy.stats import linregress
+    
+    # Convert pixel coordinates to µm if needed
+    tracks_df_um = tracks_df.copy()
+    if 'x' in tracks_df_um.columns and pixel_size != 1.0:
+        tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
+        tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
+    
+    # First, calculate MSD data which is needed for polymer analysis
+    msd_results = calculate_msd(tracks_df_um, pixel_size=1.0, frame_interval=frame_interval)  # Use 1.0 since we already converted
+    
+    if not msd_results or 'msd_data' not in msd_results:
+        return {"error": "Failed to calculate MSD data required for polymer physics analysis"}
+    
+    # Extract MSD data
+    msd_data = msd_results['msd_data']
+    lag_times = msd_results['lag_times']
+    
+    # Calculate Kuhn length (persistence length) and other polymer properties
+    # For particle tracking in a polymer network, we can estimate these from MSD behavior
+    results = {
+        'msd_data': msd_data,
+        'lag_times': lag_times,
+        'pixel_size': pixel_size,
+        'frame_interval': frame_interval
+    }
+    
+    # Calculate scaling exponent (alpha) for MSD ~ t^alpha
+    try:
+        log_times = np.log10(lag_times)
+        log_msd = np.log10(msd_data)
+        
+        # Perform linear fit on log-log scale
+        slope, intercept, r_value, p_value, std_err = linregress(log_times, log_msd)
+        
+        # Store scaling exponent and fit quality
+        results['scaling_exponent'] = slope
+        results['fit_r_squared'] = r_value**2
+        results['fit_p_value'] = p_value
+        results['fit_error'] = std_err
+        
+        # Interpret scaling exponent
+        if slope < 0.25:
+            results['regime'] = 'Strongly confined'
+        elif 0.25 <= slope < 0.5:
+            results['regime'] = 'Subdiffusive (reptation)'
+        elif 0.5 <= slope < 0.75:
+            results['regime'] = 'Zimm dynamics'
+        elif 0.75 <= slope < 1.0:
+            results['regime'] = 'Rouse dynamics'
+        elif 1.0 <= slope < 1.5:
+            results['regime'] = 'Normal to superdiffusive'
+        else:
+            results['regime'] = 'Active transport'
+            
+        # Estimate tube diameter for reptation model
+        if 0.25 <= slope < 0.5:
+            # Estimate tube diameter from early MSD plateau
+            early_msd = np.mean(msd_data[:min(5, len(msd_data))])
+            results['tube_diameter_um'] = 2 * np.sqrt(early_msd / 6)
+        
+        # Estimate mesh size based on crossover point
+        # Find where MSD deviates from initial slope
+        if len(msd_data) > 10:
+            # Calculate local slopes
+            local_slopes = []
+            window_size = min(5, len(log_msd) // 3)
+            
+            for i in range(len(log_msd) - window_size):
+                window_slope, _, _, _, _ = linregress(log_times[i:i+window_size], log_msd[i:i+window_size])
+                local_slopes.append(window_slope)
+            
+            # Find first significant deviation from initial slope
+            if local_slopes:
+                initial_slope = local_slopes[0]
+                crossover_idx = None
+                
+                for i, slope in enumerate(local_slopes):
+                    if abs(slope - initial_slope) > 0.3:  # Significant deviation threshold
+                        crossover_idx = i
+                        break
+                
+                if crossover_idx is not None:
+                    crossover_time = lag_times[crossover_idx]
+                    crossover_msd = msd_data[crossover_idx]
+                    
+                    results['crossover_time_s'] = crossover_time
+                    results['crossover_msd_um2'] = crossover_msd
+                    results['mesh_size_estimate_um'] = np.sqrt(crossover_msd)
+    except Exception as e:
+        results['error_fitting'] = str(e)
+    
+    return results

@@ -18,6 +18,7 @@ from scipy.special import gamma
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
+import os
 
 
 class MicrorheologyAnalyzer:
@@ -140,37 +141,21 @@ class MicrorheologyAnalyzer:
         if tau < msd_df['lag_time_s'].min() or tau > msd_df['lag_time_s'].max():
             return np.nan, np.nan
             
-        # Check for zero or negative MSD values
-        if any(msd_df['msd_m2'] <= 0):
-            return np.nan, np.nan
-            
         # Interpolate MSD at τ and estimate local slope
         log_times = np.log(msd_df['lag_time_s'])
         log_msd = np.log(msd_df['msd_m2'])
         
-        # Remove any infinite or NaN values
-        valid_mask = np.isfinite(log_times) & np.isfinite(log_msd)
-        if np.sum(valid_mask) < 3:
-            return np.nan, np.nan
-            
-        log_times = log_times[valid_mask]
-        log_msd = log_msd[valid_mask]
-        
         # Find closest point to tau
         idx = np.argmin(np.abs(msd_df['lag_time_s'] - tau))
         
-        # Ensure we have enough points around the target time
-        if idx == 0 and len(msd_df) > 1:
-            alpha = (log_msd[1] - log_msd[0]) / (log_times[1] - log_times[0])
-        elif idx == len(log_msd) - 1 and len(log_msd) > 1:
-            alpha = (log_msd[-1] - log_msd[-2]) / (log_times[-1] - log_times[-2])
-        elif len(log_msd) > 2:
-            # Use symmetric difference for better accuracy
-            alpha = (log_msd[min(idx + 1, len(log_msd) - 1)] - 
-                    log_msd[max(idx - 1, 0)]) / (log_times[min(idx + 1, len(log_times) - 1)] - 
-                    log_times[max(idx - 1, 0)])
+        # Estimate local slope α using neighboring points
+        if idx == 0:
+            alpha = (log_msd[idx + 1] - log_msd[idx]) / (log_times[idx + 1] - log_times[idx])
+        elif idx == len(msd_df) - 1:
+            alpha = (log_msd[idx] - log_msd[idx - 1]) / (log_times[idx] - log_times[idx - 1])
         else:
-            return np.nan, np.nan
+            # Use symmetric difference for better accuracy
+            alpha = (log_msd[idx + 1] - log_msd[idx - 1]) / (log_times[idx + 1] - log_times[idx - 1])
         
         # Ensure alpha is physically reasonable (0 < α < 2)
         alpha = np.clip(alpha, 0.01, 1.99)
@@ -178,38 +163,22 @@ class MicrorheologyAnalyzer:
         # Interpolate MSD at tau
         msd_at_tau = np.interp(tau, msd_df['lag_time_s'], msd_df['msd_m2'])
         
-        # Check for zero or very small MSD
-        if msd_at_tau <= 0 or msd_at_tau < 1e-20:
-            return np.nan, np.nan
-        
         # Calculate the prefactor using corrected GSER formula
         # G*(ω) = (kB*T) / (3*π*a*<Δr²(τ)>) * Γ(1+α) * (iω*τ)^α
-        try:
-            prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
-            
-            # Check for reasonable prefactor
-            if not np.isfinite(prefactor) or prefactor <= 0:
-                return np.nan, np.nan
-            
-            # Gamma function factor
-            gamma_factor = gamma(1 + alpha)
-            
-            # Complex frequency factor (iω*τ)^α = (ωτ)^α * e^(iα*π/2)
-            omega_tau_alpha = (omega_rad_s * tau) ** alpha
-            phase = alpha * np.pi / 2
-            
-            # Calculate G' and G"
-            g_prime = prefactor * gamma_factor * omega_tau_alpha * np.cos(phase)
-            g_double_prime = prefactor * gamma_factor * omega_tau_alpha * np.sin(phase)
-            
-            # Final validation
-            if not (np.isfinite(g_prime) and np.isfinite(g_double_prime)):
-                return np.nan, np.nan
-            
-            return g_prime, g_double_prime
-            
-        except (ValueError, OverflowError, ZeroDivisionError):
-            return np.nan, np.nan
+        prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
+        
+        # Gamma function factor
+        gamma_factor = gamma(1 + alpha)
+        
+        # Complex frequency factor (iω*τ)^α = (ωτ)^α * e^(iα*π/2)
+        omega_tau_alpha = (omega_rad_s * tau) ** alpha
+        phase = alpha * np.pi / 2
+        
+        # Calculate G' and G"
+        g_prime = prefactor * gamma_factor * omega_tau_alpha * np.cos(phase)
+        g_double_prime = prefactor * gamma_factor * omega_tau_alpha * np.sin(phase)
+        
+        return g_prime, g_double_prime
 
     def calculate_effective_viscosity(self, msd_df: pd.DataFrame, 
                                       lag_time_range_s: Tuple[float, float] = None) -> float:
@@ -914,9 +883,25 @@ def display_rheology_summary(analysis_results: Dict) -> None:
     analysis_results : Dict
         Results from multi_dataset_analysis or single dataset analysis
     """
+    if not analysis_results:
+        st.error("No microrheology analysis results available")
+        return
+        
     if not analysis_results.get('success', False):
         st.error(f"Microrheology analysis failed: {analysis_results.get('error', 'Unknown error')}")
         return
+    
+    # Store the available analyses in session state so other components can check it
+    if 'available_rheology_analyses' not in st.session_state:
+        st.session_state.available_rheology_analyses = []
+    
+    # Mark analyses as available
+    if 'datasets' in analysis_results and len(analysis_results['datasets']) > 0:
+        st.session_state.available_rheology_analyses.append('datasets')
+    if 'combined_frequency_response' in analysis_results:
+        st.session_state.available_rheology_analyses.append('frequency_response')
+    if 'dataset_comparison' in analysis_results:
+        st.session_state.available_rheology_analyses.append('comparison')
     
     st.subheader("Microrheology Analysis Summary")
     
