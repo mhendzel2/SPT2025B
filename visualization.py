@@ -70,7 +70,7 @@ def _qual_colour(i: int) -> str:
 def plot_tracks(
     tracks_df, max_tracks=50, colormap='viridis', 
     include_markers=True, marker_size=5, line_width=1,
-    title="Particle Tracks", plot_type='2D'
+    title="Particle Tracks", plot_type='2D', color_by=None
 ):
     """
     Create an interactive plot of particle tracks.
@@ -93,6 +93,8 @@ def plot_tracks(
         Plot title, by default "Particle Tracks"
     plot_type : str, optional
         Type of plot: '2D' for standard, 'time_coded' for time-color coded tracks
+    color_by : str, optional
+        Column name to use for coloring tracks (e.g., 'track_id', 'diffusion_coefficient')
         
     Returns
     -------
@@ -112,7 +114,51 @@ def plot_tracks(
     
     # Generate colors for each track based on track_id
     import plotly.express as px
-    colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+    
+    # Setup color mapping based on color_by parameter
+    if color_by and color_by in tracks_df.columns and color_by != 'track_id':
+        # Get the values to use for coloring
+        color_values = {}
+        for tid in unique_tracks:
+            track_data = tracks_df[tracks_df['track_id'] == tid]
+            # Use mean value of the column for each track
+            if not track_data.empty and not track_data[color_by].isna().all():
+                color_values[tid] = track_data[color_by].mean()
+            else:
+                color_values[tid] = np.nan
+        
+        # Remove tracks with NaN color values
+        valid_tracks = [tid for tid in unique_tracks if tid in color_values and not np.isnan(color_values[tid])]
+        
+        if valid_tracks:
+            color_vals = [color_values[tid] for tid in valid_tracks]
+            unique_tracks = valid_tracks
+            
+            # Create a color mapper function
+            min_val, max_val = np.min(color_vals), np.max(color_vals)
+            norm_vals = [(v - min_val) / (max_val - min_val) if max_val > min_val else 0.5 for v in color_vals]
+            colors = px.colors.sample_colorscale(colormap, norm_vals)
+            
+            # Add a colorbar
+            fig.update_layout(
+                coloraxis=dict(
+                    colorscale=colormap,
+                    colorbar=dict(
+                        title=color_by,
+                        thickness=15,
+                        len=0.5,
+                        y=0.5
+                    ),
+                    cmin=min_val,
+                    cmax=max_val
+                )
+            )
+        else:
+            # Fallback to default coloring
+            colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+    else:
+        # Default coloring by track_id
+        colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
     
     # Determine min and max frame for time-coded colors if needed
     if plot_type == 'time_coded' and 'frame' in tracks_df.columns:
@@ -775,6 +821,8 @@ def spatial_intensity_correlation(image_data, segmentation_data, properties_data
     dict
         Dictionary with correlation results between channels
     """
+    from scipy import stats
+    
     results = {}
     
     # Check if we have full image data
@@ -816,8 +864,14 @@ def spatial_intensity_correlation(image_data, segmentation_data, properties_data
         available_channels = set()
         for prop in properties_data:
             for key in prop.keys():
-                if key.startswith('intensity_mean_ch'):
-                    ch = int(key.split('_ch')[1])
+                if key.startswith('MEAN_INTENSITY_CH') or key.startswith('Mean intensity ch') or key.startswith('Mean ch'):
+                    # Extract channel number using different possible formats
+                    if key.startswith('MEAN_INTENSITY_CH'):
+                        ch = int(key.replace('MEAN_INTENSITY_CH', ''))
+                    elif key.startswith('Mean intensity ch'):
+                        ch = int(key.replace('Mean intensity ch', ''))
+                    elif key.startswith('Mean ch'):
+                        ch = int(key.replace('Mean ch', ''))
                     available_channels.add(ch)
         
         available_channels = sorted(list(available_channels))
@@ -833,8 +887,8 @@ def spatial_intensity_correlation(image_data, segmentation_data, properties_data
             for j, ch2 in enumerate(channel_indices[i+1:], i+1):
                 channel_key = f"ch{ch1}_ch{ch2}_prop"
                 results[channel_key] = {
-                    'pearson': [],
-                    'spearman': [],
+                    'pearson': None,
+                    'spearman': None,
                     'region_ids': []
                 }
                 
@@ -843,127 +897,152 @@ def spatial_intensity_correlation(image_data, segmentation_data, properties_data
                 region_ids = []
                 
                 for prop in properties_data:
-                    if f'intensity_mean_ch{ch1}' in prop and f'intensity_mean_ch{ch2}' in prop:
-                        ch1_values.append(prop[f'intensity_mean_ch{ch1}'])
-                        ch2_values.append(prop[f'intensity_mean_ch{ch2}'])
-                        region_ids.append(prop['label'])
+                    # Try different possible column naming formats
+                    ch1_key = None
+                    ch2_key = None
+                    
+                    # Check for different possible formats of intensity column names
+                    for prefix in ['MEAN_INTENSITY_CH', 'Mean intensity ch', 'Mean ch']:
+                        if f"{prefix}{ch1}" in prop:
+                            ch1_key = f"{prefix}{ch1}"
+                        if f"{prefix}{ch2}" in prop:
+                            ch2_key = f"{prefix}{ch2}"
+                    
+                    if ch1_key and ch2_key:
+                        ch1_values.append(float(prop[ch1_key]))
+                        ch2_values.append(float(prop[ch2_key]))
+                        region_ids.append(prop.get('ID', prop.get('Spot ID', prop.get('LABEL', len(region_ids)))))
                 
                 if len(ch1_values) > 2:  # Ensure enough regions for correlation
                     ch1_values = np.array(ch1_values)
                     ch2_values = np.array(ch2_values)
                     
-                    pearson = np.corrcoef(ch1_values, ch2_values)[0, 1]
-                    spearman = stats.spearmanr(ch1_values, ch2_values)[0]
-                    
-                    results[channel_key]['pearson'] = pearson
-                    results[channel_key]['spearman'] = spearman
-                    results[channel_key]['region_ids'] = region_ids
+                    try:
+                        pearson = np.corrcoef(ch1_values, ch2_values)[0, 1]
+                        spearman = stats.spearmanr(ch1_values, ch2_values)[0]
+                        
+                        results[channel_key]['pearson'] = pearson
+                        results[channel_key]['spearman'] = spearman
+                        results[channel_key]['region_ids'] = region_ids
+                        results[channel_key]['ch1_values'] = ch1_values.tolist()
+                        results[channel_key]['ch2_values'] = ch2_values.tolist()
+                    except Exception as e:
+                        results[channel_key]['error'] = str(e)
     
     return results
-def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis"):
+
+def plot_channel_correlations(correlation_results: dict) -> dict:
     """
-    Create visualization for motion model analysis results.
+    Create scatter plots for channel intensity correlations.
     
     Parameters
     ----------
-    motion_analysis_results : dict
-        Results dictionary from analyze_motion_models function
-    title : str
-        Title for the plot
+    correlation_results : dict
+        Results from spatial_intensity_correlation function
         
     Returns
     -------
-    fig : plotly.graph_objects.Figure
-        Interactive Plotly figure displaying motion model analysis
+    dict
+        Dictionary of plotly figures for each channel pair
     """
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    import numpy as np
-    import pandas as pd
+    import plotly.express as px
     
-    # Create summary dataframe for model classification
-    if 'classifications' not in motion_analysis_results:
-        return go.Figure().update_layout(
-            title="No motion analysis data available",
-            xaxis_title="Error",
-            yaxis_title="Error"
-        )
+    figures = {}
     
-    # Count occurrences of each model type
-    model_counts = {}
-    for track_id, model in motion_analysis_results['classifications'].items():
-        if model not in model_counts:
-            model_counts[model] = 0
-        model_counts[model] += 1
-    
-    # Create model parameters dataframe
-    params_data = []
-    for track_id, model in motion_analysis_results['classifications'].items():
-        if track_id in motion_analysis_results['model_parameters'] and model in motion_analysis_results['model_parameters'][track_id]:
-            params = motion_analysis_results['model_parameters'][track_id][model]
-            params_data.append({
-                'track_id': track_id,
-                'model': model,
-                **params
-            })
-    
-    params_df = pd.DataFrame(params_data) if params_data else None
-    
-    # Create subplot figure
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=["Model Classification", "Parameter Distribution"],
-        specs=[[{"type": "pie"}, {"type": "box"}]]
-    )
-    
-    # Add pie chart for model classification
-    model_labels = list(model_counts.keys())
-    model_values = list(model_counts.values())
-    
-    fig.add_trace(
-        go.Pie(
-            labels=model_labels,
-            values=model_values,
-            textinfo='label+percent',
-            marker_colors=['#1f77b4', '#ff7f0e', '#2ca02c']
-        ),
-        row=1, col=1
-    )
-    
-    # Add boxplot for model parameters if data is available
-    if params_df is not None and 'D' in params_df.columns:
-        model_colors = {
-            'brownian': '#1f77b4',
-            'directed': '#ff7f0e',
-            'confined': '#2ca02c'
-        }
-        
-        # Create boxplot for diffusion coefficients
-        boxplot_data = []
-        
-        for model in model_labels:
-            model_params = params_df[params_df['model'] == model]
-            if not model_params.empty and 'D' in model_params.columns:
-                boxplot_data.append(
-                    go.Box(
-                        y=model_params['D'],
-                        name=model,
-                        marker_color=model_colors.get(model, '#636EFA'),
-                        boxmean=True
-                    )
-                )
-        
-        for box_trace in boxplot_data:
-            fig.add_trace(box_trace, row=1, col=2)
+    for key, data in correlation_results.items():
+        # Skip entries without correlation data
+        if ('pearson' not in data or data['pearson'] is None or 
+            'ch1_values' not in data or 'ch2_values' not in data):
+            continue
             
-        fig.update_yaxes(title_text="Diffusion Coefficient (μm²/s)", type="log", row=1, col=2)
+        # Extract channel numbers from the key
+        if '_prop' in key:
+            ch_pair = key.replace('_prop', '')
+        else:
+            ch_pair = key
+            
+        # Create DataFrame for plotting
+        df = pd.DataFrame({
+            'Channel 1': data['ch1_values'],
+            'Channel 2': data['ch2_values'],
+            'Region ID': data['region_ids']
+        })
+        
+        # Create scatter plot
+        fig = px.scatter(
+            df, x='Channel 1', y='Channel 2',
+            hover_data=['Region ID'],
+            title=f"{ch_pair} Correlation (Pearson: {data['pearson']:.3f}, Spearman: {data['spearman']:.3f})"
+        )
+        
+        # Add correlation line
+        if len(df) > 1:
+            x_range = [df['Channel 1'].min(), df['Channel 1'].max()]
+            slope, intercept = np.polyfit(df['Channel 1'], df['Channel 2'], 1)
+            fig.add_trace(
+                go.Scatter(
+                    x=x_range,
+                    y=[slope * x + intercept for x in x_range],
+                    mode='lines',
+                    line=dict(color='red', dash='dash'),
+                    name=f'y = {slope:.3f}x + {intercept:.3f}'
+                )
+            )
+        
+        figures[ch_pair] = fig
     
-    # Update layout
+    return figures
+
+def plot_track_density_map(tracks_df, sigma=5.0, bins=100, colorscale='Viridis'):
+    """
+    Create a 2D density map of track positions.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data with columns 'x', 'y'
+    sigma : float
+        Standard deviation for Gaussian kernel in pixels
+    bins : int
+        Number of bins for 2D histogram
+    colorscale : str
+        Colorscale name for density map
+        
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive density map figure
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data available")
+    
+    # Create a 2D histogram
+    x = tracks_df['x'].values
+    y = tracks_df['y'].values
+    
+    h, x_edges, y_edges = np.histogram2d(x, y, bins=bins)
+    
+    # Apply Gaussian smoothing if sigma > 0
+    if sigma > 0:
+        from scipy.ndimage import gaussian_filter
+        h_smooth = gaussian_filter(h, sigma=sigma)
+    else:
+        h_smooth = h
+    
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=h_smooth.T,  # Transpose for correct orientation
+        x=x_edges,
+        y=y_edges,
+        colorscale=colorscale,
+        colorbar=dict(title='Density')
+    ))
+    
     fig.update_layout(
-        title_text=title,
-        showlegend=True,
-        height=500,
-        width=900
+        title='Track Density Map',
+        xaxis_title='X Position',
+        yaxis_title='Y Position',
+        template='plotly_white'
     )
     
     return fig
