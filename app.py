@@ -27,6 +27,19 @@ import plotly.express as px
 import project_management as pm
 from scipy.stats import linregress
 
+# Import report generation module
+try:
+    # CORRECTED: Import the EnhancedSPTReportGenerator class from the correct file
+    # Import both the report generator class and the helper function that
+    # displays the Streamlit interface.
+    from enhanced_report_generator import (
+        EnhancedSPTReportGenerator,
+        show_enhanced_report_generator,
+    )
+    REPORT_GENERATOR_AVAILABLE = True
+except ImportError:
+    REPORT_GENERATOR_AVAILABLE = False
+
 # Import utility modules
 from data_loader import load_image_file, load_tracks_file
 from constants import DEFAULT_PIXEL_SIZE, DEFAULT_FRAME_INTERVAL
