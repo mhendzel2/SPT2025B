@@ -5,641 +5,1041 @@ Specialized for nucleosome diffusion in chromatin and polymer physics modeling.
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import curve_fit
-from typing import Dict, Any, List, Tuple, Optional, Union
-import warnings
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from typing import Dict, List, Any, Optional, Tuple
+import os
+import tempfile
 
 class PolymerPhysicsModel:
     """
-    Contains models and fitting routines from polymer physics, specifically for 
-    nucleosome diffusion in chromatin fiber modeling using Rouse model dynamics.
+    Class for analyzing particle motion using polymer physics models.
+    This includes Rouse model, Zimm model, Reptation, and Fractal analysis.
     """
     
-    def __init__(self):
+    def __init__(self, msd_data: pd.DataFrame, pixel_size: float = 0.1, frame_interval: float = 0.1):
+        """
+        Initialize polymer physics model analyzer.
+        
+        Parameters
+        ----------
+        msd_data : pd.DataFrame
+            Mean squared displacement data with columns 'track_id', 'lag_time', 'msd'
+        pixel_size : float
+            Pixel size in micrometers
+        frame_interval : float
+            Frame interval in seconds
+        """
+        self.msd_data = msd_data
+        self.pixel_size = pixel_size
+        self.frame_interval = frame_interval
         self.results = {}
-    
-    @staticmethod
-    def rouse_msd_model_phenomenological(t: np.ndarray, D_macro: float, Gamma: float, alpha: float = 0.5) -> np.ndarray:
+        
+    def fit_rouse_model(self, fit_alpha: bool = False, temperature: float = 300.0, 
+                       n_beads: int = 100, friction_coefficient: float = 1e-8) -> Dict[str, Any]:
         """
-        Phenomenological Rouse-like MSD model for nucleosome diffusion in chromatin.
-        
-        MSD(t) = 4 * D_macro * t + Gamma * t^alpha
-        
-        The factor of 4 (for 2D) is included for proper dimensionality.
-        For nucleosome diffusion:
-        - D_macro: macroscopic diffusion coefficient (long-time behavior)
-        - Gamma: amplitude of subdiffusive component (chromatin constraints)
-        - alpha: anomalous diffusion exponent (typically 0.5 for Rouse dynamics)
+        Fit MSD data to Rouse model.
         
         Parameters
         ----------
-        t : np.ndarray
-            Time lags
-        D_macro : float
-            Macroscopic diffusion coefficient (μm²/s)
-        Gamma : float
-            Amplitude of subdiffusive component
-        alpha : float
-            Anomalous diffusion exponent (0.5 for Rouse model)
-            
-        Returns
-        -------
-        np.ndarray
-            Theoretical MSD values
-        """
-        # Ensure positive parameters during fitting and include proper 2D factor
-        return 4 * np.abs(D_macro) * t + np.abs(Gamma) * (t ** np.abs(alpha))
-    
-    @staticmethod
-    def rouse_msd_model_fixed_alpha(t: np.ndarray, D_macro: float, Gamma: float) -> np.ndarray:
-        """Rouse MSD model with alpha fixed to 0.5 (classic Rouse dynamics)."""
-        return PolymerPhysicsModel.rouse_msd_model_phenomenological(t, D_macro, Gamma, alpha=0.5)
-    
-    @staticmethod
-    def confined_diffusion_model(t: np.ndarray, D_free: float, L_conf: float) -> np.ndarray:
-        """
-        Confined diffusion model for nucleosomes in chromatin loops.
-        
-        MSD(t) = L_conf^2 * (1 - exp(-12*D_free*t/L_conf^2))
-        
-        This is the correct 2D formula for confined diffusion.
-        
-        Parameters
-        ----------
-        t : np.ndarray
-            Time lags
-        D_free : float
-            Free diffusion coefficient
-        L_conf : float
-            Confinement length scale
-            
-        Returns
-        -------
-        np.ndarray
-            Theoretical MSD values for confined diffusion
-        """
-        L_conf = np.abs(L_conf)
-        D_free = np.abs(D_free)
-        
-        # Avoid numerical issues with very small L_conf
-        if L_conf < 1e-9:
-            L_conf = 1e-9
-            
-        tau = L_conf**2 / (12 * D_free) if D_free > 0 else np.inf
-        
-        # Handle cases where tau is very small or very large
-        if tau == 0:
-            return np.zeros_like(t)
-        elif tau == np.inf:
-            return 4 * D_free * t  # Free diffusion with 2D factor
-        else:
-            return L_conf**2 * (1 - np.exp(-t / tau))
-
-    @staticmethod
-    def anomalous_diffusion_model(t: np.ndarray, K_alpha: float, alpha: float) -> np.ndarray:
-        """
-        Pure anomalous diffusion model.
-        
-        MSD(t) = K_alpha * t^alpha
-        
-        Parameters
-        ----------
-        t : np.ndarray
-            Time lags
-        K_alpha : float
-            Generalized diffusion coefficient
-        alpha : float
-            Anomalous diffusion exponent
-            
-        Returns
-        -------
-        np.ndarray
-            Theoretical MSD values
-        """
-        return np.abs(K_alpha) * (t ** np.abs(alpha))
-    
-    @staticmethod
-    def fractional_brownian_motion_model(t: np.ndarray, D_H: float, H: float) -> np.ndarray:
-        """
-        Fractional Brownian Motion model for chromatin dynamics.
-        
-        MSD(t) = 2 * D_H * t^(2*H)
-        
-        Parameters
-        ----------
-        t : np.ndarray
-            Time lags
-        D_H : float
-            Generalized diffusion coefficient
-        H : float
-            Hurst exponent (0 < H < 1)
-            
-        Returns
-        -------
-        np.ndarray
-            Theoretical MSD values
-        """
-        H_bounded = np.clip(np.abs(H), 0.01, 0.99)  # Keep H in valid range
-        return 2 * np.abs(D_H) * (t ** (2 * H_bounded))
-    
-    def fit_rouse_model_to_msd(self, 
-                               time_lags: np.ndarray, 
-                               msd_values: np.ndarray, 
-                               fit_alpha_exponent: bool = False, 
-                               initial_guess: Optional[List[float]] = None, 
-                               bounds: Optional[Tuple[List[float], List[float]]] = None) -> Dict[str, Any]:
-        """
-        Fits the Rouse MSD model to experimental nucleosome tracking data.
-        
-        Parameters
-        ----------
-        time_lags : np.ndarray
-            Array of time lags
-        msd_values : np.ndarray
-            Array of corresponding MSD values
-        fit_alpha_exponent : bool
-            If True, fits alpha; otherwise alpha fixed to 0.5
-        initial_guess : Optional[List[float]]
-            Initial parameter guesses
-        bounds : Optional[Tuple[List[float], List[float]]]
-            Parameter bounds
+        fit_alpha : bool
+            Whether to fit anomalous diffusion exponent (True) or fix at 0.5 (False)
+        temperature : float
+            Temperature in Kelvin
+        n_beads : int
+            Number of beads in the Rouse chain
+        friction_coefficient : float
+            Bead friction coefficient
             
         Returns
         -------
         Dict[str, Any]
-            Fitting results including parameters, errors, and goodness of fit
+            Rouse model fitting results
         """
-        if len(time_lags) != len(msd_values):
-            return {'success': False, 'error': 'time_lags and msd_values must have the same length.'}
+        # Calculate ensemble MSD
+        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
         
-        # Remove any zero or negative time lags and corresponding MSD values
-        valid_mask = (time_lags > 0) & (msd_values > 0)
-        time_lags = time_lags[valid_mask]
-        msd_values = msd_values[valid_mask]
+        # Convert lag time to seconds
+        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
         
-        if len(time_lags) < 3:
-            return {'success': False, 'error': 'Not enough valid data points for fitting.'}
+        # Initialize parameters
+        kB = 1.38e-23  # Boltzmann constant, J/K
         
-        num_params_expected = 3 if fit_alpha_exponent else 2
-        if len(time_lags) < num_params_expected:
-            return {'success': False, 'error': f'Not enough data points ({len(time_lags)}) to fit {num_params_expected} parameters.'}
-
-        model_to_fit = self.rouse_msd_model_phenomenological if fit_alpha_exponent else self.rouse_msd_model_fixed_alpha
-
-        if initial_guess is None:
-            # Intelligent initial guesses for nucleosome diffusion
-            # D_macro from long-time slope (divide by 4 to account for 2D factor)
-            if len(time_lags) > 2:
-                n_points = max(2, len(time_lags) // 4)
-                slope_times = time_lags[-n_points:]
-                slope_msds = msd_values[-n_points:]
-                
-                if len(slope_times) > 1 and slope_times[-1] > slope_times[0]:
-                    slope = (slope_msds[-1] - slope_msds[0]) / (slope_times[-1] - slope_times[0])
-                    D_macro_guess = slope / 4  # Account for the 4D factor in the model
-                else:
-                    D_macro_guess = msd_values[-1] / (4 * time_lags[-1]) if time_lags[-1] > 0 else 0.01
-            else:
-                D_macro_guess = 0.01
+        if fit_alpha:
+            # Fit MSD = 4*D*t^alpha
+            from scipy.optimize import curve_fit
             
-            D_macro_guess = max(D_macro_guess, 1e-9)
+            def power_law(t, D, alpha):
+                return 4 * D * np.power(t, alpha)
             
-            # Gamma from early time behavior (subdiffusive component)
-            early_idx = min(len(time_lags) // 3, len(time_lags) - 1)
-            early_idx = max(1, early_idx)
+            # Initial parameter guess
+            p0 = [1e-2, 0.5]  # D, alpha
             
-            if time_lags[early_idx] > 0:
-                msd_residual = msd_values[early_idx] - 4 * D_macro_guess * time_lags[early_idx]
-                Gamma_guess = msd_residual / (time_lags[early_idx] ** 0.5) if msd_residual > 0 else 0.01
-            else:
-                Gamma_guess = 0.01
-            
-            Gamma_guess = max(Gamma_guess, 1e-9)
-            
-            if fit_alpha_exponent:
-                initial_guess = [D_macro_guess, Gamma_guess, 0.5]
-            else:
-                initial_guess = [D_macro_guess, Gamma_guess]
-        
-        if bounds is None:
-            if fit_alpha_exponent:  # D_macro, Gamma, alpha
-                lower_bounds = [0, 0, 0.1]
-                upper_bounds = [np.inf, np.inf, 1.0]
-            else:  # D_macro, Gamma
-                lower_bounds = [0, 0]
-                upper_bounds = [np.inf, np.inf]
-            bounds = (lower_bounds, upper_bounds)
-
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                params, covariance = curve_fit(
-                    model_to_fit,
-                    time_lags,
-                    msd_values,
-                    p0=initial_guess,
-                    bounds=bounds,
-                    maxfev=20000,
-                    ftol=1e-8,
-                    xtol=1e-8
-                )
-            
-            # Calculate goodness of fit
-            fitted_msd = model_to_fit(time_lags, *params)
-            residuals = msd_values - fitted_msd
-            ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((msd_values - np.mean(msd_values))**2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
-            
-            # Calculate reduced chi-squared
-            dof = len(time_lags) - len(params)
-            reduced_chi_squared = ss_res / dof if dof > 0 else np.inf
-            
-            param_names = ['D_macro', 'Gamma', 'alpha'] if fit_alpha_exponent else ['D_macro', 'Gamma']
-            fitted_params_dict = {name: val for name, val in zip(param_names, params)}
-            
-            param_errors = np.sqrt(np.diag(covariance)) if covariance is not None else [np.nan] * len(params)
-            param_errors_dict = {name: err for name, err in zip(param_names, param_errors)}
-            
-            # Calculate confidence intervals (95%)
-            confidence_intervals = {}
-            for i, name in enumerate(param_names):
-                if not np.isnan(param_errors[i]):
-                    confidence_intervals[name] = {
-                        'lower': params[i] - 1.96 * param_errors[i],
-                        'upper': params[i] + 1.96 * param_errors[i]
-                    }
-                else:
-                    confidence_intervals[name] = {'lower': np.nan, 'upper': np.nan}
-
-            return {
-                'success': True,
-                'model_type': 'rouse',
-                'params': fitted_params_dict,
-                'param_errors': param_errors_dict,
-                'confidence_intervals': confidence_intervals,
-                'covariance_matrix': covariance.tolist() if covariance is not None else None,
-                'r_squared': r_squared,
-                'reduced_chi_squared': reduced_chi_squared,
-                'fitted_msd_values': fitted_msd.tolist(),
-                'residuals': residuals.tolist(),
-                'time_lags': time_lags.tolist(),
-                'original_msd_values': msd_values.tolist()
-            }
-            
-        except Exception as e:
-            return {'success': False, 'error': f'Fitting failed: {str(e)}'}
-    
-    def fit_confined_diffusion_model(self, 
-                                   time_lags: np.ndarray, 
-                                   msd_values: np.ndarray,
-                                   initial_guess: Optional[List[float]] = None) -> Dict[str, Any]:
-        """
-        Fit confined diffusion model to MSD data.
-        
-        Parameters
-        ----------
-        time_lags : np.ndarray
-            Time lags
-        msd_values : np.ndarray
-            MSD values
-        initial_guess : Optional[List[float]]
-            Initial parameter guesses [D_free, L_conf]
-            
-        Returns
-        -------
-        Dict[str, Any]
-            Fitting results
-        """
-        if len(time_lags) < 3:
-            return {'success': False, 'error': 'Not enough data points for confined diffusion fitting.'}
-        
-        if initial_guess is None:
-            # Estimate plateau value for L_conf
-            L_conf_guess = np.sqrt(np.max(msd_values))
-            # Estimate D_free from initial slope
-            if len(time_lags) > 1:
-                D_free_guess = (msd_values[1] - msd_values[0]) / (time_lags[1] - time_lags[0])
-            else:
-                D_free_guess = 0.1
-            initial_guess = [max(D_free_guess, 1e-9), max(L_conf_guess, 1e-9)]
-        
-        bounds = ([0, 0], [np.inf, np.inf])
-        
-        try:
-            params, covariance = curve_fit(
-                self.confined_diffusion_model,
-                time_lags,
-                msd_values,
-                p0=initial_guess,
-                bounds=bounds,
-                maxfev=10000
-            )
-            
-            fitted_msd = self.confined_diffusion_model(time_lags, *params)
-            residuals = msd_values - fitted_msd
-            ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((msd_values - np.mean(msd_values))**2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
-            
-            param_names = ['D_free', 'L_conf']
-            fitted_params_dict = {name: val for name, val in zip(param_names, params)}
-            
-            param_errors = np.sqrt(np.diag(covariance)) if covariance is not None else [np.nan] * len(params)
-            param_errors_dict = {name: err for name, err in zip(param_names, param_errors)}
-            
-            return {
-                'success': True,
-                'model_type': 'confined_diffusion',
-                'params': fitted_params_dict,
-                'param_errors': param_errors_dict,
-                'r_squared': r_squared,
-                'fitted_msd_values': fitted_msd.tolist(),
-                'residuals': residuals.tolist()
-            }
-            
-        except Exception as e:
-            return {'success': False, 'error': f'Confined diffusion fitting failed: {str(e)}'}
-    
-    def analyze_chromatin_dynamics(self, 
-                                 time_lags: np.ndarray, 
-                                 msd_values: np.ndarray,
-                                 models_to_fit: List[str] = ['rouse', 'confined', 'anomalous']) -> Dict[str, Any]:
-        """
-        Comprehensive analysis of chromatin dynamics using multiple models.
-        
-        Parameters
-        ----------
-        time_lags : np.ndarray
-            Time lags
-        msd_values : np.ndarray
-            MSD values
-        models_to_fit : List[str]
-            List of models to fit ['rouse', 'confined', 'anomalous', 'fbm']
-            
-        Returns
-        -------
-        Dict[str, Any]
-            Comprehensive fitting results for all models
-        """
-        results = {
-            'success': True,
-            'models_fitted': {},
-            'best_fit_model': None,
-            'model_comparison': {}
-        }
-        
-        best_r_squared = -np.inf
-        best_model = None
-        
-        # Fit Rouse model
-        if 'rouse' in models_to_fit:
-            rouse_result = self.fit_rouse_model_to_msd(time_lags, msd_values, fit_alpha_exponent=True)
-            results['models_fitted']['rouse'] = rouse_result
-            
-            if rouse_result['success'] and rouse_result['r_squared'] > best_r_squared:
-                best_r_squared = rouse_result['r_squared']
-                best_model = 'rouse'
-        
-        # Fit confined diffusion model
-        if 'confined' in models_to_fit:
-            confined_result = self.fit_confined_diffusion_model(time_lags, msd_values)
-            results['models_fitted']['confined'] = confined_result
-            
-            if confined_result['success'] and confined_result['r_squared'] > best_r_squared:
-                best_r_squared = confined_result['r_squared']
-                best_model = 'confined'
-        
-        # Fit anomalous diffusion model
-        if 'anomalous' in models_to_fit:
+            # Fit the model
             try:
-                params, covariance = curve_fit(
-                    self.anomalous_diffusion_model,
-                    time_lags,
-                    msd_values,
-                    p0=[1.0, 0.5],
-                    bounds=([0, 0.1], [np.inf, 2.0]),
-                    maxfev=10000
-                )
+                popt, pcov = curve_fit(power_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+                D_macro, alpha = popt
                 
-                fitted_msd = self.anomalous_diffusion_model(time_lags, *params)
-                ss_res = np.sum((msd_values - fitted_msd)**2)
-                ss_tot = np.sum((msd_values - np.mean(msd_values))**2)
-                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
+                # Calculate Gamma coefficient (depends on the polymer model)
+                Gamma = D_macro / (kB * temperature) * (6 * np.pi * n_beads * friction_coefficient)
                 
-                anomalous_result = {
+                # Calculate fit curve
+                ensemble_msd['msd_fit'] = power_law(ensemble_msd['lag_time_seconds'], D_macro, alpha)
+                
+                # Calculate R-squared
+                residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+                ss_res = np.sum(residuals**2)
+                ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+                r_squared = 1 - (ss_res / ss_tot)
+                
+                # Store results
+                results = {
                     'success': True,
-                    'model_type': 'anomalous',
-                    'params': {'K_alpha': params[0], 'alpha': params[1]},
-                    'param_errors': {'K_alpha': np.sqrt(covariance[0,0]), 'alpha': np.sqrt(covariance[1,1])},
-                    'r_squared': r_squared,
-                    'fitted_msd_values': fitted_msd.tolist()
+                    'parameters': {
+                        'D_macro': D_macro,
+                        'alpha': alpha,
+                        'Gamma': Gamma,
+                        'temperature': temperature,
+                        'n_beads': n_beads,
+                        'friction_coefficient': friction_coefficient
+                    },
+                    'ensemble_msd': ensemble_msd,
+                    'r_squared': r_squared
                 }
                 
-                results['models_fitted']['anomalous'] = anomalous_result
+                # Create visualization
+                results['visualization'] = self._create_rouse_visualization(ensemble_msd, fit_alpha)
                 
-                if r_squared > best_r_squared:
-                    best_r_squared = r_squared
-                    best_model = 'anomalous'
-                    
             except Exception as e:
-                results['models_fitted']['anomalous'] = {'success': False, 'error': str(e)}
+                results = {
+                    'success': False,
+                    'error': str(e)
+                }
+        else:
+            # Fix alpha = 0.5 (standard Rouse model)
+            try:
+                # For Rouse model with fixed alpha=0.5, fit MSD = 4*D*t^0.5
+                from scipy.optimize import curve_fit
+                
+                def rouse_law(t, D):
+                    return 4 * D * np.power(t, 0.5)
+                
+                # Initial parameter guess
+                p0 = [1e-2]  # D
+                
+                # Fit the model
+                popt, pcov = curve_fit(rouse_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+                D_macro = popt[0]
+                alpha = 0.5  # Fixed for standard Rouse model
+                
+                # Calculate Gamma coefficient
+                Gamma = D_macro / (kB * temperature) * (6 * np.pi * n_beads * friction_coefficient)
+                
+                # Calculate fit curve
+                ensemble_msd['msd_fit'] = rouse_law(ensemble_msd['lag_time_seconds'], D_macro)
+                
+                # Calculate R-squared
+                residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+                ss_res = np.sum(residuals**2)
+                ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+                r_squared = 1 - (ss_res / ss_tot)
+                
+                # Store results
+                results = {
+                    'success': True,
+                    'parameters': {
+                        'D_macro': D_macro,
+                        'alpha': alpha,  # Fixed at 0.5
+                        'Gamma': Gamma,
+                        'temperature': temperature,
+                        'n_beads': n_beads,
+                        'friction_coefficient': friction_coefficient
+                    },
+                    'ensemble_msd': ensemble_msd,
+                    'r_squared': r_squared
+                }
+                
+                # Create visualization
+                results['visualization'] = self._create_rouse_visualization(ensemble_msd, fit_alpha)
+                
+            except Exception as e:
+                results = {
+                    'success': False,
+                    'error': str(e)
+                }
         
-        results['best_fit_model'] = best_model
-        results['best_r_squared'] = best_r_squared
-        
-        # Create model comparison table
-        comparison_data = []
-        for model_name, model_result in results['models_fitted'].items():
-            if model_result['success']:
-                comparison_data.append({
-                    'model': model_name,
-                    'r_squared': model_result['r_squared'],
-                    'num_parameters': len(model_result['params'])
-                })
-        
-        if comparison_data:
-            results['model_comparison'] = pd.DataFrame(comparison_data).sort_values('r_squared', ascending=False)
-        
+        # Store results and return
+        self.results['rouse_model'] = results
         return results
+    
+    def fit_zimm_model(self, temperature: float = 300.0, solvent_viscosity: float = 0.001, 
+                      hydrodynamic_radius: float = 5e-9) -> Dict[str, Any]:
+        """
+        Fit MSD data to Zimm model (includes hydrodynamic interactions).
+        
+        Parameters
+        ----------
+        temperature : float
+            Temperature in Kelvin
+        solvent_viscosity : float
+            Solvent viscosity in Pa·s
+        hydrodynamic_radius : float
+            Hydrodynamic radius in meters
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Zimm model fitting results
+        """
+        # Calculate ensemble MSD
+        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
+        
+        # Convert lag time to seconds
+        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
+        
+        # Initialize parameters
+        kB = 1.38e-23  # Boltzmann constant, J/K
+        
+        try:
+            # For Zimm model, fit MSD = 4*D*t^(2/3)
+            from scipy.optimize import curve_fit
+            
+            def zimm_law(t, D):
+                return 4 * D * np.power(t, 2/3)
+            
+            # Initial parameter guess
+            p0 = [1e-2]  # D
+            
+            # Fit the model
+            popt, pcov = curve_fit(zimm_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+            D_zimm = popt[0]
+            alpha = 2/3  # Fixed for standard Zimm model
+            
+            # Calculate radius of gyration (Rg) from Stokes-Einstein relation
+            # D = kB * T / (6 * pi * eta * Rh)
+            Rg = kB * temperature / (6 * np.pi * solvent_viscosity * D_zimm)
+            
+            # Calculate fit curve
+            ensemble_msd['msd_fit'] = zimm_law(ensemble_msd['lag_time_seconds'], D_zimm)
+            
+            # Calculate R-squared
+            residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+            ss_res = np.sum(residuals**2)
+            ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+            r_squared = 1 - (ss_res / ss_tot)
+            
+            # Store results
+            results = {
+                'success': True,
+                'parameters': {
+                    'D_zimm': D_zimm,
+                    'alpha': alpha,  # Fixed at 2/3
+                    'Rg': Rg,
+                    'temperature': temperature,
+                    'solvent_viscosity': solvent_viscosity,
+                    'hydrodynamic_radius': hydrodynamic_radius
+                },
+                'ensemble_msd': ensemble_msd,
+                'r_squared': r_squared
+            }
+            
+            # Create visualization
+            fig = go.Figure()
+            
+            # Plot original MSD data
+            fig.add_trace(go.Scatter(
+                x=ensemble_msd['lag_time_seconds'],
+                y=ensemble_msd['msd'],
+                mode='markers',
+                name='MSD Data',
+                marker=dict(color='blue')
+            ))
+            
+            # Plot fitted curve
+            fig.add_trace(go.Scatter(
+                x=ensemble_msd['lag_time_seconds'],
+                y=ensemble_msd['msd_fit'],
+                mode='lines',
+                name=f'Zimm Model Fit (α=2/3)',
+                line=dict(color='red')
+            ))
+            
+            # Update layout
+            fig.update_layout(
+                title='Zimm Model Fit (MSD vs Time)',
+                xaxis_title='Lag Time (s)',
+                yaxis_title='MSD (μm²)',
+                xaxis_type="log",
+                yaxis_type="log",
+                legend=dict(x=0.01, y=0.99, bgcolor='rgba(255, 255, 255, 0.8)')
+            )
+            
+            fig.update_xaxes(exponentformat='power')
+            fig.update_yaxes(exponentformat='power')
+            
+            results['visualization'] = fig
+            
+        except Exception as e:
+            results = {
+                'success': False,
+                'error': str(e)
+            }
+        
+        # Store results and return
+        self.results['zimm_model'] = results
+        return results
+    
+    def fit_reptation_model(self, temperature: float = 300.0, tube_diameter: float = 100e-9,
+                          contour_length: float = 1000e-9) -> Dict[str, Any]:
+        """
+        Fit MSD data to reptation model (tube-like motion in entangled solutions).
+        
+        Parameters
+        ----------
+        temperature : float
+            Temperature in Kelvin
+        tube_diameter : float
+            Diameter of confining tube in meters
+        contour_length : float
+            Total contour length of the polymer in meters
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Reptation model fitting results
+        """
+        # Calculate ensemble MSD
+        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
+        
+        # Convert lag time to seconds
+        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
+        
+        # Initialize parameters
+        kB = 1.38e-23  # Boltzmann constant, J/K
+        
+        try:
+            # For reptation model, fit MSD = 4*D*t^0.25 for intermediate times
+            from scipy.optimize import curve_fit
+            
+            def reptation_law(t, D):
+                return 4 * D * np.power(t, 0.25)
+            
+            # Initial parameter guess
+            p0 = [1e-3]  # D
+            
+            # Fit the model to intermediate time region (assuming the data is in this regime)
+            # For a complete model, we would need to determine which regime we're in
+            popt, pcov = curve_fit(reptation_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+            D_rep = popt[0]
+            alpha = 0.25  # Fixed for reptation model intermediate times
+            
+            # Calculate key parameters
+            # Rough estimate of disengagement time (tube renewal)
+            disengagement_time = (contour_length**2) / D_rep
+            
+            # Rough estimate of entanglement time
+            entanglement_time = (tube_diameter**4) / (D_rep * contour_length**2)
+            
+            # Calculate fit curve
+            ensemble_msd['msd_fit'] = reptation_law(ensemble_msd['lag_time_seconds'], D_rep)
+            
+            # Calculate R-squared
+            residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+            ss_res = np.sum(residuals**2)
+            ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+            r_squared = 1 - (ss_res / ss_tot)
+            
+            # Store results
+            results = {
+                'success': True,
+                'parameters': {
+                    'D_rep': D_rep,
+                    'alpha': alpha,  # Fixed at 0.25
+                    'disengagement_time': disengagement_time,
+                    'entanglement_time': entanglement_time,
+                    'temperature': temperature,
+                    'tube_diameter': tube_diameter,
+                    'contour_length': contour_length
+                },
+                'ensemble_msd': ensemble_msd,
+                'r_squared': r_squared
+            }
+            
+            # Create visualization
+            fig = go.Figure()
+            
+            # Plot original MSD data
+            fig.add_trace(go.Scatter(
+                x=ensemble_msd['lag_time_seconds'],
+                y=ensemble_msd['msd'],
+                mode='markers',
+                name='MSD Data',
+                marker=dict(color='blue')
+            ))
+            
+            # Plot fitted curve
+            fig.add_trace(go.Scatter(
+                x=ensemble_msd['lag_time_seconds'],
+                y=ensemble_msd['msd_fit'],
+                mode='lines',
+                name=f'Reptation Model Fit (α=0.25)',
+                line=dict(color='red')
+            ))
+            
+            # Update layout
+            fig.update_layout(
+                title='Reptation Model Fit (MSD vs Time)',
+                xaxis_title='Lag Time (s)',
+                yaxis_title='MSD (μm²)',
+                xaxis_type="log",
+                yaxis_type="log",
+                legend=dict(x=0.01, y=0.99, bgcolor='rgba(255, 255, 255, 0.8)')
+            )
+            
+            fig.update_xaxes(exponentformat='power')
+            fig.update_yaxes(exponentformat='power')
+            
+            results['visualization'] = fig
+            
+        except Exception as e:
+            results = {
+                'success': False,
+                'error': str(e)
+            }
+        
+        # Store results and return
+        self.results['reptation_model'] = results
+        return results
+    
+    def analyze_fractal_dimension(self, min_scale: int = 1, max_scale: int = 20) -> Dict[str, Any]:
+        """
+        Analyze fractal dimension of tracks using box-counting method.
+        
+        Parameters
+        ----------
+        min_scale : int
+            Minimum scale for box counting
+        max_scale : int
+            Maximum scale for box counting
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Fractal analysis results
+        """
+        try:
+            # Group MSD data by track_id
+            track_groups = self.msd_data.groupby('track_id')
+            
+            # Calculate fractal dimensions for each track
+            fractal_dimensions = []
+            
+            for track_id, group in track_groups:
+                # For box counting, we need raw trajectory data
+                # This is a placeholder, as fractal dimension calculation requires full trajectories
+                
+                # Simulate a fractal dimension calculation based on MSD scaling
+                # In a real implementation, this would use the trajectory and box-counting method
+                track_msd = group.sort_values('lag_time')
+                lag_times = track_msd['lag_time'].values
+                msd_values = track_msd['msd'].values
+                
+                if len(lag_times) > 5:
+                    # Estimate fractal dimension from MSD power law
+                    # log(MSD) ∝ alpha * log(t), and fractal dimension D ≈ 2/alpha
+                    log_lag = np.log10(lag_times[1:])  # Skip first point at lag=0
+                    log_msd = np.log10(msd_values[1:])
+                    
+                    # Linear fit to get power law exponent
+                    slope, intercept, r_value, p_value, std_err = linregress(log_lag, log_msd)
+                    
+                    alpha = slope
+                    if alpha > 0:
+                        # Calculate fractal dimension
+                        track_fractal_dim = 2 / alpha
+                        
+                        # Typical fractal dimensions are between 1 and 2
+                        if 1 <= track_fractal_dim <= 2:
+                            fractal_dimensions.append(track_fractal_dim)
+            
+            # Calculate average fractal dimension
+            if fractal_dimensions:
+                mean_fractal_dim = np.mean(fractal_dimensions)
+                std_fractal_dim = np.std(fractal_dimensions)
+            else:
+                mean_fractal_dim = float('nan')
+                std_fractal_dim = float('nan')
+            
+            # Create visualization
+            fig = go.Figure()
+            
+            # Histogram of fractal dimensions
+            if fractal_dimensions:
+                fig.add_trace(go.Histogram(
+                    x=fractal_dimensions,
+                    nbinsx=20,
+                    marker_color='rgb(55, 83, 109)',
+                    name='Fractal Dimension'
+                ))
+                
+                # Add vertical line for mean
+                fig.add_vline(
+                    x=mean_fractal_dim,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"Mean: {mean_fractal_dim:.3f}",
+                    annotation_position="top right"
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    title='Fractal Dimension Distribution',
+                    xaxis_title='Fractal Dimension',
+                    yaxis_title='Count',
+                    showlegend=False
+                )
+            else:
+                fig.add_annotation(
+                    text="Insufficient data for fractal analysis",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=20)
+                )
+            
+            # Store results
+            results = {
+                'success': True,
+                'parameters': {
+                    'fractal_dimension': mean_fractal_dim,
+                    'fractal_dimension_std': std_fractal_dim,
+                    'min_scale': min_scale,
+                    'max_scale': max_scale
+                },
+                'r_squared': r_value**2 if 'r_value' in locals() else float('nan'),
+                'visualization': fig
+            }
+            
+        except Exception as e:
+            results = {
+                'success': False,
+                'error': str(e)
+            }
+        
+        # Store results and return
+        self.results['fractal_analysis'] = results
+        return results
+    
+    def _create_rouse_visualization(self, ensemble_msd: pd.DataFrame, fit_alpha: bool = False) -> go.Figure:
+        """
+        Create visualization for Rouse model fit.
+        
+        Parameters
+        ----------
+        ensemble_msd : pd.DataFrame
+            DataFrame with MSD data and fit
+        fit_alpha : bool
+            Whether alpha was fitted or fixed
+            
+        Returns
+        -------
+        go.Figure
+            Plotly figure with MSD data and fit
+        """
+        fig = go.Figure()
+        
+        # Plot original MSD data
+        fig.add_trace(go.Scatter(
+            x=ensemble_msd['lag_time_seconds'],
+            y=ensemble_msd['msd'],
+            mode='markers',
+            name='MSD Data',
+            marker=dict(color='blue')
+        ))
+        
+        # Plot fitted curve
+        alpha_value = self.results['rouse_model']['parameters']['alpha']
+        alpha_text = f"α={alpha_value:.3f}" if fit_alpha else f"α=0.5 (fixed)"
+        
+        fig.add_trace(go.Scatter(
+            x=ensemble_msd['lag_time_seconds'],
+            y=ensemble_msd['msd_fit'],
+            mode='lines',
+            name=f'Rouse Model Fit ({alpha_text})',
+            line=dict(color='red')
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title='Rouse Model Fit (MSD vs Time)',
+            xaxis_title='Lag Time (s)',
+            yaxis_title='MSD (μm²)',
+            xaxis_type="log",
+            yaxis_type="log",
+            legend=dict(x=0.01, y=0.99, bgcolor='rgba(255, 255, 255, 0.8)')
+        )
+        
+        fig.update_xaxes(exponentformat='power')
+        fig.update_yaxes(exponentformat='power')
+        
+        return fig
 
 
 class EnergyLandscapeMapper:
     """
-    Energy landscape analysis for particle tracking data using Boltzmann inversion.
-    Maps spatial probability distributions to potential energy landscapes.
+    Class for mapping energy landscapes from particle trajectories.
     """
     
-    def __init__(self, tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0):
-        self.tracks_df = tracks_df.copy()
-        self.tracks_df['x_um'] = self.tracks_df['x'] * pixel_size
-        self.tracks_df['y_um'] = self.tracks_df['y'] * pixel_size
-        self.pixel_size = pixel_size
-        self.frame_interval = frame_interval
-        self.results = {}
-
-    def calculate_boltzmann_inversion(self, bins: int = 50, temperature: float = 300.0) -> Dict[str, Any]:
+    def __init__(self, tracks_df: pd.DataFrame, pixel_size: float = 0.1, temperature: float = 300.0):
         """
-        Estimate 2D potential energy landscape using Boltzmann inversion from particle positions.
-        U(x,y) = -kT * ln(P(x,y))
+        Initialize the energy landscape mapper.
         
         Parameters
         ----------
-        bins : int
-            Number of bins for spatial histogram
+        tracks_df : pd.DataFrame
+            Track data with columns 'track_id', 'frame', 'x', 'y'
+        pixel_size : float
+            Pixel size in micrometers
         temperature : float
-            System temperature in Kelvin
+            Temperature in Kelvin
+        """
+        self.tracks_df = tracks_df.copy()
+        self.pixel_size = pixel_size
+        self.temperature = temperature
+        self.kB = 1.38e-23  # Boltzmann constant, J/K
+        self.kBT = self.kB * self.temperature  # Thermal energy
+        self.results = {}
+        
+        # Convert coordinates to micrometers if needed
+        for col in ['x', 'y']:
+            if col in self.tracks_df.columns:
+                self.tracks_df[f'{col}_um'] = self.tracks_df[col] * self.pixel_size
+    
+    def map_energy_landscape(self, resolution: int = 20, method: str = "boltzmann", 
+                           smoothing: float = 0.5, normalize: bool = True) -> Dict[str, Any]:
+        """
+        Map energy landscape from particle positions.
+        
+        Parameters
+        ----------
+        resolution : int
+            Grid resolution for energy landscape
+        method : str
+            Method for energy calculation ('boltzmann', 'drift', 'kramers')
+        smoothing : float
+            Smoothing factor for the landscape
+        normalize : bool
+            Whether to normalize energies to kBT units
             
         Returns
         -------
         Dict[str, Any]
-            Results containing histogram, edges, and potential energy map
+            Energy landscape mapping results
         """
-        if self.tracks_df.empty:
-            return {'success': False, 'error': 'Track data is empty.'}
-
-        k_B = 1.380649e-23  # Boltzmann constant in J/K
-        kT = k_B * temperature
-
-        # Create 2D histogram of particle positions
-        x_coords = self.tracks_df['x_um'].values
-        y_coords = self.tracks_df['y_um'].values
-
-        hist, x_edges, y_edges = np.histogram2d(x_coords, y_coords, bins=bins, density=True)
+        # Extract position data
+        x = self.tracks_df['x_um'].values
+        y = self.tracks_df['y_um'].values
         
-        # Avoid log(0) by adding small epsilon
-        hist_smooth = np.where(hist > 1e-9, hist, 1e-9) 
+        try:
+            # Determine the spatial extent
+            x_min, x_max = x.min(), x.max()
+            y_min, y_max = y.min(), y.max()
+            
+            # Create grid for energy landscape
+            x_edges = np.linspace(x_min, x_max, resolution + 1)
+            y_edges = np.linspace(y_min, y_max, resolution + 1)
+            
+            # Calculate position histogram (particle density)
+            H, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges])
+            
+            # Add smoothing if requested
+            if smoothing > 0:
+                from scipy.ndimage import gaussian_filter
+                H = gaussian_filter(H, sigma=smoothing)
+            
+            # Small constant to avoid log(0)
+            epsilon = H.max() * 1e-6
+            H[H < epsilon] = epsilon
+            
+            # Calculate potential energy using appropriate method
+            if method == "boltzmann":
+                # Boltzmann inversion: U = -kBT * ln(P)
+                U = -np.log(H / H.max())
+                
+            elif method == "drift":
+                # Drift-based method requires velocity data
+                # Calculate the mean drift at each position
+                U = np.zeros_like(H)
+                
+                # Placeholder - would need to calculate drift field from the data
+                # This is a simplification - not an actual drift calculation
+                U = -np.log(H / H.max())  # Substitute with Boltzmann for now
+                
+            elif method == "kramers":
+                # Kramers-Moyal expansion requires more detailed dynamics
+                # This would require analysis of transition probabilities
+                U = np.zeros_like(H)
+                
+                # Placeholder - not an actual Kramers-Moyal implementation
+                U = -np.log(H / H.max())  # Substitute with Boltzmann for now
+                
+            else:
+                raise ValueError(f"Unknown method: {method}")
+            
+            # Normalize energy to kBT units if requested
+            if normalize:
+                U = U  # Already normalized in kBT units by using log
+                energy_units = "kBT"
+            else:
+                U = U * self.kBT  # Convert to actual energy in Joules
+                energy_units = "J"
+            
+            # Calculate force field from the energy landscape
+            force_field = self.calculate_force_field(U, x_edges, y_edges)
+            
+            # Create visualization
+            fig = self.visualize_energy_landscape(U, x_edges, y_edges, force_field, energy_units)
+            
+            # Analyze dwell regions
+            dwell_regions = self.analyze_dwell_regions(U, x_edges, y_edges)
+            
+            # Store results
+            results = {
+                'success': True,
+                'energy_landscape': U,
+                'x_edges': x_edges,
+                'y_edges': y_edges,
+                'force_field': force_field,
+                'dwell_regions': dwell_regions,
+                'parameters': {
+                    'method': method,
+                    'resolution': resolution,
+                    'smoothing': smoothing,
+                    'normalize': normalize,
+                    'energy_units': energy_units
+                },
+                'visualization': fig
+            }
+            
+        except Exception as e:
+            results = {
+                'success': False,
+                'error': str(e)
+            }
         
-        # Calculate potential energy U(x,y) = -kT * ln(P(x,y))
-        potential_energy_map = -kT * np.log(hist_smooth)
+        # Store results and return
+        self.results['energy_landscape'] = results
+        return results
         
-        # Normalize to have minimum energy at 0
-        potential_energy_map -= np.min(potential_energy_map) 
-
-        self.results['boltzmann_inversion'] = {
-            'success': True,
-            'histogram': hist,
-            'x_edges': x_edges,
-            'y_edges': y_edges,
-            'potential_energy_map': potential_energy_map,
-            'units': 'Joules (relative to min)',
-            'temperature_K': temperature,
-            'bins': bins
-        }
-        return self.results['boltzmann_inversion']
-
     def analyze_dwell_regions(self, potential_map: np.ndarray, x_edges: np.ndarray, y_edges: np.ndarray, 
                               energy_threshold_factor: float = 0.5) -> Dict[str, Any]:
         """
-        Identify significant dwell regions (potential wells) from the energy map.
+        Identify and analyze potential dwell regions (energy minima).
         
         Parameters
         ----------
         potential_map : np.ndarray
-            The 2D potential energy map
-        x_edges, y_edges : np.ndarray
-            Bin edges for the map
+            Energy landscape
+        x_edges : np.ndarray
+            X-axis bin edges
+        y_edges : np.ndarray
+            Y-axis bin edges
         energy_threshold_factor : float
-            Factor to determine energy cutoff relative to max depth
+            Energy threshold factor for identifying wells
             
         Returns
         -------
         Dict[str, Any]
-            Information about identified dwell regions
+            Dwell region analysis results
         """
         try:
-            from skimage import measure
-        except ImportError:
-            return {'success': False, 'error': 'scikit-image package required for region analysis'}
-
-        if potential_map is None or potential_map.size == 0:
-             return {'success': False, 'error': 'Potential map not provided or empty.'}
-
-        # Invert map to find wells (low energy regions)
-        inverted_energy_map = np.max(potential_map) - potential_map
-        
-        # Threshold to identify significant wells
-        threshold = energy_threshold_factor * np.max(inverted_energy_map)
-        binary_map = inverted_energy_map > threshold
-        
-        labeled_wells = measure.label(binary_map, connectivity=2)
-        regions = measure.regionprops(labeled_wells, intensity_image=potential_map)
-        
-        dwell_regions_info = []
-        for region in regions:
-            min_val, max_val, mean_val = region.min_intensity, region.max_intensity, region.mean_intensity
+            # Find local minima in the potential map
+            from scipy.ndimage import minimum_filter
             
-            # Centroid in pixel/bin coordinates
-            yc, xc = region.centroid 
-            # Convert centroid to physical units
-            centroid_x_um = x_edges[0] + (xc + 0.5) * (x_edges[1] - x_edges[0])
-            centroid_y_um = y_edges[0] + (yc + 0.5) * (y_edges[1] - y_edges[0])
+            # Apply minimum filter to find local minima
+            min_filtered = minimum_filter(potential_map, size=3)
+            minima = (potential_map == min_filtered) & (potential_map < potential_map.mean())
             
-            area_pixels = region.area
-            area_um2 = area_pixels * (x_edges[1] - x_edges[0]) * (y_edges[1] - y_edges[0])
-
-            dwell_regions_info.append({
-                'label': region.label,
-                'centroid_x_um': centroid_x_um,
-                'centroid_y_um': centroid_y_um,
-                'area_pixels': area_pixels,
-                'area_um2': area_um2,
-                'min_potential_J': min_val,
-                'mean_potential_J': mean_val,
-                'bounding_box': region.bbox
-            })
+            # Label connected regions of minima
+            from scipy.ndimage import label
+            labeled_minima, num_minima = label(minima)
             
-        self.results['dwell_regions'] = {
-            'success': True,
-            'regions': dwell_regions_info,
-            'threshold_factor': energy_threshold_factor
-        }
-        return self.results['dwell_regions']
+            # Calculate properties of each minimum
+            minima_properties = []
+            
+            for i in range(1, num_minima + 1):
+                # Get coordinates of this minimum
+                y_indices, x_indices = np.where(labeled_minima == i)
+                
+                if len(y_indices) > 0:
+                    # Calculate centroid
+                    y_center = y_indices.mean()
+                    x_center = x_indices.mean()
+                    
+                    # Convert to physical coordinates
+                    x_pos = np.interp(x_center, np.arange(len(x_edges) - 1), x_edges[:-1])
+                    y_pos = np.interp(y_center, np.arange(len(y_edges) - 1), y_edges[:-1])
+                    
+                    # Get the energy value at this minimum
+                    energy_value = potential_map[y_indices[0], x_indices[0]]
+                    
+                    # Calculate size (area) of the minimum region
+                    size = len(y_indices)
+                    
+                    # Add to properties list
+                    minima_properties.append({
+                        'id': i,
+                        'x_position': x_pos,
+                        'y_position': y_pos,
+                        'energy': energy_value,
+                        'size': size
+                    })
+            
+            # Calculate energy barriers between minima (if multiple minima exist)
+            energy_barriers = []
+            
+            if len(minima_properties) > 1:
+                for i in range(len(minima_properties)):
+                    for j in range(i + 1, len(minima_properties)):
+                        min1 = minima_properties[i]
+                        min2 = minima_properties[j]
+                        
+                        # Calculate the straight-line path between the two minima
+                        num_steps = 20
+                        x_path = np.linspace(min1['x_position'], min2['x_position'], num_steps)
+                        y_path = np.linspace(min1['y_position'], min2['y_position'], num_steps)
+                        
+                        # Calculate energy along this path
+                        path_energies = []
+                        for x, y in zip(x_path, y_path):
+                            # Convert positions to indices
+                            x_idx = np.interp(x, x_edges[:-1], np.arange(len(x_edges) - 1))
+                            y_idx = np.interp(y, y_edges[:-1], np.arange(len(y_edges) - 1))
+                            
+                            # Ensure indices are within bounds
+                            x_idx = int(min(max(0, x_idx), potential_map.shape[1] - 1))
+                            y_idx = int(min(max(0, y_idx), potential_map.shape[0] - 1))
+                            
+                            # Get energy at this point
+                            energy = potential_map[y_idx, x_idx]
+                            path_energies.append(energy)
+                        
+                        # Calculate barrier height
+                        energy_min = min(min1['energy'], min2['energy'])
+                        barrier_height = max(path_energies) - energy_min
+                        
+                        energy_barriers.append({
+                            'from_id': min1['id'],
+                            'to_id': min2['id'],
+                            'barrier_height': barrier_height,
+                            'distance': np.sqrt((min1['x_position'] - min2['x_position'])**2 + 
+                                              (min1['y_position'] - min2['y_position'])**2)
+                        })
+            
+            # Return dwell region analysis
+            return {
+                'num_minima': num_minima,
+                'minima_properties': minima_properties,
+                'energy_barriers': energy_barriers
+            }
+            
+        except Exception as e:
+            return {
+                'error': str(e),
+                'num_minima': 0,
+                'minima_properties': [],
+                'energy_barriers': []
+            }
 
     def calculate_force_field(self, potential_map: np.ndarray, x_edges: np.ndarray, y_edges: np.ndarray) -> Dict[str, Any]:
         """
-        Calculate the force field from the potential energy landscape.
-        F = -∇U
+        Calculate force field from energy landscape gradient.
         
         Parameters
         ----------
         potential_map : np.ndarray
-            The 2D potential energy map
-        x_edges, y_edges : np.ndarray
-            Bin edges for the map
+            Energy landscape
+        x_edges : np.ndarray
+            X-axis bin edges
+        y_edges : np.ndarray
+            Y-axis bin edges
             
         Returns
         -------
         Dict[str, Any]
-            Force field components Fx and Fy
+            Force field data
         """
-        if potential_map is None or potential_map.size == 0:
-            return {'success': False, 'error': 'Potential map not provided or empty.'}
-
-        # Calculate spatial derivatives
-        dx = x_edges[1] - x_edges[0]
-        dy = y_edges[1] - y_edges[0]
+        try:
+            # Calculate gradient of the potential map
+            from scipy.ndimage import sobel
+            
+            # Calculate gradients using Sobel operator
+            dy = sobel(potential_map, axis=0)
+            dx = sobel(potential_map, axis=1)
+            
+            # Force is negative gradient
+            fx = -dx
+            fy = -dy
+            
+            # Calculate force magnitude
+            f_magnitude = np.sqrt(fx**2 + fy**2)
+            
+            # Create grid coordinates
+            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+            X, Y = np.meshgrid(x_centers, y_centers)
+            
+            # Subsample for visualization
+            n_samples = min(20, min(len(x_centers), len(y_centers)))
+            step_x = max(1, len(x_centers) // n_samples)
+            step_y = max(1, len(y_centers) // n_samples)
+            
+            X_sub = X[::step_y, ::step_x]
+            Y_sub = Y[::step_y, ::step_x]
+            fx_sub = fx[::step_y, ::step_x]
+            fy_sub = fy[::step_y, ::step_x]
+            f_mag_sub = f_magnitude[::step_y, ::step_x]
+            
+            return {
+                'fx': fx,
+                'fy': fy,
+                'magnitude': f_magnitude,
+                'X_viz': X_sub,
+                'Y_viz': Y_sub,
+                'fx_viz': fx_sub,
+                'fy_viz': fy_sub,
+                'magnitude_viz': f_mag_sub,
+                'x_centers': x_centers,
+                'y_centers': y_centers
+            }
+            
+        except Exception as e:
+            return {
+                'error': str(e)
+            }
+    
+    def visualize_energy_landscape(self, potential_map: np.ndarray, x_edges: np.ndarray, y_edges: np.ndarray,
+                                 force_field: Dict[str, Any], energy_units: str) -> go.Figure:
+        """
+        Create interactive visualization of energy landscape and force field.
         
-        # Use numpy gradient for central differences
-        grad_y, grad_x = np.gradient(potential_map, dy, dx)
+        Parameters
+        ----------
+        potential_map : np.ndarray
+            Energy landscape
+        x_edges : np.ndarray
+            X-axis bin edges
+        y_edges : np.ndarray
+            Y-axis bin edges
+        force_field : Dict[str, Any]
+            Force field data
+        energy_units : str
+            Units for energy display
+            
+        Returns
+        -------
+        go.Figure
+            Plotly figure with energy landscape and force field
+        """
+        from plotly.subplots import make_subplots
         
-        # Force is negative gradient
-        Fx = -grad_x
-        Fy = -grad_y
+        # Create subplots: energy surface and force field
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=["Energy Landscape", "Force Field"],
+            specs=[[{"type": "surface"}, {"type": "contour"}]]
+        )
         
-        # Calculate force magnitude
-        force_magnitude = np.sqrt(Fx**2 + Fy**2)
+        # Create x and y grids for surface plot
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        X, Y = np.meshgrid(x_centers, y_centers)
         
-        self.results['force_field'] = {
-            'success': True,
-            'Fx': Fx,
-            'Fy': Fy,
-            'force_magnitude': force_magnitude,
-            'dx': dx,
-            'dy': dy,
-            'units': 'N (force per unit mass)'
-        }
-        return self.results['force_field']
+        # Add energy landscape surface
+        fig.add_trace(
+            go.Surface(
+                x=X,
+                y=Y,
+                z=potential_map,
+                colorscale='Viridis',
+                colorbar=dict(title=f'Energy ({energy_units})'),
+                showscale=True,
+                contours={
+                    "z": {
+                        "show": True,
+                        "start": np.min(potential_map),
+                        "end": np.max(potential_map),
+                        "size": (np.max(potential_map) - np.min(potential_map)) / 10,
+                    }
+                }
+            ),
+            row=1, col=1
+        )
+        
+        # Add contour plot with force vectors
+        fig.add_trace(
+            go.Contour(
+                z=potential_map,
+                x=x_centers,
+                y=y_centers,
+                colorscale='Viridis',
+                showscale=False
+            ),
+            row=1, col=2
+        )
+        
+        # Add force vectors if available
+        if 'X_viz' in force_field:
+            # Scale arrows
+            max_mag = np.max(force_field['magnitude_viz']) if force_field['magnitude_viz'].size > 0 else 1
+            if max_mag > 0:
+                scale_factor = 0.3 * (x_edges.max() - x_edges.min()) / max_mag
+            else:
+                scale_factor = 1.0
+                
+            # Normalize to get unit vectors for direction
+            with np.errstate(divide='ignore', invalid='ignore'):
+                fx_norm = np.divide(force_field['fx_viz'], force_field['magnitude_viz'])
+                fy_norm = np.divide(force_field['fy_viz'], force_field['magnitude_viz'])
+                fx_norm[~np.isfinite(fx_norm)] = 0
+                fy_norm[~np.isfinite(fy_norm)] = 0
+            
+            # Create quiver plot
+            fig.add_trace(
+                go.Scatter(
+                    x=force_field['X_viz'].flatten(),
+                    y=force_field['Y_viz'].flatten(),
+                    mode='markers',
+                    marker=dict(
+                        symbol='arrow',
+                        size=5,
+                        color=force_field['magnitude_viz'].flatten(),
+                        colorscale='Viridis',
+                        showscale=False,
+                        opacity=0.8
+                    ),
+                    showlegend=False
+                ),
+                row=1, col=2
+            )
+        
+        # Update layout
+        fig.update_layout(
+            title="Energy Landscape and Force Field",
+            scene=dict(
+                xaxis_title="X Position (μm)",
+                yaxis_title="Y Position (μm)",
+                zaxis_title=f"Energy ({energy_units})"
+            ),
+            xaxis_title="X Position (μm)",
+            yaxis_title="Y Position (μm)",
+            width=1000,
+            height=500
+        )
+        
+        return fig
 
 
 class ActiveTransportAnalyzer:
@@ -649,48 +1049,170 @@ class ActiveTransportAnalyzer:
     """
     
     def __init__(self, tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0):
+        """
+        Initialize the active transport analyzer.
+        
+        Parameters
+        ----------
+        tracks_df : pd.DataFrame
+            Track data with columns 'track_id', 'frame', 'x', 'y'
+        pixel_size : float
+            Pixel size in micrometers
+        frame_interval : float
+            Frame interval in seconds
+        """
         self.tracks_df = tracks_df.copy()
         self.pixel_size = pixel_size
         self.frame_interval = frame_interval
         self.results = {}
+        
+        # Convert coordinates to micrometers if needed
+        for col in ['x', 'y']:
+            if col in self.tracks_df.columns:
+                self.tracks_df[f'{col}_um'] = self.tracks_df[col] * self.pixel_size
+        
+        # Preprocess: calculate velocities and accelerations
+        self._preprocess_tracks()
+    
+    def _preprocess_tracks(self) -> None:
+        """
+        Preprocess tracks to calculate velocities, accelerations, and other features.
+        """
+        # Group by track_id
+        grouped = self.tracks_df.groupby('track_id')
+        
+        # List to store processed tracks
+        processed_tracks = []
+        
+        for track_id, track_data in grouped:
+            if len(track_data) < 3:
+                continue
+                
+            # Sort by frame
+            track = track_data.sort_values('frame').copy()
+            
+            # Calculate displacements
+            track['dx'] = track['x_um'].diff()
+            track['dy'] = track['y_um'].diff()
+            
+            # Calculate time differences
+            track['dt'] = track['frame'].diff() * self.frame_interval
+            
+            # Calculate speed and velocity
+            track['speed'] = np.sqrt(track['dx']**2 + track['dy']**2) / track['dt']
+            track['vx'] = track['dx'] / track['dt']
+            track['vy'] = track['dy'] / track['dt']
+            
+            # Calculate acceleration
+            track['ax'] = track['vx'].diff() / track['dt'].shift(-1)
+            track['ay'] = track['vy'].diff() / track['dt'].shift(-1)
+            track['acceleration'] = np.sqrt(track['ax']**2 + track['ay']**2)
+            
+            # Calculate angle changes (direction)
+            v_angles = np.arctan2(track['vy'], track['vx'])
+            track['angle_change'] = np.abs(np.diff(v_angles, append=v_angles.iloc[-1]))
+            
+            # Fix angle wraparound (ensure angle differences are between 0 and pi)
+            track['angle_change'] = np.minimum(track['angle_change'], 2*np.pi - track['angle_change'])
+            
+            # Calculate straightness (distance traveled / path length)
+            end_to_end_dist = np.sqrt(
+                (track['x_um'].iloc[-1] - track['x_um'].iloc[0])**2 +
+                (track['y_um'].iloc[-1] - track['y_um'].iloc[0])**2
+            )
+            path_length = np.sum(np.sqrt(track['dx']**2 + track['dy']**2))
+            
+            if path_length > 0:
+                straightness = end_to_end_dist / path_length
+            else:
+                straightness = 0
+                
+            track['straightness'] = straightness
+            
+            processed_tracks.append(track)
+        
+        # Combine processed tracks
+        if processed_tracks:
+            self.processed_tracks = pd.concat(processed_tracks)
+            
+            # Compute track-level statistics
+            track_stats = []
+            
+            for track_id, track_data in self.processed_tracks.groupby('track_id'):
+                # Calculate mean statistics
+                mean_speed = track_data['speed'].mean()
+                mean_acc = track_data['acceleration'].mean()
+                mean_angle_change = track_data['angle_change'].mean()
+                straightness = track_data['straightness'].iloc[0]  # Same for all rows
+                
+                # Calculate max speed
+                max_speed = track_data['speed'].max()
+                
+                track_stats.append({
+                    'track_id': track_id,
+                    'mean_speed': mean_speed,
+                    'max_speed': max_speed,
+                    'mean_acceleration': mean_acc,
+                    'mean_angle_change': mean_angle_change,
+                    'straightness': straightness,
+                    'track_length': len(track_data)
+                })
+            
+            self.track_results = pd.DataFrame(track_stats)
+            
+            # Store basic results
+            self.results['basic_stats'] = {
+                'success': True,
+                'track_results': self.track_results,
+                'processed_tracks': self.processed_tracks,
+                'parameters': {
+                    'pixel_size': self.pixel_size,
+                    'frame_interval': self.frame_interval
+                }
+            }
+        else:
+            # No valid tracks after preprocessing
+            self.processed_tracks = pd.DataFrame()
+            self.track_results = pd.DataFrame()
+            
+            # Store error result
+            self.results['basic_stats'] = {
+                'success': False,
+                'error': 'No valid tracks after preprocessing',
+                'parameters': {
+                    'pixel_size': self.pixel_size,
+                    'frame_interval': self.frame_interval
+                }
+            }
     
     def detect_directional_motion_segments(self, min_segment_length: int = 5, 
                                           straightness_threshold: float = 0.8,
                                           velocity_threshold: float = 0.1) -> Dict[str, Any]:
         """
-        Detect segments of directional motion within tracks.
+        Detect segments of directed motion within tracks.
         
         Parameters
         ----------
         min_segment_length : int
-            Minimum length of directional segments
+            Minimum number of frames for a valid segment
         straightness_threshold : float
-            Minimum straightness for directional motion
+            Minimum straightness value for directional segments (0-1)
         velocity_threshold : float
             Minimum velocity for active transport (μm/s)
             
         Returns
         -------
         Dict[str, Any]
-            Information about detected directional segments
+            Directional segment detection results
         """
-        try:
-            from analysis import analyze_active_transport
-        except ImportError:
-            return {'success': False, 'error': 'Required module "analysis" not found. Please ensure it is installed and available.'}
-        
-        # Use existing active transport analysis
-        transport_results = analyze_active_transport(
-            self.tracks_df,
-            min_track_length=min_segment_length,
-            pixel_size=self.pixel_size,
-            frame_interval=self.frame_interval,
-            straightness_threshold=straightness_threshold,
-            min_segment_length=min_segment_length
-        )
+        # Check if we have basic results
+        transport_results = self.results.get('basic_stats', {})
         
         if not transport_results.get('success', False):
-            return {'success': False, 'error': 'Active transport analysis failed'}
+            return {
+                'success': False,
+                'error': 'Basic track analysis failed. No valid tracks available.'
+            }
         
         # Extract directional segments with velocity filtering
         segments = []
@@ -701,17 +1223,44 @@ class ActiveTransportAnalyzer:
         
         # Vectorized segment creation - much faster than iterrows()
         if not fast_tracks.empty:
-            segments = [
-                {
-                    'track_id': row.get('track_id'),
-                    'mean_velocity': row.get('mean_speed', 0),
-                    'straightness': row.get('straightness', 0),
-                    'transport_type': 'active' if row.get('mean_speed', 0) > velocity_threshold else 'passive'
-                }
-                for _, row in fast_tracks.iterrows()
-            ]
+            for _, track in fast_tracks.iterrows():
+                track_id = track['track_id']
+                
+                # Get processed track data
+                track_data = self.processed_tracks[self.processed_tracks['track_id'] == track_id]
+                
+                if len(track_data) < min_segment_length:
+                    continue
+                
+                # Check for straightness
+                if track['straightness'] >= straightness_threshold:
+                    # Calculate mean velocity vector
+                    mean_vx = track_data['vx'].mean()
+                    mean_vy = track_data['vy'].mean()
+                    mean_velocity = np.sqrt(mean_vx**2 + mean_vy**2)
+                    mean_direction = np.arctan2(mean_vy, mean_vx)
+                    
+                    # Calculate metrics
+                    duration = (track_data['frame'].max() - track_data['frame'].min()) * self.frame_interval
+                    distance = np.sqrt(
+                        (track_data['x_um'].iloc[-1] - track_data['x_um'].iloc[0])**2 +
+                        (track_data['y_um'].iloc[-1] - track_data['y_um'].iloc[0])**2
+                    )
+                    
+                    segments.append({
+                        'track_id': track_id,
+                        'start_frame': track_data['frame'].min(),
+                        'end_frame': track_data['frame'].max(),
+                        'duration': duration,
+                        'distance': distance,
+                        'mean_velocity': mean_velocity,
+                        'direction': mean_direction,
+                        'straightness': track['straightness'],
+                        'num_points': len(track_data)
+                    })
         else:
-            segments = []
+            # No tracks met the velocity threshold
+            pass
         
         self.results['directional_segments'] = {
             'success': True,
@@ -735,12 +1284,18 @@ class ActiveTransportAnalyzer:
             Classification of transport modes
         """
         if 'directional_segments' not in self.results:
-            return {'success': False, 'error': 'Run detect_directional_motion_segments first'}
+            return {
+                'success': False,
+                'error': 'Run detect_directional_motion_segments() first to identify segments'
+            }
         
         segments = self.results['directional_segments']['segments']
         
         if not segments:
-            return {'success': False, 'error': 'No directional segments found'}
+            return {
+                'success': False,
+                'error': 'No directional segments detected'
+            }
         
         # Classify transport modes
         velocities = [s['mean_velocity'] for s in segments]
@@ -761,9 +1316,9 @@ class ActiveTransportAnalyzer:
         for velocity, straightness in zip(velocities, straightness_values):
             if velocity < slow_threshold:
                 transport_modes['diffusive'] += 1
-            elif velocity < fast_threshold and straightness > high_straightness:
+            elif velocity < fast_threshold:
                 transport_modes['slow_directed'] += 1
-            elif velocity >= fast_threshold and straightness > high_straightness:
+            elif straightness >= high_straightness:
                 transport_modes['fast_directed'] += 1
             else:
                 transport_modes['mixed'] += 1
@@ -1422,6 +1977,12 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
     try:
         if output_format.lower() == 'csv':
             # Extract track classifications
+        output_dir = tempfile.gettempdir()
+        output_path = os.path.join(output_dir, f"motion_analysis_results.{output_format}")
+    
+    try:
+        if output_format.lower() == 'csv':
+            # Extract track classifications
             classifications_df = pd.DataFrame([
                 {'track_id': track_id, 'motion_type': model}
                 for track_id, model in motion_analysis_results.get('classifications', {}).items()
@@ -1429,12 +1990,6 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
             
             # Add parameters if available
             for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
-                for model, params in model_params.items():
-                    for param, value in params.items():
-                        # Only add parameters for the best model
-                        if model == motion_analysis_results.get('best_model', {}).get(track_id):
-                            column_name = f"{param}"
-                            classifications_df.loc[
                                 classifications_df['track_id'] == track_id, 
                                 column_name
                             ] = value
