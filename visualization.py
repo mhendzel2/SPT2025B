@@ -68,203 +68,198 @@ def _qual_colour(i: int) -> str:
 # ------------------------------------------------------------------ #
 
 def plot_tracks(
-    tracks: pd.DataFrame,
-    *,
-    frame_range: Optional[Tuple[int, int]] = None,
-    color_by: str = "track_id",
-    colormap: str = DEFAULT_CM,
-    alpha: float = 0.7,
-) -> go.Figure:
+    tracks_df, max_tracks=50, colormap='viridis', 
+    include_markers=True, marker_size=5, line_width=1,
+    title="Particle Tracks", plot_type='2D'
+):
     """
-    2‑D trajectory plot (Plotly).
-    Required columns – track_id, frame, x, y
+    Create an interactive plot of particle tracks.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with columns 'track_id', 'x', 'y', etc.
+    max_tracks : int, optional
+        Maximum number of tracks to display, by default 50
+    colormap : str, optional
+        Colormap for track visualization, by default 'viridis'
+    include_markers : bool, optional
+        Whether to include markers at particle positions, by default True
+    marker_size : int, optional
+        Size of markers, by default 5
+    line_width : int, optional
+        Width of track lines, by default 1
+    title : str, optional
+        Plot title, by default "Particle Tracks"
+    plot_type : str, optional
+        Type of plot: '2D' for standard, 'time_coded' for time-color coded tracks
+        
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot of tracks
     """
-    if tracks.empty:
-        return _empty_fig("No track data available")
-
-    _assert_cols(tracks, ["track_id", "frame", "x", "y"], "plot_tracks")
-
-    if frame_range:
-        tracks = tracks.loc[
-            tracks["frame"].between(frame_range[0], frame_range[1])
-        ]
-
-    track_ids = tracks["track_id"].unique()
+    import plotly.graph_objects as go
+    import numpy as np
+    
+    # Create a figure
     fig = go.Figure()
-
-    if color_by == "track_id" or color_by not in tracks.columns:
-        for i, (tid, tdf) in enumerate(tracks.groupby("track_id")):
-            if tid not in track_ids:
-                continue
-            tdf = tdf.sort_values("frame")
-            colour = _qual_colour(i)
-            fig.add_trace(
-                go.Scatter(
-                    x=tdf["x"],
-                    y=tdf["y"],
-                    mode="lines+markers",
-                    name=f"Track {tid}",
-                    line=dict(color=colour, width=1),
-                    marker=dict(color=colour, size=4),
-                    showlegend=len(track_ids) <= 25,
-                    opacity=alpha,
-                )
-            )
-            # Start marker
-            fig.add_trace(
-                go.Scatter(
-                    x=[tdf["x"].iloc[0]],
-                    y=[tdf["y"].iloc[0]],
-                    mode="markers",
-                    marker=dict(
-                        symbol="circle-open",
-                        size=10,
-                        color=colour,
-                        line=dict(width=2),
-                    ),
-                    showlegend=False,
-                )
-            )
-    else:  # continuous colour mapping
-        if not pd.api.types.is_numeric_dtype(tracks[color_by]):
-            raise TypeError(f"{color_by} must be numeric for continuous colouring")
-
-        for tid in track_ids:
-            tdf = tracks.query("track_id == @tid").sort_values("frame")
-            fig.add_trace(
-                go.Scatter(
-                    x=tdf["x"],
-                    y=tdf["y"],
-                    mode="lines+markers",
-                    name=f"Track {tid}",
-                    marker=dict(
-                        color=tdf[color_by],
-                        colorscale=colormap,
-                        showscale=True,
-                        colorbar=dict(title=color_by),
-                        size=4,
-                    ),
-                    line=dict(
-                        color=px.colors.sample_colorscale(
-                            colormap, [tdf[color_by].mean()]
-                        )[0],
-                        width=1,
-                    ),
-                    showlegend=len(track_ids) <= 25,
-                    opacity=alpha,
-                )
-            )
-
+    
+    # Get unique track IDs and limit to max_tracks
+    unique_tracks = tracks_df['track_id'].unique()
+    if max_tracks > 0 and len(unique_tracks) > max_tracks:
+        unique_tracks = np.random.choice(unique_tracks, max_tracks, replace=False)
+    
+    # Generate colors for each track based on track_id
+    import plotly.express as px
+    colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+    
+    # Determine min and max frame for time-coded colors if needed
+    if plot_type == 'time_coded' and 'frame' in tracks_df.columns:
+        min_frame = tracks_df['frame'].min()
+        max_frame = tracks_df['frame'].max()
+        time_colorscale = px.colors.sequential.Viridis
+    
+    for i, track_id in enumerate(unique_tracks):
+        # Get data for this track
+        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        
+        if plot_type == 'time_coded' and 'frame' in track_data.columns:
+            # For time-coded tracks, use a scatter plot with color gradient
+            color_vals = (track_data['frame'] - min_frame) / (max_frame - min_frame) if max_frame > min_frame else 0.5
+            
+            fig.add_trace(go.Scatter(
+                x=track_data['x'], 
+                y=track_data['y'],
+                mode='lines+markers' if include_markers else 'lines',
+                line=dict(width=line_width, color='rgba(0,0,0,0)'),  # Transparent line
+                marker=dict(
+                    size=marker_size,
+                    color=color_vals,
+                    colorscale=time_colorscale,
+                    showscale=i==0,  # Show colorbar only for first track
+                    colorbar=dict(title="Frame") if i==0 else None
+                ),
+                name=f"Track {track_id}",
+                hovertemplate="Track: %{meta}<br>x: %{x}<br>y: %{y}<br>Frame: %{marker.color}" if 'frame' in track_data.columns else None,
+                meta=track_id
+            ))
+        else:
+            # Standard track plot with consistent color for each track
+            fig.add_trace(go.Scatter(
+                x=track_data['x'], 
+                y=track_data['y'],
+                mode='lines+markers' if include_markers else 'lines',
+                name=f"Track {track_id}",
+                line=dict(color=colors[i], width=line_width),
+                marker=dict(color=colors[i], size=marker_size),
+                hovertemplate="Track: %{meta}<br>x: %{x}<br>y: %{y}<extra></extra>",
+                meta=track_id
+            ))
+    
+    # Update layout
     fig.update_layout(
-        title=f"Particle Tracks ({len(track_ids)} tracks)",
-        xaxis_title="X (px)",
-        yaxis_title="Y (px)",
-        yaxis_scaleanchor="x",
+        title=title,
+        xaxis_title="x",
+        yaxis_title="y",
+        legend_title="Tracks",
         template="plotly_white",
+        showlegend=False,  # Hide legend due to potentially large number of tracks
+        autosize=True,
+        height=600,
+        hovermode='closest'
     )
+    
+    # Ensure equal aspect ratio
+    fig.update_yaxes(
+        scaleanchor="x",
+        scaleratio=1,
+    )
+    
     return fig
 
 
 def plot_tracks_3d(
-    tracks: pd.DataFrame,
-    *,
-    max_tracks: int = 20,
-    pixel_size: float = 0.1,
-    frame_interval: float = 1.0,
-    use_real_z: bool = False,
-    color_by: str = "track_id",
-    colormap: str = DEFAULT_CM,
-) -> go.Figure:
+    tracks_df, max_tracks=50, colormap='viridis',
+    include_markers=True, marker_size=3, line_width=1,
+    title="Particle Tracks (3D)", height=700, width=700
+):
     """
-    Interactive 3‑D trajectory plot.  
-    If no z column is present or use_real_z=False, time acts as z.
+    Create an interactive 3D plot of particle tracks, supporting time as z-axis.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data containing 'track_id', 'frame', 'x', 'y'
+    max_tracks : int, optional
+        Maximum number of tracks to display, by default 50
+    colormap : str, optional
+        Colormap for tracks, by default 'viridis'
+    include_markers : bool, optional
+        Whether to include markers at positions, by default True
+    marker_size : int, optional
+        Size of markers, by default 3
+    line_width : int, optional
+        Width of track lines, by default 1
+    title : str, optional
+        Plot title, by default "Particle Tracks (3D)"
+    height, width : int, optional
+        Plot dimensions, by default 700
+        
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive 3D plot of tracks
     """
-    if tracks.empty:
-        return _empty_fig("No track data available (3‑D)")
-
-    _assert_cols(tracks, ["track_id", "frame", "x", "y"], "plot_tracks_3d")
-    has_z = "z" in tracks.columns and use_real_z
-
-    # choose deterministic first N tracks (longest)
-    track_lengths = (
-        tracks.groupby("track_id")["frame"].count().sort_values(ascending=False)
-    )
-    track_ids = track_lengths.head(max_tracks).index.to_numpy()
-
+    import plotly.graph_objects as go
+    import numpy as np
+    
+    # Create figure
     fig = go.Figure()
-
-    for i, tid in enumerate(track_ids):
-        tdf = tracks.query("track_id == @tid").sort_values("frame")
-        if len(tdf) < 2:  # skip degenerate
-            continue
-
-        x = tdf["x"].to_numpy() * pixel_size
-        y = tdf["y"].to_numpy() * pixel_size
-        z = (
-            tdf["z"].to_numpy() * pixel_size
-            if has_z
-            else tdf["frame"].to_numpy() * frame_interval
-        )
-        z_label = "Z (µm)" if has_z else "Time (s)"
-
-        if color_by == "track_id":
-            colour = _qual_colour(i)
-            line_colour = colour
-            marker_kwargs = dict(color=colour)
-        else:
-            if color_by not in tdf.columns:
-                raise ValueError(f"{color_by} column not in data")
-            vals = tdf[color_by]
-            line_colour = None  # let Plotly colour per‑point
-            marker_kwargs = dict(
-                color=vals,
-                colorscale=colormap,
-                showscale=True,
-                colorbar=dict(title=color_by) if i == 0 else None,
-            )
-
-        fig.add_trace(
-            go.Scatter3d(
-                x=x,
-                y=y,
-                z=z,
-                mode="lines+markers",
-                name=f"Track {tid}",
-                line=dict(color=line_colour, width=3),
-                marker=dict(size=4, **marker_kwargs),
-                showlegend=len(track_ids) <= 15,
-            )
-        )
-        # start / end markers
-        fig.add_trace(
-            go.Scatter3d(
-                x=[x[0]], y=[y[0]], z=[z[0]],
-                mode="markers",
-                marker=dict(symbol="diamond", size=8, color="green"),
-                showlegend=False,
-            )
-        )
-        fig.add_trace(
-            go.Scatter3d(
-                x=[x[-1]], y=[y[-1]], z=[z[-1]],
-                mode="markers",
-                marker=dict(symbol="square", size=8, color="red"),
-                showlegend=False,
-            )
-        )
-
+    
+    # Limit number of tracks if necessary
+    unique_tracks = tracks_df['track_id'].unique()
+    if max_tracks > 0 and len(unique_tracks) > max_tracks:
+        unique_tracks = np.random.choice(unique_tracks, max_tracks, replace=False)
+    
+    # Generate colors
+    import plotly.express as px
+    colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+    
+    for i, track_id in enumerate(unique_tracks):
+        # Get data for this track
+        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        
+        if len(track_data) <= 1:
+            continue  # Skip very short tracks
+            
+        # Add 3D scatter plot
+        fig.add_trace(go.Scatter3d(
+            x=track_data['x'],
+            y=track_data['y'],
+            z=track_data['frame'],  # Use frame as z-coordinate
+            mode='lines+markers' if include_markers else 'lines',
+            name=f"Track {track_id}",
+            line=dict(color=colors[i], width=line_width),
+            marker=dict(color=colors[i], size=marker_size),
+            hovertemplate="Track: %{meta}<br>x: %{x}<br>y: %{y}<br>frame: %{z}<extra></extra>",
+            meta=track_id
+        ))
+    
+    # Update layout
     fig.update_layout(
-        title=f"3‑D Trajectories ({len(track_ids)} tracks)",
+        title=title,
         scene=dict(
-            xaxis_title="X (µm)",
-            yaxis_title="Y (µm)",
-            zaxis_title=z_label,
-            aspectmode="cube",
+            xaxis_title='x',
+            yaxis_title='y',
+            zaxis_title='frame',
+            aspectmode='auto'
         ),
-        template="plotly_white",
-        width=900,
-        height=700,
+        showlegend=False,
+        height=height,
+        width=width
     )
+    
     return fig
 
 
