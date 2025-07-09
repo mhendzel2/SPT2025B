@@ -777,5 +777,3 @@ class ActiveTransportAnalyzer:
             'mean_straightness': np.mean(straightness_values)
         }
         return self.results['transport_modes']
-        }
-        return self.results['transport_modes']
