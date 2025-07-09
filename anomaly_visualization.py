@@ -48,71 +48,56 @@ class AnomalyVisualizer:
         go.Figure
             Interactive plotly figure with anomaly overlays
         """
-        fig = go.Figure()
+        if tracks_df.empty or not anomaly_results or 'anomalous_tracks' not in anomaly_results:
+            return None
         
-        # Get anomaly categories
-        anomaly_types = self._categorize_tracks(anomaly_results)
+        # Get anomalous track IDs
+        anomalous_ids = anomaly_results['anomalous_tracks']
         
-        # Plot normal tracks first (background)
-        normal_tracks = []
-        for track_id in tracks_df['track_id'].unique():
-            if track_id not in anomaly_types:
-                normal_tracks.append(track_id)
+        # Create a copy of tracks dataframe with anomaly classification
+        tracks = tracks_df.copy()
+        tracks['is_anomaly'] = tracks['track_id'].isin(anomalous_ids)
         
-        if normal_tracks:
-            normal_data = tracks_df[tracks_df['track_id'].isin(normal_tracks)]
-            fig.add_trace(go.Scatter(
-                x=normal_data['x'],
-                y=normal_data['y'],
-                mode='markers',
-                marker=dict(size=3, color=self.color_map['normal'], opacity=0.6),
-                name='Normal',
-                showlegend=True,
-                hovertemplate='Track: %{text}<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
-                text=normal_data['track_id']
-            ))
-        
-        # Plot anomalous tracks by type
-        for anomaly_type, color in self.color_map.items():
-            if anomaly_type == 'normal':
-                continue
-                
-            anomalous_tracks = [track_id for track_id, types in anomaly_types.items() 
-                              if anomaly_type in types]
-            
-            if anomalous_tracks:
-                anomaly_data = tracks_df[tracks_df['track_id'].isin(anomalous_tracks)]
-                
-                fig.add_trace(go.Scatter(
-                    x=anomaly_data['x'],
-                    y=anomaly_data['y'],
-                    mode='markers',
-                    marker=dict(size=6, color=color, opacity=0.8, 
-                              line=dict(width=1, color='black')),
-                    name=f'{anomaly_type.replace("_", " ").title()}',
-                    showlegend=True,
-                    hovertemplate=f'<b>{anomaly_type.replace("_", " ").title()}</b><br>' +
-                                'Track: %{text}<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
-                    text=anomaly_data['track_id']
-                ))
-        
-        # Add specific anomaly markers for velocity and directional anomalies
-        self._add_specific_anomaly_markers(fig, tracks_df, anomaly_results)
-        
-        # Update layout
-        fig.update_layout(
-            title='AI-Powered Anomaly Detection Overlay',
-            xaxis_title='X Position',
-            yaxis_title='Y Position',
-            width=width,
-            height=height,
-            hovermode='closest',
-            plot_bgcolor='white',
-            paper_bgcolor='white'
+        # Create figure
+        fig = px.scatter(
+            tracks, 
+            x='x', 
+            y='y', 
+            color='is_anomaly',
+            color_discrete_map={True: 'red', False: 'blue'},
+            hover_data=['track_id', 'frame'],
+            title="Normal vs. Anomalous Tracks",
+            labels={'is_anomaly': 'Anomalous', 'x': 'X Position', 'y': 'Y Position'}
         )
         
-        # Set equal aspect ratio
-        fig.update_yaxis(scaleanchor="x", scaleratio=1)
+        # Add traces for each track as connected lines
+        for track_id, track_df in tracks.groupby('track_id'):
+            # Sort by frame to ensure proper line connection
+            track_df = track_df.sort_values('frame')
+            
+            # Determine color based on anomaly status
+            color = 'red' if track_id in anomalous_ids else 'rgba(0, 0, 255, 0.2)'  # Transparent blue for normal tracks
+            
+            fig.add_trace(go.Scatter(
+                x=track_df['x'],
+                y=track_df['y'],
+                mode='lines',
+                line=dict(color=color, width=1),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+        
+        # Update layout for equal aspect ratio
+        fig.update_layout(
+            xaxis=dict(
+                scaleanchor="y",
+                scaleratio=1,
+            ),
+            yaxis=dict(
+                scaleanchor="x",
+                scaleratio=1
+            )
+        )
         
         return fig
     

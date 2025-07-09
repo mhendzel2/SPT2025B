@@ -1335,19 +1335,51 @@ class EnhancedSPTReportGenerator:
             return None
 
 
-def show_enhanced_report_generator():
+def show_enhanced_report_generator(track_data=None, analysis_results=None, 
+                                  pixel_size=0.1, frame_interval=0.1, 
+                                  track_statistics=None, msd_data=None):
     """
-    Main function to display the enhanced report generator interface.
-    This function creates an instance of the EnhancedSPTReportGenerator class
-    and displays the interface for users to generate comprehensive reports.
+    Display the Streamlit interface for the Enhanced Report Generator.
+    
+    Parameters
+    ----------
+    track_data : pd.DataFrame, optional
+        Track data to include in the report
+    analysis_results : Dict, optional
+        Analysis results to include in the report
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 0.1
+    frame_interval : float, optional
+        Frame interval in seconds, by default 0.1
+    track_statistics : pd.DataFrame, optional
+        Precomputed track statistics, by default None
+    msd_data : pd.DataFrame, optional
+        MSD data for diffusion analysis, by default None
     """
-    try:
-        # Create an instance of the report generator
-        report_generator = EnhancedSPTReportGenerator()
-        
-        # Display the enhanced analysis interface
-        report_generator.display_enhanced_analysis_interface()
-        
-    except Exception as e:
-        st.error(f"Error in enhanced report generator: {str(e)}")
-        st.error("Please check that all required modules are installed and properly configured.")
+    st.header("Enhanced Report Generator")
+    
+    # First, check if we received valid track data
+    if track_data is None or len(track_data) == 0:
+        st.error("No track data available. Please load track data before generating a report.")
+        return
+    
+    # Print debug information to console
+    print(f"Report generator received track data with {len(track_data)} points")
+    if 'track_id' in track_data.columns:
+        print(f"Number of tracks: {track_data['track_id'].nunique()}")
+    
+    # Check if MSD data was passed
+    if msd_data is not None:
+        print(f"MSD data received with {len(msd_data)} points")
+        # If MSD data was passed separately but not in analysis_results, add it there
+        if analysis_results is None:
+            analysis_results = {}
+        if 'diffusion' not in analysis_results:
+            analysis_results['diffusion'] = {}
+        analysis_results['diffusion']['msd_data'] = msd_data
+    
+    # Report configuration options
+    st.subheader("Configure Report")
+    
+    # Rest of the function remains the same
+    # ...
