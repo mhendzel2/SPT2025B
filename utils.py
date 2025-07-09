@@ -821,18 +821,28 @@ def ensure_session_state_consistency():
     
     # Check if tracks are actually available when tracks_loaded is True
     if st.session_state.get('tracks_loaded', False):
-        if 'tracks_df' not in st.session_state or st.session_state.tracks_df is None:
+        if 'tracks_df' not in st.session_state or st.session_state.tracks_df is None or st.session_state.tracks_df.empty:
             # Inconsistent state detected - fix it
             st.session_state.tracks_loaded = False
-            
+    
     # Ensure track_metadata exists if tracks are loaded
     if st.session_state.get('tracks_loaded', False) and 'track_metadata' not in st.session_state:
         # Create minimal metadata
-        st.session_state.track_metadata = {
-            'file_name': 'Unknown file',
-            'num_tracks': st.session_state.tracks_df['track_id'].nunique(),
-            'num_frames': st.session_state.tracks_df['frame'].nunique(),
-            'total_localizations': len(st.session_state.tracks_df),
-            'pixel_size': 0.16,
-            'frame_interval': 0.1
-        }
+        if 'tracks_df' in st.session_state and st.session_state.tracks_df is not None:
+            tracks_df = st.session_state.tracks_df
+            st.session_state.track_metadata = {
+                'file_name': 'Unknown file',
+                'num_tracks': tracks_df['track_id'].nunique() if 'track_id' in tracks_df.columns else 0,
+                'num_frames': tracks_df['frame'].nunique() if 'frame' in tracks_df.columns else 0,
+                'total_localizations': len(tracks_df),
+                'pixel_size': st.session_state.get('pixel_size', 0.16),
+                'frame_interval': st.session_state.get('frame_interval', 0.1)
+            }
+    
+    # Ensure pixel_size and frame_interval are in session state if tracks are loaded
+    if st.session_state.get('tracks_loaded', False):
+        if 'pixel_size' not in st.session_state and 'track_metadata' in st.session_state:
+            st.session_state.pixel_size = st.session_state.track_metadata.get('pixel_size', 0.16)
+        
+        if 'frame_interval' not in st.session_state and 'track_metadata' in st.session_state:
+            st.session_state.frame_interval = st.session_state.track_metadata.get('frame_interval', 0.1)

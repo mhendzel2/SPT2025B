@@ -44,9 +44,17 @@ class SPTReportGenerator:
         if not is_valid:
             return {
                 'success': False,
-                'error': error_msg
+                'error': error_msg,
+                'title': title or "Failed Report",
+                'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
+        # Log the data we received
+        import logging
+        logging.info(f"Generating report with tracks_df shape: {tracks_df.shape}, "
+                    f"pixel_size: {pixel_size}, frame_interval: {frame_interval}")
+        logging.info(f"First few rows: {tracks_df.head().to_dict()}")
+        
         # Set default analyses if none provided
         if analyses is None:
             analyses = ['basic_statistics', 'msd_analysis', 'diffusion_analysis']
