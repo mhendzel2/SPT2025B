@@ -27,6 +27,75 @@ import plotly.express as px
 import project_management as pm
 from scipy.stats import linregress
 
+def calculate_population_metrics(tracks_df, pixel_size=0.1, frame_interval=0.1):
+    """
+    Calculate population-level metrics from track data.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data
+    pixel_size : float
+        Pixel size in micrometers
+    frame_interval : float
+        Frame interval in seconds
+        
+    Returns
+    -------
+    dict
+        Dictionary with population metrics
+    """
+    if tracks_df is None or len(tracks_df) == 0:
+        return {
+            'mean_displacement': 0,
+            'mean_velocity': 0,
+            'total_tracks': 0,
+            'total_points': 0,
+            'avg_track_length': 0
+        }
+    
+    # Get basic statistics
+    unique_tracks = tracks_df['track_id'].nunique()
+    total_points = len(tracks_df)
+    avg_track_length = total_points / unique_tracks if unique_tracks > 0 else 0
+    
+    # Calculate displacements for each track
+    displacements = []
+    velocities = []
+    
+    # Group by track_id to calculate metrics per track
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        if len(track_data) < 2:
+            continue
+            
+        # Sort by frame
+        track_data = track_data.sort_values('frame')
+        
+        # Calculate displacements
+        dx = np.diff(track_data['x'].values) * pixel_size
+        dy = np.diff(track_data['y'].values) * pixel_size
+        dt = np.diff(track_data['frame'].values) * frame_interval
+        
+        # Calculate step displacements
+        step_displacements = np.sqrt(dx**2 + dy**2)
+        displacements.extend(step_displacements)
+        
+        # Calculate velocities (displacement/time)
+        step_velocities = step_displacements / dt
+        velocities.extend(step_velocities)
+    
+    # Calculate population means
+    mean_displacement = np.mean(displacements) if displacements else 0
+    mean_velocity = np.mean(velocities) if velocities else 0
+    
+    return {
+        'mean_displacement': mean_displacement,
+        'mean_velocity': mean_velocity,
+        'total_tracks': unique_tracks,
+        'total_points': total_points,
+        'avg_track_length': avg_track_length
+    }
+
 # Import report generation module
 try:
     # CORRECTED: Import the EnhancedSPTReportGenerator class from the correct file
