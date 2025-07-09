@@ -89,6 +89,13 @@ from intensity_analysis import (
 from unit_converter import UnitConverter
 from md_integration import MDSimulation, load_md_file
 
+# Import advanced segmentation module
+try:
+    from advanced_segmentation import integrate_advanced_segmentation_with_app
+    ADVANCED_SEGMENTATION_AVAILABLE = True
+except ImportError:
+    ADVANCED_SEGMENTATION_AVAILABLE = False
+
 # Import tracking module with proper error handling
 try:
     from tracking import detect_particles, link_particles
@@ -1677,6 +1684,7 @@ elif st.session_state.active_page == "Image Processing":
     img_tabs = st.tabs([
         "Segmentation",
         "Nuclear Density Analysis", 
+        "Advanced Segmentation",  # Added advanced segmentation tab
         "Export Results"
     ])
     
@@ -2136,6 +2144,34 @@ elif st.session_state.active_page == "Image Processing":
         else:
             # Handle multichannel images
             mask_image_data = st.session_state.mask_images
+
+    # Tab 3: Advanced Segmentation
+    with img_tabs[2]:
+        st.subheader("Advanced Segmentation Methods")
+        
+        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
+            st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
+            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
+        else:
+            if ADVANCED_SEGMENTATION_AVAILABLE:
+                # Call the integration function from advanced_segmentation module
+                integrate_advanced_segmentation_with_app()
+            else:
+                st.error("Advanced segmentation module not available.")
+                st.info("Please install required packages to use advanced segmentation features.")
+                
+                with st.expander("Installation Instructions"):
+                    st.markdown("""
+                    ### Required packages:
+                    
+                    ```
+                    pip install torch torchvision segment-anything cellpose opencv-python
+                    ```
+                    """)
+    
+    # Tab 4: Export Results (moved from position 3 to 4)
+    with img_tabs[3]:
+        # ... existing code for export tab ...
             
             # Check different multichannel scenarios
             multichannel_detected = False
