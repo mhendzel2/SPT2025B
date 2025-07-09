@@ -1046,3 +1046,107 @@ def plot_track_density_map(tracks_df, sigma=5.0, bins=100, colorscale='Viridis')
     )
     
     return fig
+
+def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis"):
+    """
+    Create visualization for motion model analysis results.
+    
+    Parameters
+    ----------
+    motion_analysis_results : dict
+        Results dictionary from analyze_motion_models function
+    title : str
+        Title for the plot
+        
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure displaying motion model analysis
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import numpy as np
+    
+    # Create summary dataframe for model classification
+    if 'classifications' not in motion_analysis_results:
+        return _empty_fig("No motion analysis data available")
+    
+    # Count occurrences of each model type
+    model_counts = {}
+    for track_id, model in motion_analysis_results['classifications'].items():
+        if model not in model_counts:
+            model_counts[model] = 0
+        model_counts[model] += 1
+    
+    # Create model parameters dataframe
+    params_data = []
+    for track_id, model in motion_analysis_results['classifications'].items():
+        if track_id in motion_analysis_results['model_parameters'] and model in motion_analysis_results['model_parameters'][track_id]:
+            params = motion_analysis_results['model_parameters'][track_id][model]
+            params_data.append({
+                'track_id': track_id,
+                'model': model,
+                **params
+            })
+    
+    # Create subplot figure
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=["Model Classification", "Parameter Distribution"],
+        specs=[[{"type": "pie"}, {"type": "box"}]]
+    )
+    
+    # Add pie chart for model classification
+    model_labels = list(model_counts.keys())
+    model_values = list(model_counts.values())
+    
+    fig.add_trace(
+        go.Pie(
+            labels=model_labels,
+            values=model_values,
+            textinfo='label+percent',
+            marker_colors=['#1f77b4', '#ff7f0e', '#2ca02c']
+        ),
+        row=1, col=1
+    )
+    
+    # Add boxplot for model parameters if data is available
+    if params_data:
+        import pandas as pd
+        params_df = pd.DataFrame(params_data)
+        if 'D' in params_df.columns:
+            model_colors = {
+                'brownian': '#1f77b4',
+                'directed': '#ff7f0e',
+                'confined': '#2ca02c'
+            }
+            
+            # Create boxplot for diffusion coefficients
+            boxplot_data = []
+            
+            for model in model_labels:
+                model_params = params_df[params_df['model'] == model]
+                if not model_params.empty and 'D' in model_params.columns:
+                    boxplot_data.append(
+                        go.Box(
+                            y=model_params['D'],
+                            name=model,
+                            marker_color=model_colors.get(model, '#636EFA'),
+                            boxmean=True
+                        )
+                    )
+            
+            for box_trace in boxplot_data:
+                fig.add_trace(box_trace, row=1, col=2)
+                
+            fig.update_yaxes(title_text="Diffusion Coefficient (μm²/s)", type="log", row=1, col=2)
+    
+    # Update layout
+    fig.update_layout(
+        title_text=title,
+        showlegend=True,
+        height=500,
+        width=900
+    )
+    
+    return fig
