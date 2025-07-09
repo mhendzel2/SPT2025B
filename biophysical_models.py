@@ -674,7 +674,10 @@ class ActiveTransportAnalyzer:
         Dict[str, Any]
             Information about detected directional segments
         """
-        from analysis import analyze_active_transport
+        try:
+            from analysis import analyze_active_transport
+        except ImportError:
+            return {'success': False, 'error': 'Required module "analysis" not found. Please ensure it is installed and available.'}
         
         # Use existing active transport analysis
         transport_results = analyze_active_transport(
