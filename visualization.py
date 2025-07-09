@@ -755,7 +755,111 @@ def download_bytes(
     except Exception as e:
         raise ValueError(f"Failed to generate {fmt} bytes: {str(e)}")
 
-
+def spatial_intensity_correlation(image_data, segmentation_data, properties_data, channel_indices=None):
+    """
+    Calculate spatial intensity correlation between channels in segmented regions.
+    
+    Parameters:
+    -----------
+    image_data : numpy array or None
+        The full image data with shape (channels, height, width) or None if not available
+    segmentation_data : numpy array
+        Segmentation mask with labeled regions
+    properties_data : list of dict
+        Properties for each segmented region, may contain intensity data for channels
+    channel_indices : list or None
+        Indices of channels to analyze. If None, all available channels are used.
+    
+    Returns:
+    --------
+    dict
+        Dictionary with correlation results between channels
+    """
+    results = {}
+    
+    # Check if we have full image data
+    if image_data is not None:
+        num_channels = image_data.shape[0]
+        if channel_indices is None:
+            channel_indices = list(range(num_channels))
+        
+        # Calculate correlations using full image data
+        for i, ch1 in enumerate(channel_indices):
+            for j, ch2 in enumerate(channel_indices[i+1:], i+1):
+                channel_key = f"ch{ch1}_ch{ch2}"
+                results[channel_key] = {
+                    'pearson': [],
+                    'spearman': [],
+                    'region_ids': []
+                }
+                
+                for region in np.unique(segmentation_data):
+                    if region == 0:  # Skip background
+                        continue
+                    
+                    mask = segmentation_data == region
+                    ch1_values = image_data[ch1][mask]
+                    ch2_values = image_data[ch2][mask]
+                    
+                    if len(ch1_values) > 5:  # Ensure enough pixels for correlation
+                        pearson = np.corrcoef(ch1_values, ch2_values)[0, 1]
+                        spearman = stats.spearmanr(ch1_values, ch2_values)[0]
+                        
+                        results[channel_key]['pearson'].append(pearson)
+                        results[channel_key]['spearman'].append(spearman)
+                        results[channel_key]['region_ids'].append(region)
+    
+    # Use properties data for correlation if available (even if image_data is present)
+    # This allows correlating channels based on properties when full image is not available
+    if properties_data:
+        # Determine which channels have intensity data in properties
+        available_channels = set()
+        for prop in properties_data:
+            for key in prop.keys():
+                if key.startswith('intensity_mean_ch'):
+                    ch = int(key.split('_ch')[1])
+                    available_channels.add(ch)
+        
+        available_channels = sorted(list(available_channels))
+        
+        if channel_indices is None:
+            channel_indices = available_channels
+        else:
+            # Only use channels that are both requested and available
+            channel_indices = [ch for ch in channel_indices if ch in available_channels]
+        
+        # Calculate correlations from properties data
+        for i, ch1 in enumerate(channel_indices):
+            for j, ch2 in enumerate(channel_indices[i+1:], i+1):
+                channel_key = f"ch{ch1}_ch{ch2}_prop"
+                results[channel_key] = {
+                    'pearson': [],
+                    'spearman': [],
+                    'region_ids': []
+                }
+                
+                ch1_values = []
+                ch2_values = []
+                region_ids = []
+                
+                for prop in properties_data:
+                    if f'intensity_mean_ch{ch1}' in prop and f'intensity_mean_ch{ch2}' in prop:
+                        ch1_values.append(prop[f'intensity_mean_ch{ch1}'])
+                        ch2_values.append(prop[f'intensity_mean_ch{ch2}'])
+                        region_ids.append(prop['label'])
+                
+                if len(ch1_values) > 2:  # Ensure enough regions for correlation
+                    ch1_values = np.array(ch1_values)
+                    ch2_values = np.array(ch2_values)
+                    
+                    pearson = np.corrcoef(ch1_values, ch2_values)[0, 1]
+                    spearman = stats.spearmanr(ch1_values, ch2_values)[0]
+                    
+                    results[channel_key]['pearson'] = pearson
+                    results[channel_key]['spearman'] = spearman
+                    results[channel_key]['region_ids'] = region_ids
+    
+    return results
 def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis"):
     """
     Create visualization for motion model analysis results.
