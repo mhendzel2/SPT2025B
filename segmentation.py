@@ -408,7 +408,7 @@ def density_map_threshold(
 
     # 1) Build hp image for mask_in/mask_out
     smooth_hp = gaussian(image, sigma=gaussian_sigma_hp)
-    background = opening(smooth_hp, disk(disk_radius))
+    background = morphology.opening(smooth_hp, morphology.disk(disk_radius))
     hp = smooth_hp - background
 
     # 2) Normalize hp to [0,1]
@@ -427,7 +427,7 @@ def density_map_threshold(
         smooth_cls = gaussian(image, sigma=gaussian_sigma_density)
 
         # 4b) Background subtraction on the smoothed image
-        background_cls = opening(smooth_cls, disk(disk_radius))
+        background_cls = morphology.opening(smooth_cls, morphology.disk(disk_radius))
         hp_cls = smooth_cls - background_cls
 
         # 4c) (Optional) normalize the background-subtracted signal
@@ -806,7 +806,7 @@ def gaussian_mixture_segmentation(
             'std_intensity': float(np.sqrt(optimal_model.covariances_[i, 0, 0])),
             'weight': float(optimal_model.weights_[i]),
             'pixel_count': len(component_pixels),
-            'intensity_range': (float(component_pixels.min()), float(component_pixels.max()))
+            'intensity_range': (float(component_pixels.min()), float(component_pixels.max())) if len(component_pixels) > 0 else (0.0, 0.0)
         }
         component_stats.append(stats)
     
@@ -898,17 +898,6 @@ def _fit_bayesian_gmm_model(args):
     except Exception:
         return None, -np.inf
 
-def _assign_pixels_parallel(args):
-    """Helper function for parallel pixel assignment"""
-    roi_indices_chunk, roi_predictions_chunk, component_to_brightness_order, roi_mask_shape = args
-    assignments = []
-    for i, prediction in enumerate(roi_predictions_chunk):
-        if i < len(roi_indices_chunk):
-            brightness_class = component_to_brightness_order.get(prediction, prediction + 1)
-            row, col = np.unravel_index(roi_indices_chunk[i], roi_mask_shape)
-            assignments.append((row, col, brightness_class))
-    return assignments
-
 def bayesian_gaussian_mixture_segmentation(
     image: np.ndarray,
     roi_mask: np.ndarray = None,
@@ -966,11 +955,6 @@ def bayesian_gaussian_mixture_segmentation(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         
-        # Initialize variables to avoid LSP errors
-        optimal_n_components = max_components
-        optimal_score = np.inf
-        scores = None
-        
         # Always use traditional Bayesian approach with automatic component pruning
         bgmm = BayesianGaussianMixture(
             n_components=max_components,
@@ -989,7 +973,7 @@ def bayesian_gaussian_mixture_segmentation(
     effective_components = np.where(bgmm.weights_ > weight_threshold)[0]
     n_effective = len(effective_components)
     
-    # Generate class assignments with parallel processing
+    # Generate class assignments with proper mapping
     classes = np.zeros_like(image, dtype=np.int32)
     
     if roi_mask is not None:
@@ -999,22 +983,12 @@ def bayesian_gaussian_mixture_segmentation(
         roi_classes_mapped = np.array([class_map.get(cls, 0) for cls in roi_classes])
         classes[roi_mask > 0] = roi_classes_mapped
     else:
-        # For full image processing, use parallel assignment
+        # For full image processing
         all_pixels = image.flatten().reshape(-1, 1)
         all_classes = bgmm.predict(all_pixels)
         class_map = {old_idx: new_idx + 1 for new_idx, old_idx in enumerate(effective_components)}
         
-        # Parallel mapping for large datasets
-        chunk_size = max(1000, len(all_classes) // multiprocessing.cpu_count())
-        chunks = [all_classes[i:i + chunk_size] for i in range(0, len(all_classes), chunk_size)]
-        
-        with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-            mapped_chunks = list(executor.map(
-                lambda chunk: np.array([class_map.get(cls, 0) for cls in chunk]),
-                chunks
-            ))
-        
-        all_classes_mapped = np.concatenate(mapped_chunks)
+        all_classes_mapped = np.array([class_map.get(cls, 0) for cls in all_classes])
         classes = all_classes_mapped.reshape(image.shape)
     
     # Calculate component statistics for effective components
@@ -1039,31 +1013,24 @@ def bayesian_gaussian_mixture_segmentation(
     # Create mapping: original_component_index -> brightness_ordered_class
     component_to_brightness_order = {}
     for new_class, (original_idx, _) in enumerate(original_component_order):
-        # The original_idx is the index in the effective_components array
-        # We need to map this to the actual BGMM component index
         bgmm_component_idx = effective_components[original_idx]
         component_to_brightness_order[bgmm_component_idx] = new_class + 1
     
     # Remap classes based on brightness order, keeping background as 0
     classes_remapped = np.zeros_like(classes)
     if roi_mask is not None:
-        # Only pixels within ROI get classified, rest remain 0 (background)
         roi_predictions = bgmm.predict(X)
         roi_indices = np.where(roi_mask.flatten())[0]
         
-        # Ensure we have the right number of predictions
         for i, prediction in enumerate(roi_predictions):
             if i < len(roi_indices):
-                # Map prediction to brightness-ordered class
-                brightness_class = component_to_brightness_order.get(prediction, prediction + 1)  # Fallback to original + 1
+                brightness_class = component_to_brightness_order.get(prediction, prediction + 1)
                 row, col = np.unravel_index(roi_indices[i], roi_mask.shape)
                 classes_remapped[row, col] = brightness_class
     else:
-        # For whole image classification
         all_predictions = bgmm.predict(image.flatten().reshape(-1, 1))
-        # Apply brightness mapping with fallback
         for i, prediction in enumerate(all_predictions):
-            brightness_class = component_to_brightness_order.get(prediction, prediction + 1)  # Fallback to original + 1
+            brightness_class = component_to_brightness_order.get(prediction, prediction + 1)
             row, col = np.unravel_index(i, image.shape)
             classes_remapped[row, col] = brightness_class
     
@@ -1103,11 +1070,10 @@ def bayesian_gaussian_mixture_segmentation(
         'method': 'Bayesian GMM',
         'criterion': criterion_used
     }
-    final_n_components = n_effective
     
     return {
         'classes': classes_remapped,
-        'optimal_n_components': final_n_components,
+        'optimal_n_components': n_effective,
         'optimal_model': bgmm,
         'n_effective_components': n_effective,
         'total_components_tested': max_components,
@@ -1118,8 +1084,8 @@ def bayesian_gaussian_mixture_segmentation(
         'weight_threshold': weight_threshold,
         'roi_pixel_count': len(roi_pixels),
         'total_pixels_classified': np.sum(classes_remapped > 0),
-        'roi_pixels': roi_pixels,  # Include for histogram plotting
-        'has_background': roi_mask is not None  # Background exists when using ROI mask
+        'roi_pixels': roi_pixels,
+        'has_background': roi_mask is not None
     }
 
 
@@ -1888,6 +1854,40 @@ def segment_nuclear_interior_with_density_map(image: np.ndarray, nuclear_boundar
                 # Use two thresholds to create two classes
                 high_threshold = np.percentile(nuclear_pixels, 75)  # Upper 25% for class 2
                 medium_threshold = np.percentile(nuclear_pixels, 50)  # Upper 50% for class 1
+                
+                internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
+                internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
+            else:
+                internal_class1 = np.zeros_like(image, dtype=bool)
+                internal_class2 = np.zeros_like(image, dtype=bool)
+                
+    except Exception:
+        # Fallback: Use percentile-based thresholding within nuclear regions
+        nuclear_pixels = image[nuclear_regions]
+        if len(nuclear_pixels) > 0:
+            # Use two thresholds to create two classes
+            high_threshold = np.percentile(nuclear_pixels, 75)  # Upper 25% for class 2
+            medium_threshold = np.percentile(nuclear_pixels, 50)  # Upper 50% for class 1
+            
+            internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
+            internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
+        else:
+            internal_class1 = np.zeros_like(image, dtype=bool)
+            internal_class2 = np.zeros_like(image, dtype=bool)
+    
+    # Apply minimal morphological operations to clean up results
+    internal_class1 = binary_closing(internal_class1, disk(2))
+    internal_class2 = binary_closing(internal_class2, disk(2))
+    
+    # Remove very small objects
+    internal_class1 = remove_small_objects(internal_class1, min_size=50)
+    internal_class2 = remove_small_objects(internal_class2, min_size=50)
+    
+    # Ensure classes are only within nuclear regions
+    internal_class1 = internal_class1 & nuclear_regions
+    internal_class2 = internal_class2 & nuclear_regions
+    
+    return internal_class1.astype(np.uint8), internal_class2.astype(np.uint8)
                 
                 internal_class2 = (image > high_threshold) & nuclear_regions  # Brightest structures
                 internal_class1 = (image > medium_threshold) & nuclear_regions & ~internal_class2  # Medium brightness
