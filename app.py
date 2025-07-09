@@ -880,7 +880,10 @@ st.sidebar.title("SPT Analysis")
 # Main navigation menu - Updated for multi-page architecture
 nav_option = st.sidebar.radio(
     "Navigation",
-    ["Home", "Data Loading", "Image Processing", "Analysis", "Visualization", "Tracking", "Project Management", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration"]
+    [
+        "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
+        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration"
+    ]
 )
 
 # Update session state based on navigation
