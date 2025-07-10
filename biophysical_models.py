@@ -1977,12 +1977,6 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
     try:
         if output_format.lower() == 'csv':
             # Extract track classifications
-        output_dir = tempfile.gettempdir()
-        output_path = os.path.join(output_dir, f"motion_analysis_results.{output_format}")
-    
-    try:
-        if output_format.lower() == 'csv':
-            # Extract track classifications
             classifications_df = pd.DataFrame([
                 {'track_id': track_id, 'motion_type': model}
                 for track_id, model in motion_analysis_results.get('classifications', {}).items()
@@ -1990,9 +1984,12 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
             
             # Add parameters if available
             for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
-                                classifications_df['track_id'] == track_id, 
-                                column_name
-                            ] = value
+                for model, params in model_params.items():
+                    for param_name, value in params.items():
+                        column_name = f"{model}_{param_name}"
+                        mask = classifications_df['track_id'] == track_id
+                        if any(mask):
+                            classifications_df.loc[mask, column_name] = value
             
             # Save to CSV
             classifications_df.to_csv(output_path, index=False)
@@ -2023,6 +2020,9 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
             
         return True
         
+    except Exception as e:
+        print(f"Error exporting motion analysis results: {str(e)}")
+        return False
     except Exception as e:
         print(f"Error exporting motion analysis results: {str(e)}")
         return False
