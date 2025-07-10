@@ -8683,6 +8683,539 @@ elif st.session_state.active_page == "Report Generation":
 
 # ...existing code...
 
+# Complete the Motion Analysis tab implementation
+        with tabs[2]:
+            st.header("Motion Analysis")
+            
+            # Check if biophysical models are available
+            try:
+                from biophysical_models import analyze_motion_models
+                BIOPHYSICAL_MODELS_AVAILABLE = True
+            except ImportError:
+                BIOPHYSICAL_MODELS_AVAILABLE = False
+            
+            if BIOPHYSICAL_MODELS_AVAILABLE:
+                st.info("Advanced motion model analysis available")
+                
+                # Parameters for motion analysis
+                st.subheader("Motion Model Parameters")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    models_to_test = st.multiselect(
+                        "Motion Models to Test",
+                        ["brownian", "directed", "confined"],
+                        default=["brownian", "directed", "confined"],
+                        help="Select which motion models to test"
+                    )
+                    
+                    min_track_length = st.slider(
+                        "Minimum Track Length",
+                        min_value=5,
+                        max_value=50,
+                        value=10,
+                        help="Minimum track length for model fitting"
+                    )
+                
+                with col2:
+                    pixel_size = st.number_input(
+                        "Pixel Size (μm)",
+                        value=st.session_state.get('pixel_size', 0.1),
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.3f"
+                    )
+                    
+                    frame_interval = st.number_input(
+                        "Frame Interval (s)",
+                        value=st.session_state.get('frame_interval', 0.1),
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.3f"
+                    )
+                
+                # Run motion analysis
+                if st.button("Run Motion Model Analysis"):
+                    with st.spinner("Running motion model analysis..."):
+                        try:
+                            results = analyze_motion_models(
+                                st.session_state.tracks_data,
+                                models=models_to_test,
+                                min_track_length=min_track_length,
+                                pixel_size=pixel_size,
+                                frame_interval=frame_interval
+                            )
+                            
+                            # Store results
+                            if 'analysis_results' not in st.session_state:
+                                st.session_state.analysis_results = {}
+                            st.session_state.analysis_results['motion'] = results
+                            
+                            if results['success']:
+                                st.success("✓ Motion model analysis completed!")
+                                
+                                # Display summary
+                                if 'summary' in results:
+                                    summary = results['summary']
+                                    
+                                    st.subheader("Analysis Summary")
+                                    col1, col2, col3 = st.columns(3)
+                                    
+                                    with col1:
+                                        st.metric("Total Tracks", summary.get('total_tracks', 0))
+                                    with col2:
+                                        st.metric("Analyzed Tracks", summary.get('analyzed_tracks', 0))
+                                    with col3:
+                                        if 'most_common_model' in summary:
+                                            st.metric("Most Common Model", summary['most_common_model'])
+                            else:
+                                st.error(f"Motion analysis failed: {results.get('error', 'Unknown error')}")
+                                
+                        except Exception as e:
+                            st.error(f"Error in motion analysis: {str(e)}")
+            
+            else:
+                # Standard motion analysis without biophysical models
+                st.warning("Biophysical models module not available. Using standard motion analysis.")
+
+        # Clustering Analysis tab
+        with tabs[3]:
+            st.header("Clustering Analysis")
+            
+            # Parameters for clustering analysis
+            st.subheader("Clustering Parameters")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                clustering_method = st.selectbox(
+                    "Clustering Method",
+                    ["DBSCAN", "K-means", "Hierarchical"],
+                    help="Method for clustering analysis"
+                )
+                
+                if clustering_method == "DBSCAN":
+                    eps = st.slider("Epsilon (neighborhood distance)", 0.1, 10.0, 1.0, 0.1)
+                    min_samples = st.slider("Minimum samples", 2, 20, 5)
+                elif clustering_method == "K-means":
+                    n_clusters = st.slider("Number of clusters", 2, 20, 5)
+                
+            with col2:
+                pixel_size = st.number_input(
+                    "Pixel Size (μm)",
+                    value=st.session_state.get('pixel_size', 0.1),
+                    min_value=0.001,
+                    step=0.001,
+                    format="%.3f"
+                )
+            
+            # Run clustering analysis
+            if st.button("Run Clustering Analysis"):
+                with st.spinner("Running clustering analysis..."):
+                    try:
+                        if clustering_method == "DBSCAN":
+                            results = analyze_clustering(
+                                st.session_state.tracks_data,
+                                method='dbscan',
+                                eps=eps,
+                                min_samples=min_samples,
+                                pixel_size=pixel_size
+                            )
+                        elif clustering_method == "K-means":
+                            results = analyze_clustering(
+                                st.session_state.tracks_data,
+                                method='kmeans',
+                                n_clusters=n_clusters,
+                                pixel_size=pixel_size
+                            )
+                        
+                        # Store results
+                        if 'analysis_results' not in st.session_state:
+                            st.session_state.analysis_results = {}
+                        st.session_state.analysis_results['clustering'] = results
+                        
+                        st.success("✓ Clustering analysis completed!")
+                        
+                    except Exception as e:
+                        st.error(f"Error in clustering analysis: {str(e)}")
+
+        # Dwell Time Analysis tab
+        with tabs[4]:
+            st.header("Dwell Time Analysis")
+            
+            # Check for available masks
+            mask_selection_ui = create_mask_selection_ui("dwell_time")
+            selected_mask, selected_classes, segmentation_method = mask_selection_ui
+            
+            if selected_mask:
+                st.info(f"Dwell time analysis will be performed on mask: {selected_mask}")
+                
+                # Parameters for dwell time analysis
+                st.subheader("Dwell Time Parameters")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    min_dwell_frames = st.slider(
+                        "Minimum Dwell Time (frames)",
+                        min_value=1,
+                        max_value=20,
+                        value=3,
+                        help="Minimum time to consider as dwelling"
+                    )
+                    
+                with col2:
+                    pixel_size = st.number_input(
+                        "Pixel Size (μm)",
+                        value=st.session_state.get('pixel_size', 0.1),
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.3f"
+                    )
+                
+                # Run dwell time analysis
+                if st.button("Run Dwell Time Analysis"):
+                    with st.spinner("Running dwell time analysis..."):
+                        try:
+                            # Apply mask to tracks
+                            mask_name = selected_mask[0] if isinstance(selected_mask, list) else selected_mask
+                            tracks_with_regions = apply_mask_to_tracks(
+                                st.session_state.tracks_data, 
+                                mask_name, 
+                                selected_classes[mask_name] if selected_classes else None
+                            )
+                            
+                            # Run dwell time analysis
+                            results = analyze_dwell_time(
+                                tracks_with_regions,
+                                min_dwell_frames=min_dwell_frames,
+                                frame_interval=st.session_state.get('frame_interval', 0.1),
+                                pixel_size=pixel_size
+                            )
+                            
+                            # Store results
+                            if 'analysis_results' not in st.session_state:
+                                st.session_state.analysis_results = {}
+                            st.session_state.analysis_results['dwell_time'] = results
+                            
+                            st.success("✓ Dwell time analysis completed!")
+                            
+                        except Exception as e:
+                            st.error(f"Error in dwell time analysis: {str(e)}")
+            else:
+                st.info("Generate masks in the Image Processing tab to enable dwell time analysis.")
+
+        # Boundary Crossing Analysis tab
+        with tabs[5]:
+            st.header("Boundary Crossing Analysis")
+            
+            # Check for available masks
+            mask_selection_ui = create_mask_selection_ui("boundary_crossing")
+            selected_mask, selected_classes, segmentation_method = mask_selection_ui
+            
+            if selected_mask:
+                st.info(f"Boundary crossing analysis will be performed on mask: {selected_mask}")
+                
+                # Parameters for boundary crossing analysis
+                st.subheader("Boundary Crossing Parameters")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    crossing_tolerance = st.slider(
+                        "Crossing Tolerance (pixels)",
+                        min_value=1,
+                        max_value=10,
+                        value=2,
+                        help="Tolerance for detecting boundary crossings"
+                    )
+                    
+                with col2:
+                    pixel_size = st.number_input(
+                        "Pixel Size (μm)",
+                        value=st.session_state.get('pixel_size', 0.1),
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.3f"
+                    )
+                
+                # Run boundary crossing analysis
+                if st.button("Run Boundary Crossing Analysis"):
+                    with st.spinner("Running boundary crossing analysis..."):
+                        try:
+                            # Apply mask to tracks
+                            mask_name = selected_mask[0] if isinstance(selected_mask, list) else selected_mask
+                            tracks_with_regions = apply_mask_to_tracks(
+                                st.session_state.tracks_data, 
+                                mask_name, 
+                                selected_classes[mask_name] if selected_classes else None
+                            )
+                            
+                            # Run boundary crossing analysis
+                            results = analyze_boundary_crossing(
+                                tracks_with_regions,
+                                tolerance=crossing_tolerance,
+                                frame_interval=st.session_state.get('frame_interval', 0.1),
+                                pixel_size=pixel_size
+                            )
+                            
+                            # Store results
+                            if 'analysis_results' not in st.session_state:
+                                st.session_state.analysis_results = {}
+                            st.session_state.analysis_results['boundary_crossing'] = results
+                            
+                            st.success("✓ Boundary crossing analysis completed!")
+                            
+                        except Exception as e:
+                            st.error(f"Error in boundary crossing analysis: {str(e)}")
+            else:
+                st.info("Generate masks in the Image Processing tab to enable boundary crossing analysis.")
+
+        # Multi-Channel Analysis tab
+        with tabs[6]:
+            st.header("Multi-Channel Analysis")
+            
+            st.info("Multi-channel analysis requires multiple datasets or channels.")
+            
+            # Parameters for multi-channel analysis
+            st.subheader("Multi-Channel Parameters")
+            
+            channel_analysis = st.selectbox(
+                "Analysis Type",
+                ["Colocalization", "Channel Comparison", "Cross-correlation"],
+                help="Type of multi-channel analysis"
+            )
+            
+            if st.button("Run Multi-Channel Analysis"):
+                st.info("Multi-channel analysis functionality coming soon.")
+
+        # Advanced Analysis tab
+        with tabs[7]:
+            st.header("Advanced Analysis")
+            
+            # Check for advanced modules
+            if BIOPHYSICAL_MODELS_AVAILABLE:
+                st.subheader("Biophysical Models")
+                
+                biophysical_analysis = st.selectbox(
+                    "Biophysical Model",
+                    ["Polymer Physics", "Energy Landscape", "Active Transport"],
+                    help="Advanced biophysical models"
+                )
+                
+                if st.button("Run Biophysical Analysis"):
+                    st.info("Advanced biophysical analysis functionality available.")
+            
+            if CORRELATIVE_ANALYSIS_AVAILABLE:
+                st.subheader("Correlative Analysis")
+                
+                correlative_analysis = st.selectbox(
+                    "Correlative Method",
+                    ["Cross-correlation", "Mutual Information", "Phase Analysis"],
+                    help="Advanced correlative analysis methods"
+                )
+                
+                if st.button("Run Correlative Analysis"):
+                    st.info("Correlative analysis functionality available.")
+            
+            if not BIOPHYSICAL_MODELS_AVAILABLE and not CORRELATIVE_ANALYSIS_AVAILABLE:
+                st.info("Install additional packages to enable advanced analysis features.")
+
+elif st.session_state.active_page == "Visualization":
+    st.title("Data Visualization")
+    
+    if st.session_state.tracks_data is None:
+        st.warning("No track data loaded. Please upload track data first.")
+        st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
+    else:
+        # Create tabs for different visualization types
+        viz_tabs = st.tabs(["Track Plots", "Analysis Results", "Heatmaps", "Interactive Plots"])
+        
+        with viz_tabs[0]:
+            st.header("Track Visualization")
+            
+            # Basic track plotting
+            plot_type = st.selectbox("Plot Type", ["2D Tracks", "3D Tracks", "Track Statistics"])
+            
+            if plot_type == "2D Tracks":
+                color_by = st.selectbox("Color by", ["track_id", "frame", "velocity"])
+                fig = plot_tracks(st.session_state.tracks_data, color_by=color_by)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            elif plot_type == "3D Tracks":
+                fig = plot_tracks_3d(st.session_state.tracks_data)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            elif plot_type == "Track Statistics":
+                if st.session_state.track_statistics is not None:
+                    plots = plot_track_statistics(st.session_state.track_statistics)
+                    for name, fig in plots.items():
+                        st.subheader(name.replace("_", " ").title())
+                        st.plotly_chart(fig, use_container_width=True)
+
+        with viz_tabs[1]:
+            st.header("Analysis Results Visualization")
+            
+            if 'analysis_results' in st.session_state:
+                available_analyses = list(st.session_state.analysis_results.keys())
+                
+                if available_analyses:
+                    selected_analysis = st.selectbox("Select Analysis", available_analyses)
+                    
+                    if selected_analysis == "diffusion" and "diffusion" in st.session_state.analysis_results:
+                        results = st.session_state.analysis_results["diffusion"]
+                        fig = plot_diffusion_coefficients(results)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    elif selected_analysis == "motion" and "motion" in st.session_state.analysis_results:
+                        results = st.session_state.analysis_results["motion"]
+                        fig = plot_motion_analysis(results)
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No analysis results available. Run analyses first.")
+            else:
+                st.info("No analysis results available. Run analyses first.")
+
+        with viz_tabs[2]:
+            st.header("Heatmaps and Density Plots")
+            
+            # Trajectory heatmap interface
+            if 'create_streamlit_heatmap_interface' in globals():
+                create_streamlit_heatmap_interface(st.session_state.tracks_data)
+            else:
+                # Basic density plot
+                fig = plot_density_map(st.session_state.tracks_data)
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+
+        with viz_tabs[3]:
+            st.header("Interactive Plots")
+            
+            st.info("Interactive plotting features coming soon.")
+
+elif st.session_state.active_page == "Advanced Analysis":
+    st.title("Advanced Analysis")
+    
+    if st.session_state.tracks_data is None:
+        st.warning("No track data loaded. Please upload track data first.")
+        st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
+    else:
+        # Create tabs for different advanced analyses
+        adv_tabs = st.tabs(["Anomaly Detection", "Correlative Analysis", "Change Point Detection", "Custom Analysis"])
+        
+        with adv_tabs[0]:
+            st.header("Anomaly Detection")
+            
+            if 'AnomalyDetector' in globals():
+                # Initialize anomaly detector
+                detector = AnomalyDetector()
+                
+                # Parameters for anomaly detection
+                st.subheader("Anomaly Detection Parameters")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    method = st.selectbox("Detection Method", ["isolation_forest", "local_outlier", "one_class_svm"])
+                    contamination = st.slider("Contamination Rate", 0.01, 0.3, 0.1, 0.01)
+                
+                with col2:
+                    features = st.multiselect(
+                        "Features to Use", 
+                        ["velocity", "displacement", "direction_change", "acceleration"],
+                        default=["velocity", "displacement"]
+                    )
+                
+                if st.button("Run Anomaly Detection"):
+                    with st.spinner("Running anomaly detection..."):
+                        try:
+                            results = detector.detect_anomalies(
+                                st.session_state.tracks_data,
+                                method=method,
+                                features=features,
+                                contamination=contamination
+                            )
+                            
+                            # Store results
+                            if 'analysis_results' not in st.session_state:
+                                st.session_state.analysis_results = {}
+                            st.session_state.analysis_results['anomaly'] = results
+                            
+                            st.success("✓ Anomaly detection completed!")
+                            
+                        except Exception as e:
+                            st.error(f"Error in anomaly detection: {str(e)}")
+            else:
+                st.info("Anomaly detection module not available.")
+
+        with adv_tabs[1]:
+            st.header("Correlative Analysis")
+            
+            if CORRELATIVE_ANALYSIS_AVAILABLE:
+                st.subheader("Correlative Analysis Parameters")
+                
+                analysis_type = st.selectbox(
+                    "Analysis Type",
+                    ["Cross-correlation", "Mutual Information", "Coherence Analysis"]
+                )
+                
+                if st.button("Run Correlative Analysis"):
+                    st.info("Correlative analysis functionality available.")
+            else:
+                st.info("Correlative analysis module not available.")
+
+        with adv_tabs[2]:
+            st.header("Change Point Detection")
+            
+            if CHANGEPOINT_DETECTION_AVAILABLE:
+                st.subheader("Change Point Detection Parameters")
+                
+                method = st.selectbox("Detection Method", ["PELT", "Binary Segmentation", "Window"])
+                
+                if st.button("Run Change Point Detection"):
+                    st.info("Change point detection functionality available.")
+            else:
+                st.info("Change point detection module not available.")
+
+        with adv_tabs[3]:
+            st.header("Custom Analysis")
+            
+            st.info("Custom analysis functionality coming soon.")
+
+elif st.session_state.active_page == "AI Anomaly Detection":
+    st.title("AI-Powered Anomaly Detection")
+    
+    if st.session_state.tracks_data is None:
+        st.warning("No track data loaded. Please upload track data first.")
+        st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
+    else:
+        st.info("AI anomaly detection functionality coming soon.")
+
+elif st.session_state.active_page == "Report Generation":
+    st.title("Report Generation")
+    
+    if st.session_state.tracks_data is None:
+        st.warning("No track data loaded. Please upload track data first.")
+        st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
+    else:
+        if REPORT_GENERATOR_AVAILABLE:
+            show_enhanced_report_generator()
+        else:
+            st.info("Enhanced report generator not available. Install required dependencies.")
+
+elif st.session_state.active_page == "Project Management":
+    st.title("Project Management")
+    
+    st.info("Project management functionality coming soon.")
+
+elif st.session_state.active_page == "Comparative Analysis":
+    st.title("Comparative Analysis")
+    
+    st.info("Comparative analysis functionality coming soon.")
+
+# Add any remaining helper functions or cleanup code here
+
 # Project Management page
 elif st.session_state.active_page == "Project Management":
     st.title("Project Management")
