@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from typing import Dict, List, Any, Optional, Tuple
+from scipy.stats import linregress
 import os
 import tempfile
 
@@ -1650,7 +1651,6 @@ def _fit_directed_motion(displacements, dt, positions, times):
 
 def _fit_confined_motion(displacements, dt, positions):
     """Fit confined motion model to displacements and positions."""
-    # For confined motion: MSD = L^2 * [1 - exp(-4*D*t/L^2)]
     
     # Initial estimates
     msd = np.mean(displacements**2)
@@ -1947,6 +1947,269 @@ def calculate_motion_speed_distributions(tracks_df, motion_analysis_results, pix
             speed_distributions[f"{model}_std"] = np.std(speeds)
     
     return {'success': True, 'speed_distributions': speed_distributions}
+
+def export_motion_analysis_results(motion_analysis_results, output_format='csv', output_path=None):
+    """
+    Export motion analysis results to file.
+    
+    Parameters
+    ----------
+    motion_analysis_results : dict
+        Results from analyze_motion_models function
+    output_format : str
+        Format to export ('csv' or 'json')
+    output_path : str
+        Path to save the output file
+    
+    Returns
+    -------
+    bool
+        True if export was successful
+    """
+    if not motion_analysis_results.get('success', False):
+        return False
+    
+    if output_path is None:
+        import tempfile
+        output_dir = tempfile.gettempdir()
+        output_path = os.path.join(output_dir, f"motion_analysis_results.{output_format}")
+    
+    try:
+        if output_format.lower() == 'csv':
+            # Extract track classifications
+            classifications_df = pd.DataFrame([
+                {'track_id': track_id, 'motion_type': model}
+                for track_id, model in motion_analysis_results.get('classifications', {}).items()
+            ])
+            
+            # Add parameters if available
+            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
+                for model, params in model_params.items():
+                    for param_name, value in params.items():
+                        column_name = f"{model}_{param_name}"
+                        mask = classifications_df['track_id'] == track_id
+                        if any(mask):
+                            classifications_df.loc[mask, column_name] = value
+            
+            # Save to CSV
+            classifications_df.to_csv(output_path, index=False)
+            
+        elif output_format.lower() == 'json':
+            import json
+            
+            # Prepare JSON serializable data
+            json_data = {
+                'summary': motion_analysis_results.get('summary', {}),
+                'classifications': motion_analysis_results.get('classifications', {}),
+                'model_parameters': {}
+            }
+            
+            # Convert numpy types to native Python types
+            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
+                json_data['model_parameters'][str(track_id)] = {}
+                for model, params in model_params.items():
+                    json_data['model_parameters'][str(track_id)][model] = {
+                        param: float(value) for param, value in params.items()
+                    }
+            
+            with open(output_path, 'w') as f:
+                json.dump(json_data, f, indent=2)
+                
+        else:
+            return False
+            
+        return True
+        
+    except Exception as e:
+        print(f"Error exporting motion analysis results: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"Error exporting motion analysis results: {str(e)}")
+        return False
+
+def analyze_whole_image_diffusion(tracks_df, pixel_size=1.0, frame_interval=1.0, max_time_points=None, min_tracks_per_point=3):
+    """
+    Analyze diffusion across the whole image by aligning all tracks to start at time zero
+    and averaging the squared displacement for each time step.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
+    pixel_size : float, optional
+        Pixel size in μm, by default 1.0
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0
+    max_time_points : int, optional
+        Maximum number of time points to analyze, by default None (use all available)
+    min_tracks_per_point : int, optional
+        Minimum number of tracks required for a time point to be included, by default 3
+    
+    Returns
+    -------
+    dict
+        Dictionary containing diffusion analysis results
+    """
+    # Validate input data
+    if tracks_df is None or tracks_df.empty:
+        return {'success': False, 'error': 'Empty or invalid tracks dataframe provided'}
+    
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    if not all(col in tracks_df.columns for col in required_columns):
+        return {'success': False, 'error': f'Tracks dataframe missing required columns: {required_columns}'}
+    
+    # Convert coordinates to physical units
+    tracks_df = tracks_df.copy()
+    if 'x_um' not in tracks_df.columns:
+        tracks_df['x_um'] = tracks_df['x'] * pixel_size
+        tracks_df['y_um'] = tracks_df['y'] * pixel_size
+    
+    # Group tracks by track_id
+    track_groups = tracks_df.groupby('track_id')
+    
+    # Process each track to calculate squared displacements from starting point
+    all_displacements = []
+    
+    for track_id, track_data in track_groups:
+        # Sort by frame
+        track = track_data.sort_values('frame').copy()
+        
+        if len(track) < 2:
+            continue
+        
+        # Get starting position
+        start_x = track['x_um'].iloc[0]
+        start_y = track['y_um'].iloc[0]
+        start_frame = track['frame'].iloc[0]
+        
+        # Calculate displacement from start for each point
+        track['time_from_start'] = (track['frame'] - start_frame) * frame_interval
+        track['dx_from_start'] = track['x_um'] - start_x
+        track['dy_from_start'] = track['y_um'] - start_y
+        track['squared_displacement'] = track['dx_from_start']**2 + track['dy_from_start']**2
+        
+        # Add to collection
+        all_displacements.append(track[['time_from_start', 'squared_displacement']])
+    
+    if not all_displacements:
+        return {'success': False, 'error': 'No valid tracks for displacement analysis'}
+    
+    # Combine all displacement data
+    displacement_df = pd.concat(all_displacements, ignore_index=True)
+    
+    # Group by time from start and calculate mean squared displacement (MSD)
+    msd_by_time = displacement_df.groupby('time_from_start').agg(
+        msd=('squared_displacement', 'mean'),
+        msd_std=('squared_displacement', 'std'),
+        n_tracks=('squared_displacement', 'count')
+    ).reset_index()
+    
+    # Filter time points with too few tracks
+    msd_by_time = msd_by_time[msd_by_time['n_tracks'] >= min_tracks_per_point].copy()
+    
+    if msd_by_time.empty:
+        return {'success': False, 'error': 'No time points with sufficient track data'}
+    
+    # Limit to max_time_points if specified
+    if max_time_points is not None and len(msd_by_time) > max_time_points:
+        msd_by_time = msd_by_time.iloc[:max_time_points].copy()
+    
+    # Fit diffusion model: MSD = 4*D*t + offset
+    try:
+        # Simple linear fit with sklearn
+        from sklearn.linear_model import LinearRegression
+        
+        # Prepare data for fitting
+        X = msd_by_time['time_from_start'].values.reshape(-1, 1)
+        y = msd_by_time['msd'].values
+        
+        # Fit linear model
+        model = LinearRegression(fit_intercept=True)
+        model.fit(X, y)
+        
+        # Extract parameters
+        D = model.coef_[0] / 4  # Diffusion coefficient
+        offset = model.intercept_  # Offset (ideally should be close to 0)
+        
+        # Calculate R-squared
+        y_pred = model.predict(X)
+        ss_total = np.sum((y - np.mean(y))**2)
+        ss_residual = np.sum((y - y_pred)**2)
+        r_squared = 1 - (ss_residual / ss_total)
+        
+        # Add fit curve to results
+        msd_by_time['msd_fit'] = y_pred
+        
+        # Create visualization
+        fig = go.Figure()
+        
+        # Add MSD data points with error bars
+        fig.add_trace(go.Scatter(
+            x=msd_by_time['time_from_start'],
+            y=msd_by_time['msd'],
+            mode='markers',
+            name='MSD Data',
+            error_y=dict(
+                type='data',
+                array=msd_by_time['msd_std'] / np.sqrt(msd_by_time['n_tracks']),
+                visible=True
+            ),
+            marker=dict(size=8, color='blue')
+        ))
+        
+        # Add fit line
+        fig.add_trace(go.Scatter(
+            x=msd_by_time['time_from_start'],
+            y=msd_by_time['msd_fit'],
+            mode='lines',
+            name=f'Fit: D={D:.4e} μm²/s, R²={r_squared:.4f}',
+            line=dict(color='red', width=2)
+        ))
+        
+        # Add number of tracks as a secondary y-axis
+        fig.add_trace(go.Scatter(
+            x=msd_by_time['time_from_start'],
+            y=msd_by_time['n_tracks'],
+            mode='lines+markers',
+            name='Number of Tracks',
+            yaxis='y2',
+            marker=dict(size=6, color='green'),
+            line=dict(color='green', width=1, dash='dot')
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title='Whole Image Diffusion Analysis',
+            xaxis_title='Time (s)',
+            yaxis_title='Mean Squared Displacement (μm²)',
+            yaxis2=dict(
+                title='Number of Tracks',
+                overlaying='y',
+                side='right',
+                showgrid=False
+            ),
+            legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)'),
+            hovermode='closest'
+        )
+        
+        return {
+            'success': True,
+            'D': D,
+            'offset': offset,
+            'r_squared': r_squared,
+            'msd_data': msd_by_time,
+            'n_tracks_total': len(track_groups),
+            'n_tracks_used': msd_by_time['n_tracks'].iloc[0],
+            'visualization': fig
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            'success': False,
+            'error': f'Error fitting diffusion model: {str(e)}',
+            'traceback': traceback.format_exc()
+        }
 
 def export_motion_analysis_results(motion_analysis_results, output_format='csv', output_path=None):
     """
