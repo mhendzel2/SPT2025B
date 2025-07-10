@@ -702,3 +702,421 @@ def create_segmentation_summary(compartments: List[Dict[str, Any]]) -> Dict[str,
         })
     
     return summary
+
+def integrate_advanced_segmentation_with_app():
+    """
+    Integration function for advanced segmentation with Streamlit app.
+    This function provides the UI for advanced segmentation methods.
+    """
+    import streamlit as st
+    
+    st.subheader("Advanced Segmentation Methods")
+    st.info("Advanced segmentation tools for complex image analysis")
+    
+    # Check if mask images are available
+    if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
+        st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
+        return
+    
+    # Get the image data
+    mask_image_data = st.session_state.mask_images
+    
+    # Handle different image formats
+    if isinstance(mask_image_data, list) and len(mask_image_data) > 0:
+        current_image = mask_image_data[0]
+    else:
+        current_image = mask_image_data
+    
+    # Ensure single channel
+    if len(current_image.shape) == 3:
+        if current_image.shape[2] > 1:
+            st.info(f"Multichannel image detected. Using channel 1 of {current_image.shape[2]}")
+            current_image = current_image[:, :, 0]
+        else:
+            current_image = current_image.squeeze()
+    
+    # Method selection
+    segmentation_method = st.selectbox(
+        "Advanced Segmentation Method",
+        [
+            "Watershed Segmentation",
+            "Enhanced Watershed", 
+            "Adaptive Threshold",
+            "Multi-Scale Segmentation"
+        ],
+        help="Choose advanced segmentation algorithm"
+    )
+    
+    # Get pixel size
+    pixel_size = st.session_state.get('pixel_size', 0.1)
+    
+    # Method-specific parameters
+    if segmentation_method == "Watershed Segmentation":
+        st.markdown("#### Watershed Parameters")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            min_distance_peaks = st.slider(
+                "Min Distance Between Peaks", 
+                min_value=3, 
+                max_value=20, 
+                value=7,
+                help="Minimum distance between watershed seeds"
+            )
+            
+        with col2:
+            min_object_size = st.slider(
+                "Min Object Size (pixels)", 
+                min_value=10, 
+                max_value=500, 
+                value=50,
+                help="Minimum size of detected objects"
+            )
+        
+        if st.button("Run Watershed Segmentation"):
+            with st.spinner("Running watershed segmentation..."):
+                try:
+                    compartments = segment_image_channel_watershed(
+                        current_image,
+                        min_distance_peaks=min_distance_peaks,
+                        min_object_size=min_object_size,
+                        pixel_size=pixel_size
+                    )
+                    
+                    if compartments:
+                        st.success(f"✓ Detected {len(compartments)} compartments using watershed")
+                        
+                        # Store results
+                        st.session_state.advanced_segmentation_results = compartments
+                        
+                        # Display summary
+                        summary = create_segmentation_summary(compartments)
+                        display_segmentation_results(compartments, summary, current_image)
+                        
+                    else:
+                        st.warning("No compartments detected. Try adjusting parameters.")
+                        
+                except Exception as e:
+                    st.error(f"Watershed segmentation failed: {str(e)}")
+    
+    elif segmentation_method == "Enhanced Watershed":
+        st.markdown("#### Enhanced Watershed Parameters")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            gaussian_sigma = st.slider(
+                "Gaussian Smoothing Sigma", 
+                min_value=0.0, 
+                max_value=5.0, 
+                value=1.0, 
+                step=0.1,
+                help="Preprocessing smoothing strength"
+            )
+            
+            min_distance_peaks = st.slider(
+                "Min Distance Between Peaks", 
+                min_value=3, 
+                max_value=20, 
+                value=7
+            )
+            
+        with col2:
+            min_object_size = st.slider(
+                "Min Object Size (pixels)", 
+                min_value=10, 
+                max_value=500, 
+                value=50
+            )
+            
+            use_gradient = st.checkbox(
+                "Use Gradient for Watershed", 
+                value=False,
+                help="Use gradient magnitude instead of distance transform"
+            )
+        
+        if st.button("Run Enhanced Watershed"):
+            with st.spinner("Running enhanced watershed segmentation..."):
+                try:
+                    compartments = enhanced_watershed_segmentation(
+                        current_image,
+                        gaussian_sigma=gaussian_sigma,
+                        min_distance_peaks=min_distance_peaks,
+                        min_object_size=min_object_size,
+                        pixel_size=pixel_size,
+                        use_gradient=use_gradient
+                    )
+                    
+                    if compartments:
+                        st.success(f"✓ Detected {len(compartments)} compartments using enhanced watershed")
+                        
+                        # Store results
+                        st.session_state.advanced_segmentation_results = compartments
+                        
+                        # Display summary
+                        summary = create_segmentation_summary(compartments)
+                        display_segmentation_results(compartments, summary, current_image)
+                        
+                    else:
+                        st.warning("No compartments detected. Try adjusting parameters.")
+                        
+                except Exception as e:
+                    st.error(f"Enhanced watershed segmentation failed: {str(e)}")
+    
+    elif segmentation_method == "Adaptive Threshold":
+        st.markdown("#### Adaptive Threshold Parameters")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            block_size = st.slider(
+                "Block Size", 
+                min_value=11, 
+                max_value=101, 
+                value=51, 
+                step=2,
+                help="Size of local neighborhood (must be odd)"
+            )
+            
+        with col2:
+            offset = st.slider(
+                "Threshold Offset", 
+                min_value=-0.1, 
+                max_value=0.1, 
+                value=0.01, 
+                step=0.001,
+                help="Constant subtracted from local mean"
+            )
+            
+            min_object_size = st.slider(
+                "Min Object Size (pixels)", 
+                min_value=10, 
+                max_value=500, 
+                value=50
+            )
+        
+        if st.button("Run Adaptive Threshold Segmentation"):
+            with st.spinner("Running adaptive threshold segmentation..."):
+                try:
+                    compartments = adaptive_threshold_segmentation(
+                        current_image,
+                        block_size=block_size,
+                        offset=offset,
+                        min_object_size=min_object_size,
+                        pixel_size=pixel_size
+                    )
+                    
+                    if compartments:
+                        st.success(f"✓ Detected {len(compartments)} compartments using adaptive threshold")
+                        
+                        # Store results
+                        st.session_state.advanced_segmentation_results = compartments
+                        
+                        # Display summary
+                        summary = create_segmentation_summary(compartments)
+                        display_segmentation_results(compartments, summary, current_image)
+                        
+                    else:
+                        st.warning("No compartments detected. Try adjusting parameters.")
+                        
+                except Exception as e:
+                    st.error(f"Adaptive threshold segmentation failed: {str(e)}")
+    
+    elif segmentation_method == "Multi-Scale Segmentation":
+        st.markdown("#### Multi-Scale Parameters")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            scale_min = st.slider("Min Scale (Sigma)", min_value=0.5, max_value=2.0, value=1.0, step=0.1)
+            scale_max = st.slider("Max Scale (Sigma)", min_value=2.0, max_value=8.0, value=4.0, step=0.5)
+            num_scales = st.slider("Number of Scales", min_value=2, max_value=6, value=3)
+            
+        with col2:
+            min_object_size = st.slider("Min Object Size (pixels)", min_value=10, max_value=500, value=50)
+            merge_overlaps = st.checkbox("Merge Overlapping Objects", value=True)
+            
+            if merge_overlaps:
+                overlap_threshold = st.slider(
+                    "Overlap Threshold", 
+                    min_value=0.1, 
+                    max_value=0.9, 
+                    value=0.5,
+                    help="Minimum overlap to trigger merging"
+                )
+        
+        if st.button("Run Multi-Scale Segmentation"):
+            with st.spinner("Running multi-scale segmentation..."):
+                try:
+                    # Generate scale values
+                    scales = np.linspace(scale_min, scale_max, num_scales)
+                    
+                    compartments = multi_scale_segmentation(
+                        current_image,
+                        scales=scales.tolist(),
+                        min_object_size=min_object_size,
+                        pixel_size=pixel_size
+                    )
+                    
+                    # Merge overlapping compartments if requested
+                    if merge_overlaps and compartments:
+                        compartments = merge_overlapping_compartments(
+                            compartments, 
+                            overlap_threshold=overlap_threshold
+                        )
+                    
+                    if compartments:
+                        st.success(f"✓ Detected {len(compartments)} compartments using multi-scale method")
+                        
+                        # Store results
+                        st.session_state.advanced_segmentation_results = compartments
+                        
+                        # Display summary
+                        summary = create_segmentation_summary(compartments)
+                        display_segmentation_results(compartments, summary, current_image)
+                        
+                    else:
+                        st.warning("No compartments detected. Try adjusting parameters.")
+                        
+                except Exception as e:
+                    st.error(f"Multi-scale segmentation failed: {str(e)}")
+
+def display_segmentation_results(compartments, summary, original_image):
+    """Display segmentation results in Streamlit interface."""
+    import streamlit as st
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Display summary statistics
+    st.subheader("Segmentation Summary")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Compartments", summary['total_compartments'])
+    with col2:
+        st.metric("Total Area", f"{summary['total_area_um2']:.1f} μm²")
+    with col3:
+        st.metric("Mean Area", f"{summary['mean_area_um2']:.1f} μm²")
+    with col4:
+        st.metric("Area Std", f"{summary['area_std_um2']:.1f} μm²")
+    
+    # Visualization
+    st.subheader("Segmentation Visualization")
+    
+    # Create overlay visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Original image
+    ax1.imshow(original_image, cmap='gray')
+    ax1.set_title('Original Image')
+    ax1.axis('off')
+    
+    # Overlay compartments
+    ax2.imshow(original_image, cmap='gray', alpha=0.7)
+    
+    # Plot compartment contours and centroids
+    colors = plt.cm.Set3(np.linspace(0, 1, len(compartments)))
+    
+    for i, comp in enumerate(compartments):
+        if 'contour_um' in comp and comp['contour_um']:
+            contour = np.array(comp['contour_um'])
+            if len(contour) > 0:
+                # Convert from micrometers back to pixels for display
+                pixel_size = st.session_state.get('pixel_size', 0.1)
+                contour_pixels = contour / pixel_size
+                
+                ax2.plot(contour_pixels[:, 1], contour_pixels[:, 0], 
+                        color=colors[i], linewidth=2, alpha=0.8)
+                
+                # Plot centroid
+                centroid_pixels = np.array(comp['centroid_um']) / pixel_size
+                ax2.plot(centroid_pixels[1], centroid_pixels[0], 
+                        'o', color=colors[i], markersize=8, markeredgecolor='white')
+    
+    ax2.set_title(f'Segmentation Results ({len(compartments)} compartments)')
+    ax2.axis('off')
+    
+    st.pyplot(fig)
+    plt.close()
+    
+    # Detailed statistics
+    with st.expander("Detailed Statistics"):
+        if summary['methods_used']:
+            st.write("**Methods Used:**")
+            for method, count in summary['method_counts'].items():
+                st.write(f"  - {method}: {count} compartments")
+        
+        st.write(f"**Area Statistics (μm²):**")
+        st.write(f"  - Min: {summary['min_area_um2']:.2f}")
+        st.write(f"  - Max: {summary['max_area_um2']:.2f}")
+        st.write(f"  - Median: {summary['median_area_um2']:.2f}")
+        
+        if 'mean_intensity' in summary:
+            st.write(f"**Intensity Statistics:**")
+            st.write(f"  - Mean: {summary['mean_intensity']:.2f}")
+            st.write(f"  - Median: {summary['median_intensity']:.2f}")
+            st.write(f"  - Std: {summary['intensity_std']:.2f}")
+        
+        if 'mean_eccentricity' in summary:
+            st.write(f"**Shape Statistics:**")
+            st.write(f"  - Mean Eccentricity: {summary['mean_eccentricity']:.3f}")
+            st.write(f"  - Mean Solidity: {summary['mean_solidity']:.3f}")
+    
+    # Export options
+    st.subheader("Export Results")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Export Compartment Data"):
+            # Convert compartments to DataFrame
+            export_data = []
+            for comp in compartments:
+                row = {
+                    'id': comp['id'],
+                    'method': comp['method'],
+                    'centroid_x_um': comp['centroid_um'][1] if len(comp['centroid_um']) > 1 else 0,
+                    'centroid_y_um': comp['centroid_um'][0] if len(comp['centroid_um']) > 0 else 0,
+                    'area_um2': comp['area_um2'],
+                    'mean_intensity': comp.get('mean_intensity', 0),
+                    'max_intensity': comp.get('max_intensity', 0),
+                    'eccentricity': comp.get('eccentricity', 0),
+                    'solidity': comp.get('solidity', 0)
+                }
+                export_data.append(row)
+            
+            export_df = pd.DataFrame(export_data)
+            csv = export_df.to_csv(index=False)
+            
+            st.download_button(
+                label="Download Compartment Data (CSV)",
+                data=csv,
+                file_name="advanced_segmentation_results.csv",
+                mime="text/csv"
+            )
+    
+    with col2:
+        if st.button("Apply to Track Classification"):
+            if 'tracks_data' in st.session_state and st.session_state.tracks_data is not None:
+                try:
+                    # Classify particles using the segmented compartments
+                    pixel_size = st.session_state.get('pixel_size', 0.1)
+                    
+                    classified_tracks = classify_particles_by_contour(
+                        st.session_state.tracks_data,
+                        compartments,
+                        pixel_size=pixel_size
+                    )
+                    
+                    # Update session state
+                    st.session_state.tracks_data = classified_tracks
+                    
+                    # Show classification summary
+                    classification_summary = classified_tracks['compartment_id'].value_counts()
+                    
+                    st.success("✓ Tracks classified by compartments!")
+                    st.write("**Classification Summary:**")
+                    for comp_id, count in classification_summary.items():
+                        st.write(f"  - {comp_id}: {count} particles")
+                    
+                except Exception as e:
+                    st.error(f"Track classification failed: {str(e)}")
+            else:
+                st.warning("No track data available for classification.")
