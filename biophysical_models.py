@@ -1651,6 +1651,7 @@ def _fit_directed_motion(displacements, dt, positions, times):
 
 def _fit_confined_motion(displacements, dt, positions):
     """Fit confined motion model to displacements and positions."""
+    # For confined motion: MSD = L^2 * [1 - exp(-4*D*t/L^2)]
     
     # Initial estimates
     msd = np.mean(displacements**2)
@@ -1989,7 +1990,7 @@ def export_motion_analysis_results(motion_analysis_results, output_format='csv',
                         column_name = f"{model}_{param_name}"
                         mask = classifications_df['track_id'] == track_id
                         if any(mask):
-                            classifications_df.loc[mask, column_name] = value
+                                                       classifications_df.loc[mask, column_name] = value
             
             # Save to CSV
             classifications_df.to_csv(output_path, index=False)
@@ -2211,81 +2212,87 @@ def analyze_whole_image_diffusion(tracks_df, pixel_size=1.0, frame_interval=1.0,
             'traceback': traceback.format_exc()
         }
 
-def export_motion_analysis_results(motion_analysis_results, output_format='csv', output_path=None):
+def check_data_availability(tracks_df=None, motion_results=None):
     """
-    Export motion analysis results to file.
+    Check if track data and motion analysis results are available for visualization.
     
     Parameters
     ----------
-    motion_analysis_results : dict
-        Results from analyze_motion_models function
-    output_format : str
-        Format to export ('csv' or 'json')
-    output_path : str
-        Path to save the output file
-    
+    tracks_df : pd.DataFrame, optional
+        Track data
+    motion_results : dict, optional
+        Motion analysis results
+        
     Returns
     -------
-    bool
-        True if export was successful
+    dict
+        Status of data availability
     """
-    if not motion_analysis_results.get('success', False):
-        return False
+    status = {
+        'tracks_available': False,
+        'motion_analysis_available': False,
+        'tracks_count': 0,
+        'analyzed_tracks_count': 0,
+        'error_messages': []
+    }
     
-    if output_path is None:
-        import tempfile
-        output_dir = tempfile.gettempdir()
-        output_path = os.path.join(output_dir, f"motion_analysis_results.{output_format}")
-    
-    try:
-        if output_format.lower() == 'csv':
-            # Extract track classifications
-            classifications_df = pd.DataFrame([
-                {'track_id': track_id, 'motion_type': model}
-                for track_id, model in motion_analysis_results.get('classifications', {}).items()
-            ])
-            
-            # Add parameters if available
-            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
-                for model, params in model_params.items():
-                    for param_name, value in params.items():
-                        column_name = f"{model}_{param_name}"
-                        mask = classifications_df['track_id'] == track_id
-                        if any(mask):
-                            classifications_df.loc[mask, column_name] = value
-            
-            # Save to CSV
-            classifications_df.to_csv(output_path, index=False)
-            
-        elif output_format.lower() == 'json':
-            import json
-            
-            # Prepare JSON serializable data
-            json_data = {
-                'summary': motion_analysis_results.get('summary', {}),
-                'classifications': motion_analysis_results.get('classifications', {}),
-                'model_parameters': {}
-            }
-            
-            # Convert numpy types to native Python types
-            for track_id, model_params in motion_analysis_results.get('model_parameters', {}).items():
-                json_data['model_parameters'][str(track_id)] = {}
-                for model, params in model_params.items():
-                    json_data['model_parameters'][str(track_id)][model] = {
-                        param: float(value) for param, value in params.items()
-                    }
-            
-            with open(output_path, 'w') as f:
-                json.dump(json_data, f, indent=2)
-                
+    # Check track data
+    if tracks_df is not None and not tracks_df.empty:
+        required_columns = ['track_id', 'frame', 'x', 'y']
+        if all(col in tracks_df.columns for col in required_columns):
+            status['tracks_available'] = True
+            status['tracks_count'] = tracks_df['track_id'].nunique()
         else:
-            return False
-            
-        return True
+            status['error_messages'].append(f"Track data missing required columns: {required_columns}")
+    else:
+        status['error_messages'].append("No track data loaded")
+    
+    # Check motion analysis results
+    if motion_results is not None and isinstance(motion_results, dict):
+        if motion_results.get('success', False):
+            status['motion_analysis_available'] = True
+            status['analyzed_tracks_count'] = len(motion_results.get('classifications', {}))
+        else:
+            status['error_messages'].append(f"Motion analysis failed: {motion_results.get('error', 'Unknown error')}")
+    else:
+        status['error_messages'].append("No motion analysis results available")
+    
+    return status
+
+def get_motion_analysis_summary(motion_results):
+    """
+    Get a summary of motion analysis results for reporting.
+    
+    Parameters
+    ----------
+    motion_results : dict
+        Motion analysis results
         
-    except Exception as e:
-        print(f"Error exporting motion analysis results: {str(e)}")
-        return False
-    except Exception as e:
-        print(f"Error exporting motion analysis results: {str(e)}")
-        return False
+    Returns
+    -------
+    dict
+        Summary data for reports
+    """
+    if not motion_results or not motion_results.get('success', False):
+        return {'success': False, 'error': 'No valid motion analysis results'}
+    
+    summary = motion_results.get('summary', {})
+    
+    report_data = {
+        'success': True,
+        'total_tracks': summary.get('total_tracks', 0),
+        'analyzed_tracks': summary.get('analyzed_tracks', 0),
+        'model_counts': summary.get('model_counts', {}),
+        'model_fractions': summary.get('fractions', {}),
+        'model_parameters': summary.get('model_parameters', {}),
+        'track_classifications': summary.get('track_classifications', {}),
+        'parameter_distributions': summary.get('parameter_distributions', {})
+    }
+    
+    # Calculate additional statistics
+    if report_data['model_counts']:
+        most_common_model = max(report_data['model_counts'], key=report_data['model_counts'].get)
+        report_data['most_common_model'] = most_common_model
+        report_data['most_common_fraction'] = report_data['model_fractions'].get(most_common_model, 0)
+    
+    return report_data
