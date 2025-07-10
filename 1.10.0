@@ -1,6 +1,0 @@
-Collecting scipy
-  Using cached scipy-1.15.3-cp313-cp313-win_amd64.whl.metadata (60 kB)
-Requirement already satisfied: numpy<2.5,>=1.23.5 in c:\users\mjhen\spt2025b\spt_env\lib\site-packages (from scipy) (2.3.0)
-Using cached scipy-1.15.3-cp313-cp313-win_amd64.whl (41.0 MB)
-Installing collected packages: scipy
-Successfully installed scipy-1.15.3
