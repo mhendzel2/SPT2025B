@@ -6,3 +6,18 @@ channel = "stable-25_05"
 
 [deployment]
 run = ["sh", "-c", "streamlit run app.py"]
+
+[workflows]
+
+[[workflows.workflow]]
+name = "Run Tests"
+author = 42696104
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python test_comprehensive.py"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python test_report_generation.py"
