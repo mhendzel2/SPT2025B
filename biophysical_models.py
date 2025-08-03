@@ -1582,6 +1582,87 @@ def _determine_best_model(model_errors):
     
     return best_model, best_score
 
+def _summarize_motion_analysis(results):
+    """
+    Generate summary statistics for motion model analysis results.
+    
+    Parameters
+    ----------
+    results : dict
+        Results dictionary containing classifications, model_parameters, etc.
+        
+    Returns
+    -------
+    dict
+        Summary statistics including model counts, confidence metrics, etc.
+    """
+    try:
+        classifications = results.get('classifications', {})
+        best_models = results.get('best_model', {})
+        error_metrics = results.get('error_metrics', {})
+        
+        if not classifications:
+            return {
+                'total_tracks': 0,
+                'model_counts': {},
+                'model_fractions': {},
+                'mean_errors': {},
+                'confidence_metrics': {}
+            }
+        
+        # Count occurrences of each model
+        model_counts = {}
+        for track_id, model in classifications.items():
+            if model:  # Only count non-None models
+                model_counts[model] = model_counts.get(model, 0) + 1
+        
+        total_classified = sum(model_counts.values())
+        
+        # Calculate model fractions
+        model_fractions = {}
+        if total_classified > 0:
+            for model, count in model_counts.items():
+                model_fractions[model] = count / total_classified
+        
+        # Calculate mean errors for each model
+        mean_errors = {}
+        for track_id, errors in error_metrics.items():
+            best_model = best_models.get(track_id)
+            if best_model and best_model in errors:
+                if best_model not in mean_errors:
+                    mean_errors[best_model] = []
+                mean_errors[best_model].append(errors[best_model])
+        
+        # Convert to mean values
+        for model in mean_errors:
+            mean_errors[model] = np.mean(mean_errors[model])
+        
+        # Generate confidence metrics (inverse of error for simplicity)
+        confidence_metrics = {}
+        for model, error in mean_errors.items():
+            confidence_metrics[model] = 1.0 / (1.0 + error) if error > 0 else 1.0
+        
+        return {
+            'total_tracks': len(classifications),
+            'total_classified': total_classified,
+            'model_counts': model_counts,
+            'model_fractions': model_fractions,
+            'mean_errors': mean_errors,
+            'confidence_metrics': confidence_metrics,
+            'success': True
+        }
+        
+    except Exception as e:
+        return {
+            'total_tracks': 0,
+            'model_counts': {},
+            'model_fractions': {},
+            'mean_errors': {},
+            'confidence_metrics': {},
+            'error': f'Summary generation failed: {str(e)}',
+            'success': False
+        }
+
 def _fit_motion_models(positions, times, models):
     """
     Fit different motion models to position data.
