@@ -1550,6 +1550,38 @@ def analyze_motion_models(tracks_df, models=None, min_track_length=10, time_wind
 
     return results
 
+def _determine_best_model(model_errors):
+    """
+    Determine the best motion model based on error comparison.
+    
+    Parameters
+    ----------
+    model_errors : dict
+        Dictionary mapping model names to lists of error values
+        
+    Returns
+    -------
+    tuple
+        (best_model_name, best_error_score)
+    """
+    if not model_errors:
+        return None, float('inf')
+    
+    # Calculate mean error for each model
+    mean_errors = {}
+    for model, errors in model_errors.items():
+        if errors:  # Only consider models with actual error values
+            mean_errors[model] = np.mean(errors)
+    
+    if not mean_errors:
+        return None, float('inf')
+    
+    # Find model with lowest mean error
+    best_model = min(mean_errors, key=mean_errors.get)
+    best_score = mean_errors[best_model]
+    
+    return best_model, best_score
+
 def _fit_motion_models(positions, times, models):
     """
     Fit different motion models to position data.

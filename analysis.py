@@ -73,27 +73,24 @@ def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min
         y = track['y'].values * pixel_size
         frames = track['frame'].values
 
-        # Calculate MSD for different lag times
+        # Calculate MSD for different lag times using vectorized operations
         for lag in range(1, min(max_lag + 1, len(track))):
-            # Calculate squared displacements
-            squared_displacements = []
+            # Vectorized calculation of squared displacements
+            if len(x) > lag:
+                dx = x[lag:] - x[:-lag]
+                dy = y[lag:] - y[:-lag]
+                squared_displacements = dx**2 + dy**2
+                
+                if len(squared_displacements) > 0:
+                    msd = np.mean(squared_displacements)
+                    lag_time = lag * frame_interval
 
-            for i in range(len(x) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
-                squared_displacement = dx**2 + dy**2
-                squared_displacements.append(squared_displacement)
-
-            if squared_displacements:
-                msd = np.mean(squared_displacements)
-                lag_time = lag * frame_interval
-
-                msd_results.append({
-                    'track_id': track_id,
-                    'lag_time': lag_time,
-                    'msd': msd,
-                    'n_points': len(squared_displacements)
-                })
+                    msd_results.append({
+                        'track_id': track_id,
+                        'lag_time': lag_time,
+                        'msd': msd,
+                        'n_points': len(squared_displacements)
+                    })
 
     return pd.DataFrame(msd_results)
 
@@ -1606,14 +1603,13 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
             }]
 
             valid_df = diffusion_df[valid_indices].copy()
-            track_assignments = [
-                {
-                    'track_id': row['track_id'],
-                    'population_id': 0,
-                    'diffusion_coeff': row['diffusion_coeff']
-                }
-                for _, row in valid_df.iterrows()
-            ] if not valid_df.empty else []
+            # Vectorized creation instead of iterrows
+            if not valid_df.empty:
+                track_assignments_df = valid_df[['track_id', 'diffusion_coeff']].copy()
+                track_assignments_df['population_id'] = 0
+                track_assignments = track_assignments_df.to_dict('records')
+            else:
+                track_assignments = []
 
             return {
                 'success': True,
@@ -2351,7 +2347,6 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
         # If no boundaries detected, use simple division
         if not boundaries and not detected_boundaries:
             # Divide the space into quadrants or use midpoints
-```python
             x_mid = (x_min + x_max) / 2
             y_mid = (y_min + y_max) / 2
 
