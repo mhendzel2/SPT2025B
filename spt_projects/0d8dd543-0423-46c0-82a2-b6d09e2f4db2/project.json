@@ -1,0 +1,22 @@
+{
+  "id": "0d8dd543-0423-46c0-82a2-b6d09e2f4db2",
+  "name": "PDF Export Test Project",
+  "description": "Testing PDF export functionality",
+  "creation_date": "2025-06-21 18:15:16",
+  "last_modified": "2025-06-21 18:15:16",
+  "conditions": {
+    "pdf_test_001": {
+      "id": "pdf_test_001",
+      "name": "PDF Test Condition",
+      "description": "Test condition for PDF export",
+      "files": {
+        "pdf_test_file_001": {
+          "id": "pdf_test_file_001",
+          "file_name": "pdf_test_tracks.csv",
+          "track_data_file": "pdf_test_file_001_tracks.csv",
+          "upload_date": "2025-06-21 18:15:16.439795"
+        }
+      }
+    }
+  }
+}

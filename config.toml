@@ -1,0 +1,72 @@
+# SPT Analysis Configuration File
+# This file contains user-editable default parameters for the application
+# Modify values here to customize default behaviors without editing code
+
+[analysis]
+# Default parameters for diffusion analysis
+max_lag = 20                    # Maximum lag time for MSD calculation (frames)
+min_track_length = 5           # Minimum track length to include in analysis (frames)
+fit_method = "linear"          # Method for fitting MSD curves: linear, weighted, nonlinear
+analyze_anomalous = true       # Whether to analyze anomalous diffusion by default
+check_confinement = true       # Whether to check for confined diffusion by default
+
+# Motion analysis parameters
+motion_window_size = 5         # Window size for calculating local motion properties
+velocity_autocorr = true       # Calculate velocity autocorrelation by default
+persistence_analysis = true    # Analyze directional persistence by default
+motion_classification = "basic" # Motion classification method: none, basic, advanced
+
+# Clustering analysis parameters
+clustering_method = "DBSCAN"   # Default clustering method: DBSCAN, OPTICS, Hierarchical
+clustering_epsilon = 0.5      # Maximum distance between points in cluster (µm)
+clustering_min_samples = 3    # Minimum number of points to form a cluster
+
+[tracking]
+# Default parameters for particle tracking
+max_search_radius = 10.0      # Maximum search radius for particle linking (pixels)
+memory = 3                    # Number of frames a particle can disappear
+min_track_length_tracking = 5 # Minimum track length to keep after tracking
+
+# Detection parameters
+detection_threshold = 0.01    # Default detection threshold
+noise_size = 1               # Expected noise size for filtering
+smoothing_size = 1.5         # Smoothing kernel size for detection
+
+[microscopy]
+# Default microscopy parameters
+pixel_size = 0.16            # Default pixel size (µm)
+frame_interval = 0.1         # Default frame interval (seconds)
+temperature = 298.15         # Temperature (Kelvin) for thermal calculations
+
+[visualization]
+# Default visualization settings
+track_colormap = "viridis"   # Default colormap for track visualization
+figure_dpi = 150            # Default figure DPI for plots
+figure_size_width = 10      # Default figure width (inches)
+figure_size_height = 8      # Default figure height (inches)
+
+[rheology]
+# Microrheology analysis parameters
+particle_radius = 0.5e-6    # Default particle radius (meters)
+temperature_k = 298.15      # Temperature for rheology calculations (Kelvin)
+viscosity_medium = 1e-3     # Viscosity of surrounding medium (Pa·s)
+
+[file_handling]
+# File processing parameters
+max_file_size_mb = 1024     # Maximum file size to process (MB)
+chunk_size = 10000          # Chunk size for processing large files
+supported_formats = ["csv", "xlsx", "xml", "mvd2", "tiff", "tif"]
+
+[performance]
+# Performance and processing parameters
+max_workers = 4             # Maximum number of parallel workers
+memory_limit_gb = 8         # Memory limit for processing (GB)
+enable_gpu = false          # Enable GPU acceleration if available
+batch_size = 1000          # Batch size for processing large datasets
+
+[ui]
+# User interface defaults
+default_tab = "Data Loading" # Default tab to show on startup
+show_advanced_options = false # Show advanced options by default
+auto_save_results = true    # Automatically save analysis results
+result_cache_size = 100     # Number of analysis results to cache
