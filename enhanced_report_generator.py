@@ -1884,3 +1884,61 @@ class EnhancedSPTReportGenerator:
             # Display key results
             if 'summary' in results:
                 st.markdown("**Summary:**")
+                for key, value in results['summary'].items():
+                    st.write(f"• {key.replace('_', ' ').title()}: {value}")
+            
+            # Display detailed results
+            st.markdown("**Detailed Results:**")
+            st.json(results)
+        
+        except Exception as e:
+            st.error(f"Error rendering analysis section: {e}")
+
+# Streamlit app integration
+def show_enhanced_report_generator(track_data=None, analysis_results=None, 
+                                  pixel_size=0.1, frame_interval=0.1, 
+                                  track_statistics=None, msd_data=None):
+    """
+    Main entry point for the Enhanced Report Generator interface.
+    
+    This function should be called from the main app.py to display the 
+    enhanced report generation interface.
+    
+    Parameters
+    ----------
+    track_data : pd.DataFrame, optional
+        Track data to include in the report
+    analysis_results : Dict, optional
+        Analysis results to include in the report
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 0.1
+    frame_interval : float, optional
+        Frame interval in seconds, by default 0.1
+    track_statistics : pd.DataFrame, optional
+        Precomputed track statistics, by default None
+    msd_data : pd.DataFrame, optional
+        MSD data for diffusion analysis, by default None
+    """
+    # Initialize the report generator
+    generator = EnhancedSPTReportGenerator()
+    
+    # Display the interface
+    generator.display_enhanced_analysis_interface()
+
+# Alternative simplified entry point
+def main():
+    """
+    Standalone entry point for testing the report generator.
+    """
+    st.set_page_config(
+        page_title="SPT Enhanced Report Generator",
+        page_icon="📊",
+        layout="wide"
+    )
+    
+    generator = EnhancedSPTReportGenerator()
+    generator.display_enhanced_analysis_interface()
+
+# For direct execution
+if __name__ == "__main__":
+    main()
