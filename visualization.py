@@ -1135,3 +1135,100 @@ def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis")
     plt.tight_layout()
     
     return fig
+
+def plot_energy_landscape(energy_data):
+    """
+    Plot the potential energy landscape as a heatmap.
+    
+    Parameters:
+    -----------
+    energy_data : dict
+        Dictionary containing energy landscape data with keys:
+        - 'potential_energy_map': 2D array of energy values
+        - 'x_edges': x-axis bin edges
+        - 'y_edges': y-axis bin edges
+    
+    Returns:
+    --------
+    plotly.graph_objects.Figure
+        Interactive heatmap of the energy landscape
+    """
+    try:
+        potential_map = energy_data['potential_energy_map']
+        x_edges = energy_data['x_edges']
+        y_edges = energy_data['y_edges']
+        
+        # Create x and y coordinate arrays for the center of each bin
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        
+        fig = go.Figure(data=go.Heatmap(
+            z=potential_map,
+            x=x_centers,
+            y=y_centers,
+            colorscale='Viridis',
+            colorbar=dict(title="Energy (kT)")
+        ))
+        
+        fig.update_layout(
+            title="Potential Energy Landscape",
+            xaxis_title="X Position (μm)",
+            yaxis_title="Y Position (μm)",
+            width=600,
+            height=500
+        )
+        
+        return fig
+        
+    except KeyError as e:
+        st.error(f"Missing required data for energy landscape plot: {e}")
+        return go.Figure()
+    except Exception as e:
+        st.error(f"Error creating energy landscape plot: {e}")
+        return go.Figure()
+
+def plot_polymer_physics_results(polymer_data):
+    """
+    Plot polymer physics analysis results.
+    
+    Parameters:
+    -----------
+    polymer_data : dict
+        Dictionary containing polymer physics results
+    
+    Returns:
+    --------
+    plotly.graph_objects.Figure
+        Combined plot of polymer physics metrics
+    """
+    try:
+        from plotly.subplots import make_subplots
+        
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('Persistence Length', 'Contour Length', 
+                          'End-to-End Distance', 'Radius of Gyration'),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": False}, {"secondary_y": False}]]
+        )
+        
+        # Add plots based on available data
+        if 'persistence_length' in polymer_data:
+            fig.add_trace(
+                go.Histogram(x=polymer_data['persistence_length'], name="Persistence Length"),
+                row=1, col=1
+            )
+            
+        # Add more subplots as needed based on polymer_data content
+        
+        fig.update_layout(
+            title="Polymer Physics Analysis Results",
+            showlegend=False,
+            height=600
+        )
+        
+        return fig
+        
+    except Exception as e:
+        st.error(f"Error creating polymer physics plot: {e}")
+        return go.Figure()

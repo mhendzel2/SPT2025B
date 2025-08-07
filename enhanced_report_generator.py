@@ -348,6 +348,13 @@ class EnhancedSPTReportGenerator:
         """Execute comprehensive analysis pipeline."""
         st.subheader("🔄 Analysis Execution")
         
+        # Check if any analysis results exist
+        if 'analysis_results' not in st.session_state:
+            st.warning("No analysis results found. Please run analyses from the Analysis tab first.")
+            return
+        
+        analysis_results = st.session_state.analysis_results
+        
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -1020,54 +1027,12 @@ class EnhancedSPTReportGenerator:
                 'track_statistics': intensity_df,
                 'summary': {
                     'total_tracks': len(intensity_df),
-                    'mean_intensity_overall': intensity_df['mean_intensity'].mean(),
-                    'intensity_variability': intensity_df['cv_intensity'].mean()
+                    'mean_intensity_overall': intensity_df['mean_intensity'].mean() if not intensity_df.empty else 0,
+                    'intensity_variability': intensity_df['cv_intensity'].mean() if not intensity_df.empty else 0
                 }
             }
         except Exception as e:
             return {'success': False, 'error': f'Intensity analysis failed: {str(e)}'}
-
-    def _plot_intensity(self, results):
-        """Generate intensity analysis plots."""
-        if not results.get('success', True):
-            return None
-        
-        track_stats = results.get('track_statistics', pd.DataFrame())
-        if track_stats.empty:
-            return None
-        
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=['Intensity Distribution', 'Intensity vs Track Length', 
-                          'Intensity Variability', 'Track Intensity Profiles']
-        )
-        
-        # Intensity distribution
-        fig.add_trace(go.Histogram(x=track_stats['mean_intensity'], name="Intensity Distribution",
-                                 nbinsx=30), row=1, col=1)
-        
-        # Intensity vs track length
-        fig.add_trace(go.Scatter(x=track_stats['track_length'], y=track_stats['mean_intensity'],
-                               mode='markers', name="Intensity vs Length"), row=1, col=2)
-        
-        # Intensity variability (CV)
-        fig.add_trace(go.Histogram(x=track_stats['cv_intensity'], name="Intensity CV",
-                                 nbinsx=30), row=2, col=1)
-        
-        # Sample track profiles (first 10 tracks) - vectorized approach
-        sample_tracks = track_stats.head(10)
-        if not sample_tracks.empty:
-            fig.add_trace(go.Scatter(
-                y=sample_tracks['mean_intensity'].values, 
-                x=list(range(len(sample_tracks))), 
-                mode='markers', 
-                name="Track Intensities",
-                text=[f"Track {tid}" for tid in sample_tracks['track_id']],
-                showlegend=False
-            ), row=2, col=2)
-        
-        fig.update_layout(title="Intensity Analysis")
-        return fig
 
     def _analyze_confinement(self, tracks_df, units):
         """Analyze confined motion and boundary interactions."""
@@ -1116,45 +1081,6 @@ class EnhancedSPTReportGenerator:
             }
         except Exception as e:
             return {'success': False, 'error': f'Confinement analysis failed: {str(e)}'}
-
-    def _plot_confinement(self, results):
-        """Generate confinement analysis plots."""
-        if not results.get('success', True):
-            return None
-        
-        confinement_data = results.get('confinement_data', pd.DataFrame())
-        if confinement_data.empty:
-            return None
-        
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=['Confinement Ratio Distribution', 'Radius of Gyration', 
-                          'Confinement vs Track Length', 'Confined vs Free Tracks']
-        )
-        
-        # Confinement ratio distribution
-        fig.add_trace(go.Histogram(x=confinement_data['confinement_ratio'], 
-                                 name="Confinement Ratio", nbinsx=30), row=1, col=1)
-        
-        # Radius of gyration
-        fig.add_trace(go.Histogram(x=confinement_data['radius_gyration'], 
-                                 name="Radius of Gyration", nbinsx=30), row=1, col=2)
-        
-        # Confinement vs track length
-        colors = ['red' if confined else 'blue' for confined in confinement_data['is_confined']]
-        fig.add_trace(go.Scatter(x=confinement_data['track_length'], 
-                               y=confinement_data['confinement_ratio'],
-                               mode='markers', marker_color=colors,
-                               name="Confinement vs Length"), row=2, col=1)
-        
-        # Confined vs free tracks count
-        confined_counts = confinement_data['is_confined'].value_counts()
-        fig.add_trace(go.Bar(x=['Free', 'Confined'], y=[confined_counts.get(False, 0), 
-                                                       confined_counts.get(True, 0)],
-                           name="Track Classification"), row=2, col=2)
-        
-        fig.update_layout(title="Confinement Analysis")
-        return fig
 
     def _analyze_velocity_correlation(self, tracks_df, units):
         """Analyze velocity autocorrelation and persistence."""
@@ -1215,58 +1141,6 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'success': False, 'error': f'Velocity correlation analysis failed: {str(e)}'}
 
-    def _plot_velocity_correlation(self, results):
-        """Generate velocity correlation plots."""
-        if not results.get('success', True):
-            return None
-        
-        correlation_data = results.get('correlation_data', [])
-        if not correlation_data:
-            return None
-        
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=['Velocity Autocorrelation', 'Persistence Length Distribution', 
-                          'Velocity Distribution', 'Sample Autocorrelation Curves']
-        )
-        
-        # Average autocorrelation
-        if correlation_data:
-            max_len = max(len(r['autocorrelation']) for r in correlation_data)
-            avg_autocorr = np.zeros(max_len)
-            count = np.zeros(max_len)
-            
-            for result in correlation_data:
-                autocorr = result['autocorrelation']
-                for i, val in enumerate(autocorr):
-                    avg_autocorr[i] += val
-                    count[i] += 1
-            
-            avg_autocorr = avg_autocorr / np.maximum(count, 1)
-            
-            fig.add_trace(go.Scatter(x=list(range(len(avg_autocorr))), y=avg_autocorr,
-                                   name="Average Autocorrelation"), row=1, col=1)
-        
-        # Persistence length distribution
-        persistence_lengths = [r['persistence_length'] for r in correlation_data]
-        fig.add_trace(go.Histogram(x=persistence_lengths, name="Persistence Length",
-                                 nbinsx=20), row=1, col=2)
-        
-        # Velocity distribution
-        mean_velocities = [r['mean_velocity'] for r in correlation_data]
-        fig.add_trace(go.Histogram(x=mean_velocities, name="Mean Velocity",
-                                 nbinsx=20), row=2, col=1)
-        
-        # Sample autocorrelation curves (first 5 tracks)
-        for i, result in enumerate(correlation_data[:5]):
-            autocorr = result['autocorrelation']
-            fig.add_trace(go.Scatter(x=list(range(len(autocorr))), y=autocorr,
-                                   name=f"Track {result['track_id']}", 
-                                   showlegend=False), row=2, col=2)
-        
-        fig.update_layout(title="Velocity Correlation Analysis")
-        return fig
-
     def _analyze_particle_interactions(self, tracks_df, units):
         """Analyze multi-particle interactions and collective motion."""
         try:
@@ -1325,48 +1199,6 @@ class EnhancedSPTReportGenerator:
             }
         except Exception as e:
             return {'success': False, 'error': f'Particle interaction analysis failed: {str(e)}'}
-
-    def _plot_particle_interactions(self, results):
-        """Generate particle interaction plots."""
-        if not results.get('success', True):
-            return None
-        
-        interaction_data = results.get('interaction_data', pd.DataFrame())
-        
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=['Interaction Distance Distribution', 'Interactions Over Time', 
-                          'Interaction Network', 'Interaction Strength']
-        )
-        
-        if not interaction_data.empty:
-            # Distance distribution
-            fig.add_trace(go.Histogram(x=interaction_data['distance'], 
-                                     name="Distance Distribution", nbinsx=30), row=1, col=1)
-            
-            # Interactions over time
-            interactions_per_frame = interaction_data.groupby('frame').size().reset_index(name='count')
-            fig.add_trace(go.Scatter(x=interactions_per_frame['frame'], 
-                                   y=interactions_per_frame['count'],
-                                   mode='lines+markers', name="Interactions vs Time"), row=1, col=2)
-            
-            # Simplified interaction network (sample)
-            sample_interactions = interaction_data.head(50)  # Show first 50 interactions
-            fig.add_trace(go.Scatter(x=sample_interactions['track_id_1'], 
-                                   y=sample_interactions['track_id_2'],
-                                   mode='markers', name="Interaction Pairs"), row=2, col=1)
-            
-            # Interaction strength
-            fig.add_trace(go.Histogram(x=interaction_data['interaction_strength'], 
-                                     name="Interaction Strength", nbinsx=30), row=2, col=2)
-        else:
-            # Empty plots with annotations
-            for row, col in [(1, 1), (1, 2), (2, 1), (2, 2)]:
-                fig.add_annotation(text="No interactions detected", x=0.5, y=0.5, 
-                                 row=row, col=col, showarrow=False)
-        
-        fig.update_layout(title="Multi-Particle Interaction Analysis")
-        return fig
 
     def generate_batch_report(self, tracks_df, selected_analyses, condition_name):
         """Generate automated report for batch processing (non-Streamlit)."""
@@ -1447,6 +1279,174 @@ class EnhancedSPTReportGenerator:
         # Display summary statistics
         if 'basic_statistics' in self.report_results:
             stats = self.report_results['basic_statistics']
+            st.subheader("📈 Summary Statistics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Tracks", stats.get('total_tracks', 'N/A'))
+            with col2:
+                st.metric("Mean Track Length", f"{stats.get('mean_track_length', 0):.1f}")
+            with col3:
+                st.metric("Mean Velocity", f"{stats.get('mean_velocity', 0):.3f} µm/s")
+            with col4:
+                st.metric("Total Time Points", stats.get('total_timepoints', 'N/A'))
+        
+        # Display all analysis results
+        for analysis_key, result in self.report_results.items():
+            if analysis_key in self.available_analyses:
+                analysis_info = self.available_analyses[analysis_key]
+                
+                with st.expander(f"📊 {analysis_info['name']}", expanded=True):
+                    if 'error' in result:
+                        st.error(f"Analysis failed: {result['error']}")
+                        continue
+                    
+                    # Display analysis-specific results
+                    if analysis_key == 'basic_statistics':
+                        self._display_basic_stats(result)
+                    elif analysis_key == 'diffusion_analysis':
+                        self._display_diffusion_results(result)
+                    elif analysis_key == 'motion_classification':
+                        self._display_motion_results(result)
+                    else:
+                        # Generic result display
+                        st.json(result)
+                    
+                    # Display visualization if available
+                    if analysis_key in self.report_figures:
+                        st.plotly_chart(self.report_figures[analysis_key], use_container_width=True)
+
+    def _display_basic_stats(self, stats):
+        """Display basic statistics in a formatted way."""
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Track Statistics:**")
+            st.write(f"• Total tracks: {stats.get('total_tracks', 'N/A')}")
+            st.write(f"• Mean track length: {stats.get('mean_track_length', 0):.1f} frames")
+            st.write(f"• Median track length: {stats.get('median_track_length', 0):.1f} frames")
+            st.write(f"• Track length std: {stats.get('track_length_std', 0):.1f} frames")
+        
+        with col2:
+            st.markdown("**Motion Statistics:**")
+            st.write(f"• Mean velocity: {stats.get('mean_velocity', 0):.3f} µm/s")
+            st.write(f"• Total time points: {stats.get('total_timepoints', 'N/A')}")
+
+    def _display_diffusion_results(self, results):
+        """Display diffusion analysis results."""
+        if 'diffusion_coefficient' in results:
+            st.metric("Diffusion Coefficient", f"{results['diffusion_coefficient']:.2e} µm²/s")
+        if 'msd_slope' in results:
+            st.metric("MSD Slope", f"{results['msd_slope']:.3f}")
+
+    def _display_motion_results(self, results):
+        """Display motion classification results."""
+        if 'classification_summary' in results:
+            summary = results['classification_summary']
+            for motion_type, count in summary.items():
+                st.metric(f"{motion_type.title()} Motion", count)
+
+    def _generate_report_data(self, config, current_units):
+        """Generate comprehensive report data for download."""
+        import datetime
+        
+        report_data = {
+            'metadata': {
+                'generated_at': datetime.datetime.now().isoformat(),
+                'analysis_software': 'SPT2025B',
+                'pixel_size_um': current_units.get('pixel_size', 0.1),
+                'frame_interval_s': current_units.get('frame_interval', 0.1),
+                'config': config
+            },
+            'analysis_results': self.report_results,
+            'visualizations_available': list(self.report_figures.keys())
+        }
+        
+        return report_data
+
+    def _generate_csv_summary(self):
+        """Generate CSV summary of key results."""
+        try:
+            import io
+            import csv
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Write header
+            writer.writerow(['Analysis', 'Metric', 'Value', 'Unit'])
+            
+            # Extract key metrics from each analysis
+            for analysis_key, result in self.report_results.items():
+                if 'error' in result:
+                    continue
+                    
+                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
+                
+                if analysis_key == 'basic_statistics':
+                    writer.writerow([analysis_name, 'Total Tracks', result.get('total_tracks', ''), 'count'])
+                    writer.writerow([analysis_name, 'Mean Track Length', result.get('mean_track_length', ''), 'frames'])
+                    writer.writerow([analysis_name, 'Mean Velocity', result.get('mean_velocity', ''), 'µm/s'])
+                elif analysis_key == 'diffusion_analysis':
+                    writer.writerow([analysis_name, 'Diffusion Coefficient', result.get('diffusion_coefficient', ''), 'µm²/s'])
+                    writer.writerow([analysis_name, 'MSD Slope', result.get('msd_slope', ''), 'dimensionless'])
+                # Add more analysis types as needed
+            
+            return output.getvalue()
+        except Exception as e:
+            st.error(f"Failed to generate CSV summary: {str(e)}")
+            return None
+
+    def _render_analysis_section(self, analysis_key, results, config):
+        """Render analysis section with better error handling"""
+        try:
+            # Generic section rendering
+            st.subheader(f"📊 {self.available_analyses[analysis_key]['name']}")
+            
+            # Check for errors
+            if 'error' in results:
+                st.error(f"Analysis failed: {results['error']}")
+                return
+            
+            # Basic info
+            st.markdown("**Results Summary:**")
+            for key, value in results.items():
+                if key == 'success' or key == 'error':
+                    continue
+                st.write(f"• {key.replace('_', ' ').title()}: {value}")
+            
+            # Visualization
+            if analysis_key in self.report_figures:
+                st.plotly_chart(self.report_figures[analysis_key], use_container_width=True)
+            
+            # Analysis-specific rendering
+            if analysis_key == "diffusion_analysis":
+                if 'msd_data' in results:
+                    st.subheader("MSD Data")
+                    st.write(results['msd_data'])
+                else:
+                    st.warning("MSD data not available. Please run Diffusion Analysis.")
+            
+            elif analysis_key == "motion_classification":
+                if 'classification_summary' in results:
+                    st.subheader("Motion Classification Summary")
+                    for motion_type, count in results['classification_summary'].items():
+                        st.write(f"• {motion_type}: {count}")
+                else:
+                    st.warning("Motion classification results not available.")
+            
+            elif analysis_key == "polymer_physics":
+                if 'msd_data' not in results:
+                    st.error("Polymer physics analysis requires MSD data. Please run Diffusion Analysis first.")
+                    return
+                
+                # Polymer physics specific results
+                st.subheader("Polymer Physics Results")
+                st.write(results.get('polymer_results', 'No results available'))
+            
+        except Exception as e:
+            st.error(f"Error rendering {analysis_key} section: {str(e)}")
+            st.info("This may indicate missing dependencies or incomplete analysis data.")
             st.subheader("📈 Summary Statistics")
             
             col1, col2, col3, col4 = st.columns(4)

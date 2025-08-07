@@ -1727,4 +1727,27 @@ def _fit_confined_motion(displacements, dt, positions):
     std_pos = np.std(positions, axis=0)
     L_initial = 2 * np.mean(std_pos)
 
-    # Ensure L_initial is
+    # Ensure L_initial is positive
+    L_initial = max(L_initial, 1e-9)
+
+    # Time vector for fitting
+    t_fit = np.linspace(0, np.sum(dt), len(displacements))
+
+    # Define the model function
+    def confined_model(t, D, L):
+        return L**2 * (1 - np.exp(-4 * D * t / L**2))
+
+    # Fit the model to the data
+    try:
+        from scipy.optimize import curve_fit
+        popt, pcov = curve_fit(confined_model, t_fit, displacements, p0=[D_initial, L_initial])
+        D_confined, L_confined = popt
+    except Exception as e:
+        D_confined, L_confined = np.nan, np.nan
+        print(f"Warning: Confined motion fit failed: {str(e)}")
+
+    # Calculate error as residual between observed and expected MSDs
+    expected_msds = confined_model(t_fit, D_confined, L_confined)
+    error = np.mean((displacements - expected_msds)**2)
+
+    return D_confined, L_confined, error
