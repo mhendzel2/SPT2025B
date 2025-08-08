@@ -2351,7 +2351,6 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
         # If no boundaries detected, use simple division
         if not boundaries and not detected_boundaries:
             # Divide the space into quadrants or use midpoints
-```python
             x_mid = (x_min + x_max) / 2
             y_mid = (y_min + y_max) / 2
 
