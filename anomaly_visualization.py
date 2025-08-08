@@ -101,64 +101,6 @@ class AnomalyVisualizer:
         
         return fig
     
-    def _add_specific_anomaly_markers(self, fig: go.Figure, tracks_df: pd.DataFrame, 
-                                     anomaly_results: Dict[str, Any]):
-        """Add specific markers for frame-level anomalies."""
-        
-        # Add velocity anomaly markers
-        if 'velocity_anomalies' in anomaly_results:
-            for track_id, frames in anomaly_results['velocity_anomalies'].items():
-                if not frames:  # Skip empty lists
-                    continue
-                    
-                anomaly_points = tracks_df[
-                    (tracks_df['track_id'] == track_id) & 
-                    (tracks_df['frame'].isin(frames))
-                ]
-                
-                if not anomaly_points.empty:
-                    fig.add_trace(go.Scatter(
-                        x=anomaly_points['x'],
-                        y=anomaly_points['y'],
-                        mode='markers',
-                        marker=dict(size=10, color='red', symbol='x', 
-                                  line=dict(width=2, color='darkred')),
-                        name='Velocity Anomaly',
-                        showlegend=False,
-                        hovertemplate='<b>Velocity Anomaly</b><br>' +
-                                    'Track: %{text}<br>Frame: %{customdata}<br>' +
-                                    'X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
-                        text=[track_id] * len(anomaly_points),
-                        customdata=anomaly_points['frame']
-                    ))
-        
-        # Add directional anomaly markers
-        if 'directional_anomalies' in anomaly_results:
-            for track_id, frames in anomaly_results['directional_anomalies'].items():
-                if not frames:  # Skip empty lists
-                    continue
-                    
-                anomaly_points = tracks_df[
-                    (tracks_df['track_id'] == track_id) & 
-                    (tracks_df['frame'].isin(frames))
-                ]
-                
-                if not anomaly_points.empty:
-                    fig.add_trace(go.Scatter(
-                        x=anomaly_points['x'],
-                        y=anomaly_points['y'],
-                        mode='markers',
-                        marker=dict(size=8, color='blue', symbol='triangle-up', 
-                                  line=dict(width=2, color='darkblue')),
-                        name='Direction Change',
-                        showlegend=False,
-                        hovertemplate='<b>Directional Anomaly</b><br>' +
-                                    'Track: %{text}<br>Frame: %{customdata}<br>' +
-                                    'X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>',
-                        text=[track_id] * len(anomaly_points),
-                        customdata=anomaly_points['frame']
-                    ))
-    
     def create_anomaly_timeline(self, tracks_df: pd.DataFrame, anomaly_results: Dict[str, Any]) -> go.Figure:
         """
         Create a timeline visualization showing when anomalies occur.
@@ -263,41 +205,59 @@ class AnomalyVisualizer:
         go.Figure
             Heatmap visualization
         """
-        # Get all anomalous points
-        anomaly_types = self._categorize_tracks(anomaly_results)
-        anomalous_track_ids = list(anomaly_types.keys())
-        
-        if not anomalous_track_ids:
-            fig = go.Figure()
-            fig.add_annotation(
-                text="No anomalies detected for heatmap",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16)
+        def _create_heatmap():
+            # Get all anomalous points
+            anomaly_types = self._categorize_tracks(anomaly_results)
+            anomalous_track_ids = list(anomaly_types.keys())
+            
+            if not anomalous_track_ids:
+                return None  # No anomalies detected
+            
+            anomaly_data = tracks_df[tracks_df['track_id'].isin(anomalous_track_ids)]
+            
+            # Create 2D histogram
+            fig = go.Figure(data=go.Histogram2d(
+                x=anomaly_data['x'],
+                y=anomaly_data['y'],
+                colorscale='Reds',
+                nbinsx=30,
+                nbinsy=30,
+                hovertemplate='X: %{x}<br>Y: %{y}<br>Count: %{z}<extra></extra>'
+            ))
+            
+            fig.update_layout(
+                title='Anomaly Density Heatmap',
+                xaxis_title='X Position',
+                yaxis_title='Y Position',
+                height=500
             )
+            
             return fig
         
-        anomaly_data = tracks_df[tracks_df['track_id'].isin(anomalous_track_ids)]
+        heatmap_fig = _create_heatmap()
         
-        # Create 2D histogram
-        fig = go.Figure(data=go.Histogram2d(
-            x=anomaly_data['x'],
-            y=anomaly_data['y'],
-            colorscale='Reds',
-            nbinsx=30,
-            nbinsy=30,
-            hovertemplate='X: %{x}<br>Y: %{y}<br>Count: %{z}<extra></extra>'
-        ))
+        # Fallback to scatter plot if heatmap creation fails
+        if heatmap_fig is None:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=tracks_df['x'],
+                y=tracks_df['y'],
+                mode='markers',
+                marker=dict(color='red', size=4, opacity=0.6),
+                name='Anomalies'
+            ))
+            
+            fig.update_layout(
+                title='Anomaly Scatter Plot',
+                xaxis_title='X Position',
+                yaxis_title='Y Position',
+                height=500
+            )
+            
+            return fig
         
-        fig.update_layout(
-            title='Anomaly Density Heatmap',
-            xaxis_title='X Position',
-            yaxis_title='Y Position',
-            height=500
-        )
-        
-        return fig
-    
+        return heatmap_fig
+
     def create_anomaly_dashboard(self, tracks_df: pd.DataFrame, anomaly_results: Dict[str, Any]) -> None:
         """
         Create a comprehensive dashboard in Streamlit.
@@ -329,25 +289,48 @@ class AnomalyVisualizer:
         # Main overlay visualization
         st.subheader("Anomaly Overlay")
         overlay_fig = self.create_anomaly_overlay(tracks_df, anomaly_results)
-        st.plotly_chart(overlay_fig, use_container_width=True)
+        
+        # Simple validation and display
+        if overlay_fig is not None:
+            st.plotly_chart(overlay_fig, use_container_width=True)
+        else:
+            st.warning("Unable to create overlay visualization - no anomaly data available")
         
         # Additional visualizations in tabs
         tab1, tab2, tab3, tab4 = st.tabs(["Timeline", "Heatmap", "Statistics", "Details"])
         
         with tab1:
-            timeline_fig = self.create_anomaly_timeline(tracks_df, anomaly_results)
-            st.plotly_chart(timeline_fig, use_container_width=True)
+            try:
+                timeline_fig = self.create_anomaly_timeline(tracks_df, anomaly_results)
+                if timeline_fig:
+                    st.plotly_chart(timeline_fig, use_container_width=True)
+                else:
+                    st.warning("Timeline visualization unavailable")
+            except Exception as e:
+                st.error(f"Timeline error: {str(e)}")
         
         with tab2:
-            heatmap_fig = self.create_anomaly_heatmap(tracks_df, anomaly_results)
-            st.plotly_chart(heatmap_fig, use_container_width=True)
+            try:
+                heatmap_fig = self.create_anomaly_heatmap(tracks_df, anomaly_results)
+                if heatmap_fig:
+                    st.plotly_chart(heatmap_fig, use_container_width=True)
+                else:
+                    st.warning("Heatmap visualization unavailable")
+            except Exception as e:
+                st.error(f"Heatmap error: {str(e)}")
         
         with tab3:
-            self._show_anomaly_statistics(anomaly_results, anomaly_types)
+            try:
+                self._show_anomaly_statistics(anomaly_results, anomaly_types)
+            except Exception as e:
+                st.error(f"Statistics error: {str(e)}")
         
         with tab4:
-            self._show_anomaly_details(tracks_df, anomaly_results, anomaly_types)
-    
+            try:
+                self._show_anomaly_details(tracks_df, anomaly_results, anomaly_types)
+            except Exception as e:
+                st.error(f"Details error: {str(e)}")
+
     def _show_anomaly_statistics(self, anomaly_results: Dict[str, Any], anomaly_types: Dict[int, List[str]]):
         """Show detailed anomaly statistics."""
         
