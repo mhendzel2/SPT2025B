@@ -13,6 +13,9 @@ from scipy import stats
 from enhanced_error_handling import suggest_statistical_test, validate_statistical_analysis
 from project_management import ProjectManager, Project, Condition
 from state_manager import get_state_manager
+import os
+import glob
+from enhanced_report_generator import EnhancedSPTReportGenerator
 
 def create_guided_project_setup():
     """Create a guided, step-by-step project setup interface."""
@@ -498,174 +501,294 @@ def show_batch_processing_interface():
             else:
                 st.error("❌ Batch processing failed")
 
+# --- New: Quick Testing Tools for Reports & Rheology ---
+
+def _discover_sample_csvs(base_dir: str) -> List[str]:
+    """Find CSV files in the specified directory (non-recursive)."""
+    try:
+        return sorted(glob.glob(os.path.join(base_dir, "*.csv")))
+    except Exception:
+        return []
+
+def _normalize_tracks_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize common SPT CSV schemas to required columns: x, y, track_id, frame.
+    Adds frame if missing using per-track cumulative index.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["x", "y", "track_id", "frame"])
+
+    # Lowercase map for robust renaming
+    rename_map = {}
+    cols_l = {c.lower(): c for c in df.columns}
+
+    # Position
+    if "x" not in df.columns:
+        for cand in ["position_x", "pos_x", "x_um", "x (um)", "x [um]", "xcoordinate", "xcoord"]:
+            if cand in cols_l:
+                rename_map[cols_l[cand]] = "x"
+                break
+    if "y" not in df.columns:
+        for cand in ["position_y", "pos_y", "y_um", "y (um)", "y [um]", "ycoordinate", "ycoord"]:
+            if cand in cols_l:
+                rename_map[cols_l[cand]] = "y"
+                break
+
+    # Track ID
+    if "track_id" not in df.columns:
+        for cand in ["trackid", "track id", "id", "trajectory", "trackindex"]:
+            if cand in cols_l:
+                rename_map[cols_l[cand]] = "track_id"
+                break
+
+    # Frame
+    has_frame = "frame" in df.columns
+    if not has_frame:
+        for cand in ["t", "time", "frame_id", "frameindex", "frame number"]:
+            if cand in cols_l:
+                rename_map[cols_l[cand]] = "frame"
+                has_frame = True
+                break
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    # Ensure required columns exist
+    for req in ["x", "y", "track_id"]:
+        if req not in df.columns:
+            raise ValueError(f"Required column '{req}' not found after normalization")
+
+    # If frame missing, synthesize per-track running index
+    if "frame" not in df.columns:
+        df = df.sort_values(["track_id"]).copy()
+        df["frame"] = df.groupby("track_id").cumcount()
+
+    # Types and cleaning
+    for col in ["x", "y"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["track_id"] = pd.to_numeric(df["track_id"], errors="coerce").astype("Int64")
+    df["frame"] = pd.to_numeric(df["frame"], errors="coerce").astype("Int64")
+    df = df.dropna(subset=["x", "y", "track_id", "frame"]).copy()
+    df["track_id"] = df["track_id"].astype(int)
+    df["frame"] = df["frame"].astype(int)
+
+    return df[["x", "y", "track_id", "frame"]]
+
+def _load_tracks_csv(path: str) -> pd.DataFrame:
+    """Load CSV and normalize to expected SPT schema."""
+    raw = pd.read_csv(path)
+    return _normalize_tracks_dataframe(raw)
+
+def _render_test_results(condition_name: str, batch_result: Dict[str, Any]):
+    """Render results and figures from generate_batch_report."""
+    st.markdown(f"#### Results: {condition_name}")
+    if not batch_result.get("success", True):
+        st.error(batch_result.get("error", "Unknown error"))
+        return
+
+    # Summary JSON (collapsible)
+    with st.expander("Raw Results JSON"):
+        st.json({
+            "condition_name": batch_result.get("condition_name"),
+            "analysis_results": {k: {"success": v.get("success", False), "error": v.get("error")} 
+                                 for k, v in batch_result.get("analysis_results", {}).items()}
+        })
+
+    # Figures
+    figs = batch_result.get("figures", {})
+    if not figs:
+        st.info("No figures generated.")
+    else:
+        for akey, fig in figs.items():
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Download JSON
+    try:
+        import json
+        st.download_button(
+            "💾 Download Results (JSON)",
+            data=json.dumps(batch_result, default=str, indent=2),
+            file_name=f"report_{condition_name.replace(' ', '_')}.json",
+            mime="application/json"
+        )
+    except Exception:
+        pass
+
+def show_testing_tools_interface():
+    """
+    Quick testing tools to run Report Generation and Microrheology on CSVs in the main directory.
+    """
+    st.title("🧪 Quick Test: Reports & Rheology")
+    st.caption("Select one or more CSV files from the repository root to test report generation and microrheology.")
+
+    # Root directory selector (defaults to current working directory)
+    default_root = os.getcwd()
+    root_dir = st.text_input("Root directory containing sample CSV files:", value=default_root)
+
+    csv_files = _discover_sample_csvs(root_dir)
+    if not csv_files:
+        st.warning("No CSV files found in the specified directory.")
+        return
+
+    sel_files = st.multiselect(
+        "Select CSV files to test:",
+        options=csv_files,
+        default=csv_files[:1],
+        format_func=lambda p: os.path.basename(p)
+    )
+
+    colu1, colu2, colu3 = st.columns(3)
+    with colu1:
+        pixel_size = st.number_input("Pixel size (µm/pixel)", min_value=1e-6, value=0.1, step=0.01, format="%.5f")
+    with colu2:
+        frame_interval = st.number_input("Frame interval (s)", min_value=1e-6, value=0.1, step=0.01, format="%.5f")
+    with colu3:
+        show_msd = st.checkbox("Include Diffusion (MSD)", value=True, help="Recommended for microrheology context")
+
+    st.markdown("---")
+    colb1, colb2 = st.columns(2)
+    with colb1:
+        run_report = st.button("🚀 Run Report Test", type="primary", use_container_width=True)
+    with colb2:
+        run_rheo = st.button("🧫 Run Microrheology Only", use_container_width=True)
+
+    if not sel_files:
+        st.info("Select at least one CSV to run tests.")
+        return
+
+    if run_report or run_rheo:
+        analyses = (["microrheology"] if run_rheo else
+                    ["basic_statistics", "diffusion_analysis", "motion_classification", "microrheology"])
+        if show_msd and "diffusion_analysis" not in analyses:
+            analyses.append("diffusion_analysis")
+
+        generator = EnhancedSPTReportGenerator()
+        current_units = {"pixel_size": pixel_size, "frame_interval": frame_interval}
+
+        for path in sel_files:
+            name = os.path.basename(path)
+            try:
+                tracks_df = _load_tracks_csv(path)
+                if tracks_df.empty:
+                    st.warning(f"{name}: No valid rows after normalization.")
+                    continue
+
+                with st.spinner(f"Running analyses on {name} ..."):
+                    # Use batch API to compute analyses regardless of session_state
+                    batch_result = generator.generate_batch_report(tracks_df, analyses, condition_name=name)
+
+                _render_test_results(name, batch_result)
+
+            except Exception as e:
+                st.error(f"Failed on {name}: {e}")
+
 def show_enhanced_comparison_analysis(project: Project):
     """Show enhanced comparison analysis with statistical suggestions."""
     st.subheader(f"Comparative Analysis: {project.name}")
-    
     if len(project.conditions) < 2:
         st.warning("At least 2 conditions are required for comparative analysis.")
         return
-    
+
     # Load and process data for all conditions
     condition_data = {}
-    
     with st.spinner("Loading and processing data..."):
         for condition in project.conditions:
             if condition.files:
                 try:
-                    # Load first file for each condition (simplified)
+                    # use first file per condition
                     file_data = condition.files[0].get('data')
                     if file_data:
                         import io
                         df = pd.read_csv(io.BytesIO(file_data))
-                        
-                        # Basic analysis
                         if all(col in df.columns for col in ['x', 'y', 'track_id']):
-                            # Calculate basic metrics
                             track_lengths = df.groupby('track_id').size()
                             displacements = []
-                            
                             for track_id, track_df in df.groupby('track_id'):
                                 if len(track_df) > 1:
                                     track_df = track_df.sort_values('frame') if 'frame' in track_df.columns else track_df
                                     dx = track_df['x'].diff().dropna()
                                     dy = track_df['y'].diff().dropna()
-                                    track_displacements = np.sqrt(dx**2 + dy**2)
-                                    displacements.extend(track_displacements)
-                            
+                                    disps = np.sqrt(dx**2 + dy**2)
+                                    displacements.extend(disps)
                             condition_data[condition.name] = {
                                 'track_lengths': track_lengths.values,
                                 'displacements': displacements,
                                 'n_tracks': len(track_lengths),
                                 'total_points': len(df)
                             }
-                        
                 except Exception as e:
                     st.error(f"Error processing data for {condition.name}: {str(e)}")
-    
+
     if not condition_data:
         st.error("No valid data found in any condition.")
         return
-    
-    # Analysis selection
+
+    # Config
     st.subheader("Analysis Configuration")
-    
     col1, col2 = st.columns(2)
-    
     with col1:
-        analysis_metric = st.selectbox(
-            "Metric to Compare",
-            ["Track Lengths", "Step Displacements", "Number of Tracks"],
-            help="Choose which metric to compare between conditions"
-        )
-    
+        analysis_metric = st.selectbox("Metric to Compare", ["Track Lengths", "Step Displacements", "Number of Tracks"])
     with col2:
-        conditions_to_compare = st.multiselect(
-            "Conditions to Compare",
-            list(condition_data.keys()),
-            default=list(condition_data.keys())[:2],
-            help="Select which conditions to include in the comparison"
-        )
-    
+        conditions_to_compare = st.multiselect("Conditions to Compare", list(condition_data.keys()),
+                                               default=list(condition_data.keys())[:2])
+
     if len(conditions_to_compare) < 2:
         st.warning("Please select at least 2 conditions to compare.")
         return
-    
-    # Extract data for comparison
+
+    # Extract data
     comparison_data = {}
-    
     for condition_name in conditions_to_compare:
         if analysis_metric == "Track Lengths":
             data = condition_data[condition_name]['track_lengths']
         elif analysis_metric == "Step Displacements":
             data = condition_data[condition_name]['displacements']
-        else:  # Number of Tracks
+        else:
             data = [condition_data[condition_name]['n_tracks']]
-        
         comparison_data[condition_name] = data
-    
-    # Statistical Analysis with Suggestions
+
     st.subheader("Statistical Analysis")
-    
-    # Suggest appropriate test
     if len(conditions_to_compare) == 2:
         data1 = comparison_data[conditions_to_compare[0]]
         data2 = comparison_data[conditions_to_compare[1]]
-        
         try:
             validate_statistical_analysis(data1, "comparative analysis")
             validate_statistical_analysis(data2, "comparative analysis")
-            
             suggested_test = suggest_statistical_test(data1, data2)
-            
-            st.info(f"**Recommended Statistical Test:** {suggested_test}")
-            
-            # Perform multiple tests
+            st.info(f"Recommended Statistical Test: {suggested_test}")
             test_results = perform_statistical_tests(data1, data2, conditions_to_compare)
-            
-            # Display results
             col1, col2 = st.columns(2)
-            
             with col1:
-                st.write("**Test Results:**")
+                st.write("Test Results:")
                 for test_name, result in test_results.items():
-                    st.write(f"• **{test_name}**: p = {result['p_value']:.4f}")
-                    if result['p_value'] < 0.05:
-                        st.write("  ✅ Significant difference detected")
-                    else:
-                        st.write("  ❌ No significant difference")
-            
+                    p = result['p_value']
+                    st.write(f"• {test_name}: p = {p:.4f} {'(significant)' if p < 0.05 else ''}")
             with col2:
-                st.write("**Effect Size:**")
+                st.write("Effect Size:")
                 effect_size = calculate_effect_size(data1, data2)
                 st.metric("Cohen's d", f"{effect_size:.3f}")
-                
-                if abs(effect_size) < 0.2:
-                    st.caption("Small effect")
-                elif abs(effect_size) < 0.8:
-                    st.caption("Medium effect")
-                else:
-                    st.caption("Large effect")
-        
         except Exception as e:
             st.error(f"Statistical analysis failed: {str(e)}")
-    
-    # Visualization
+
     st.subheader("Visualization")
-    
-    viz_type = st.selectbox(
-        "Visualization Type",
-        ["Box Plot", "Violin Plot", "Histogram", "Strip Plot"],
-        help="Choose how to visualize the comparison"
-    )
-    
+    viz_type = st.selectbox("Visualization Type", ["Box Plot", "Violin Plot", "Histogram", "Strip Plot"])
     fig = create_comparison_plot(comparison_data, analysis_metric, viz_type)
     if fig:
         st.plotly_chart(fig, use_container_width=True)
-    
-    # Summary
     create_comparison_summary(comparison_data, analysis_metric, conditions_to_compare)
 
 def perform_statistical_tests(data1: List, data2: List, condition_names: List[str]) -> Dict[str, Any]:
     """Perform multiple statistical tests and return results."""
     results = {}
-    
     try:
-        # Mann-Whitney U Test (non-parametric)
-        statistic, p_value = stats.mannwhitneyu(data1, data2, alternative='two-sided')
-        results['Mann-Whitney U'] = {'statistic': statistic, 'p_value': p_value}
-        
-        # Welch's t-test (assumes unequal variances)
-        statistic, p_value = stats.ttest_ind(data1, data2, equal_var=False)
-        results["Welch's t-test"] = {'statistic': statistic, 'p_value': p_value}
-        
-        # Kolmogorov-Smirnov test (distribution comparison)
-        statistic, p_value = stats.ks_2samp(data1, data2)
-        results['Kolmogorov-Smirnov'] = {'statistic': statistic, 'p_value': p_value}
-        
+        stat, p = stats.mannwhitneyu(data1, data2, alternative='two-sided')
+        results['Mann-Whitney U'] = {'statistic': stat, 'p_value': p}
+        stat, p = stats.ttest_ind(data1, data2, equal_var=False)
+        results["Welch's t-test"] = {'statistic': stat, 'p_value': p}
+        stat, p = stats.ks_2samp(data1, data2)
+        results['Kolmogorov-Smirnov'] = {'statistic': stat, 'p_value': p}
     except Exception as e:
         st.warning(f"Some statistical tests failed: {str(e)}")
-    
     return results
 
 def calculate_effect_size(data1: List, data2: List) -> float:
@@ -674,16 +797,32 @@ def calculate_effect_size(data1: List, data2: List) -> float:
         mean1, mean2 = np.mean(data1), np.mean(data2)
         std1, std2 = np.std(data1, ddof=1), np.std(data2, ddof=1)
         n1, n2 = len(data1), len(data2)
-        
-        # Pooled standard deviation
-        pooled_std = np.sqrt(((n1-1)*std1**2 + (n2-1)*std2**2) / (n1+n2-2))
-        
-        # Cohen's d
-        cohens_d = (mean1 - mean2) / pooled_std
-        return cohens_d
-        
+        pooled_std = np.sqrt(((n1-1)*std1**2 + (n2-1)*std2**2) / max(n1+n2-2, 1))
+        return (mean1 - mean2) / pooled_std if pooled_std > 0 else 0.0
     except:
         return 0.0
+
+def show_project_management_hub():
+    """Unified Project Management Hub: Guided Setup, Batch, Comparison, Quick Test."""
+    st.title("📁 Project Management Hub")
+    tabs = st.tabs(["Guided Setup", "Batch Reports", "Comparison", "Quick Test"])
+    with tabs[0]:
+        create_guided_project_setup()
+    with tabs[1]:
+        show_batch_processing_interface()
+    with tabs[2]:
+        pm = ProjectManager()
+        projects = pm.list_projects()
+        if not projects:
+            st.warning("No projects found.")
+        else:
+            project_names = [p['name'] for p in projects]
+            selected = st.selectbox("Select Project", project_names, key="comp_proj_select")
+            if selected:
+                proj = pm.load_project(next(p['path'] for p in projects if p['name'] == selected))
+                show_enhanced_comparison_analysis(proj)
+    with tabs[3]:
+        show_testing_tools_interface()
 
 def create_comparison_plot(data: Dict[str, List], metric: str, plot_type: str):
     """Create comparison visualization."""

@@ -8,18 +8,16 @@ This module implements microrheology principles to extract mechanical
 properties of the cellular environment from particle motion.
 """
 
-import numpy as np
-import pandas as pd
-import streamlit as st
 from typing import Dict, Tuple, Optional, List
 from scipy.optimize import curve_fit
 from scipy import integrate
 from scipy.special import gamma
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-import plotly.express as px
-import os
 
+# Added imports
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
 
 class MicrorheologyAnalyzer:
     """
@@ -67,48 +65,47 @@ class MicrorheologyAnalyzer:
             MSD data with columns: lag_time_s, msd_m2, std_msd_m2, n_tracks
         """
         msd_results = []
-        
-        # Group by track_id
+        if tracks_df is None or tracks_df.empty:
+            return pd.DataFrame(columns=['lag_time_s', 'msd_m2', 'std_msd_m2', 'n_tracks'])
+
+        # ensure required cols
+        for c in ('track_id', 'frame', 'x', 'y'):
+            if c not in tracks_df.columns:
+                return pd.DataFrame(columns=['lag_time_s', 'msd_m2', 'std_msd_m2', 'n_tracks'])
+
+        px_to_m = pixel_size_um * 1e-6
         tracks_grouped = tracks_df.groupby('track_id')
-        
-        # Calculate MSD for each lag time
-        for lag in range(1, min(max_lag_frames + 1, tracks_df['frame'].nunique())):
+
+        max_frame = int(min(max_lag_frames, tracks_df['frame'].nunique()))
+        for lag in range(1, max_frame + 1):
             lag_time_s = lag * frame_interval_s
-            displacements_squared = []
-            
-            for track_id, track_data in tracks_grouped:
-                if len(track_data) <= lag:
+            disp2 = []
+            n_tracks_used = 0
+
+            for _, track in tracks_grouped:
+                if len(track) <= lag:
                     continue
-                    
-                # Sort by frame to ensure proper ordering
-                track_data = track_data.sort_values('frame')
-                
-                # Calculate displacements for this lag
-                for i in range(len(track_data) - lag):
-                    x1, y1 = track_data.iloc[i]['x'], track_data.iloc[i]['y']
-                    x2, y2 = track_data.iloc[i + lag]['x'], track_data.iloc[i + lag]['y']
-                    
-                    # Convert to meters and calculate squared displacement
-                    dx_m = (x2 - x1) * pixel_size_um * 1e-6
-                    dy_m = (y2 - y1) * pixel_size_um * 1e-6
-                    disp_sq = dx_m**2 + dy_m**2
-                    
-                    displacements_squared.append(disp_sq)
-            
-            if len(displacements_squared) > 0:
-                msd_m2 = np.mean(displacements_squared)
-                std_msd_m2 = np.std(displacements_squared)
-                n_tracks = len(set([track_id for track_id, _ in tracks_grouped if len(_) > lag]))
-                
+                track = track.sort_values('frame')
+                # compute squared displacements at this lag
+                x = track['x'].to_numpy() * px_to_m
+                y = track['y'].to_numpy() * px_to_m
+                dx = x[lag:] - x[:-lag]
+                dy = y[lag:] - y[:-lag]
+                if dx.size > 0:
+                    n_tracks_used += 1
+                    disp2.extend((dx*dx + dy*dy).tolist())
+
+            if disp2:
+                disp2 = np.asarray(disp2, dtype=float)
                 msd_results.append({
                     'lag_time_s': lag_time_s,
-                    'msd_m2': msd_m2,
-                    'std_msd_m2': std_msd_m2,
-                    'n_tracks': n_tracks
+                    'msd_m2': float(np.mean(disp2)),
+                    'std_msd_m2': float(np.std(disp2)),
+                    'n_tracks': int(n_tracks_used)
                 })
-        
+
         return pd.DataFrame(msd_results)
-    
+
     def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
                                        omega_rad_s: float) -> Tuple[float, float]:
         """
@@ -131,7 +128,7 @@ class MicrorheologyAnalyzer:
         Tuple[float, float]
             G' (storage modulus) and G" (loss modulus) in Pa
         """
-        if len(msd_df) < 3:
+        if msd_df is None or len(msd_df) < 3 or omega_rad_s <= 0:
             return np.nan, np.nan
 
         # Calculate characteristic time τ = 1/ω
@@ -224,15 +221,14 @@ class MicrorheologyAnalyzer:
             
             # If close to diffusive behavior, use linear fit
             if 0.8 <= log_slope <= 1.2:
-                slope, intercept = np.polyfit(slope_data['lag_time_s'], slope_data['msd_m2'], 1)
+                slope, _ = np.polyfit(slope_data['lag_time_s'], slope_data['msd_m2'], 1)
             else:
                 # For non-diffusive behavior, use power law fit at short times
                 # MSD = 4*D*t^α, so D_eff = MSD(t)/(4*t) at short times
-                t_ref = slope_data['lag_time_s'].iloc[0]
-                msd_ref = slope_data['msd_m2'].iloc[0]
-                slope = msd_ref / t_ref  # Effective slope
-                
-        except:
+                t_ref = float(slope_data['lag_time_s'].iloc[0])
+                msd_ref = float(slope_data['msd_m2'].iloc[0])
+                slope = msd_ref / max(t_ref, 1e-12)
+        except Exception:
             return np.nan
         
         if slope <= 0:
@@ -377,143 +373,96 @@ class MicrorheologyAnalyzer:
         }
         
         try:
-            # Process each dataset
-            all_frequencies_hz = []
-            all_g_prime_values = []
-            all_g_double_prime_values = []
-            all_viscosities = []
-            dataset_labels = []
-            
-            for i, (tracks_df, frame_interval_s) in enumerate(zip(track_datasets, frame_intervals_s)):
-                dataset_label = f"Dataset_{i+1}_{frame_interval_s:.3f}s"
-                dataset_labels.append(dataset_label)
-                
-                # Calculate MSD for this dataset
-                msd_data = self.calculate_msd_from_tracks(
-                    tracks_df, pixel_size_um, frame_interval_s
-                )
-                
-                if len(msd_data) == 0:
-                    results['error'] = f"Insufficient data for MSD calculation in {dataset_label}"
+            all_frequencies_hz, all_gp, all_gpp, all_eta = [], [], [], []
+
+            for i, (tracks_df, dt) in enumerate(zip(track_datasets, frame_intervals_s)):
+                dataset_label = f"Dataset_{i+1}_{dt:.3f}s"
+                msd_data = self.calculate_msd_from_tracks(tracks_df, pixel_size_um, dt)
+                if msd_data is None or msd_data.empty:
                     continue
-                
-                # Fit power law to MSD
-                power_law_fit = self.fit_power_law_msd(msd_data)
-                
-                # Determine frequency range for this dataset
-                if omega_ranges and i < len(omega_ranges):
-                    omega_list = omega_ranges[i]
+
+                fit = self.fit_power_law_msd(msd_data)
+
+                if omega_ranges and i < len(omega_ranges) and omega_ranges[i]:
+                    omega_list = np.asarray(omega_ranges[i], dtype=float)
                 else:
-                    # Auto-determine frequency range based on accessible time scales
-                    min_time = msd_data['lag_time_s'].min()
-                    max_time = msd_data['lag_time_s'].max()
-                    
-                    # Frequency range should be within the time range where we have data
-                    omega_max = 2 * np.pi / (min_time * 2)  # High frequency limit
-                    omega_min = 2 * np.pi / (max_time * 0.5)  # Low frequency limit
-                    
-                    # Ensure reasonable frequency range
-                    omega_max = min(omega_max, 2 * np.pi / frame_interval_s)
-                    omega_min = max(omega_min, 2 * np.pi / (max_time))
-                    
-                    if omega_max > omega_min:
-                        omega_list = np.logspace(np.log10(omega_min), np.log10(omega_max), 15)
+                    # frequency bounds from MSD time window
+                    tmin = float(msd_data['lag_time_s'].min())
+                    tmax = float(msd_data['lag_time_s'].max())
+                    if tmin <= 0 or tmax <= 0 or tmax <= tmin:
+                        omega_list = np.logspace(-1, 2, 20)
                     else:
-                        omega_list = [2 * np.pi / (min_time * 5)]
-                
-                # Calculate complex moduli and viscosities for this dataset
-                g_prime_values = []
-                g_double_prime_values = []
-                viscosity_values = []
-                frequencies_hz = []
-                
-                for omega_rad_s in omega_list:
-                    g_prime, g_double_prime = self.calculate_complex_modulus_gser(msd_data, omega_rad_s)
-                    viscosity = self.calculate_frequency_dependent_viscosity(msd_data, omega_rad_s)
-                    
-                    if not (np.isnan(g_prime) or np.isnan(g_double_prime)):
-                        g_prime_values.append(g_prime)
-                        g_double_prime_values.append(g_double_prime)
-                        viscosity_values.append(viscosity)
-                        frequencies_hz.append(omega_rad_s / (2 * np.pi))
-                        
-                        # Add to combined lists for overall frequency response
-                        all_frequencies_hz.append(omega_rad_s / (2 * np.pi))
-                        all_g_prime_values.append(g_prime)
-                        all_g_double_prime_values.append(g_double_prime)
-                        all_viscosities.append(viscosity)
-                
-                # Calculate effective viscosity from MSD slope
-                effective_viscosity = self.calculate_effective_viscosity(msd_data)
-                
-                # Store dataset results
-                dataset_results = {
+                        omega_list = np.logspace(
+                            np.log10(2*np.pi/(tmax*0.5)),
+                            np.log10(2*np.pi/(tmin*2.0)),
+                            20
+                        )
+
+                gp_list, gpp_list, eta_list, f_hz = [], [], [], []
+                for omega in omega_list:
+                    gp, gpp = self.calculate_complex_modulus_gser(msd_data, omega)
+                    eta = self.calculate_frequency_dependent_viscosity(msd_data, omega)
+                    if not (np.isnan(gp) or np.isnan(gpp) or np.isnan(eta)):
+                        gp_list.append(gp)
+                        gpp_list.append(gpp)
+                        eta_list.append(eta)
+                        f_hz.append(omega/(2*np.pi))
+
+                eff_eta = self.calculate_effective_viscosity(msd_data)
+
+                ds = {
                     'label': dataset_label,
-                    'frame_interval_s': frame_interval_s,
+                    'frame_interval_s': dt,
                     'msd_data': msd_data,
-                    'power_law_fit': power_law_fit,
-                    'frequencies_hz': frequencies_hz,
-                    'g_prime_pa': g_prime_values,
-                    'g_double_prime_pa': g_double_prime_values,
-                    'frequency_dependent_viscosity_pa_s': viscosity_values,
-                    'effective_viscosity_pa_s': effective_viscosity,
-                    'omega_range_rad_s': omega_list.tolist() if hasattr(omega_list, 'tolist') else list(omega_list)
+                    'power_law_fit': fit,
+                    'frequencies_hz': f_hz,
+                    'g_prime_pa': gp_list,
+                    'g_double_prime_pa': gpp_list,
+                    'frequency_dependent_viscosity_pa_s': eta_list,
+                    'effective_viscosity_pa_s': eff_eta,
+                    'omega_range_rad_s': omega_list.tolist()
                 }
-                
-                if len(g_prime_values) > 0:
-                    dataset_results.update({
-                        'g_prime_mean_pa': np.mean(g_prime_values),
-                        'g_prime_std_pa': np.std(g_prime_values),
-                        'g_double_prime_mean_pa': np.mean(g_double_prime_values),
-                        'g_double_prime_std_pa': np.std(g_double_prime_values),
-                        'loss_tangent': np.mean(g_double_prime_values) / np.mean(g_prime_values) if np.mean(g_prime_values) > 0 else np.inf,
-                        'viscosity_mean_pa_s': np.mean(viscosity_values),
-                        'viscosity_std_pa_s': np.std(viscosity_values)
-                    })
-                
-                results['datasets'].append(dataset_results)
-            
-            # Create combined frequency response
-            if len(all_frequencies_hz) > 0:
-                # Sort by frequency for better visualization
-                sorted_indices = np.argsort(all_frequencies_hz)
+                # stats for dataset
+                if gp_list:
+                    ds['g_prime_mean_pa'] = float(np.mean(gp_list))
+                    ds['g_double_prime_mean_pa'] = float(np.mean(gpp_list))
+                    ds['loss_tangent'] = (float(np.mean(gpp_list)) / float(np.mean(gp_list))) if np.mean(gp_list) > 0 else np.inf
+
+                results['datasets'].append(ds)
+                all_frequencies_hz.extend(f_hz)
+                all_gp.extend(gp_list)
+                all_gpp.extend(gpp_list)
+                all_eta.extend(eta_list)
+
+            if all_frequencies_hz:
+                order = np.argsort(all_frequencies_hz)
                 results['combined_frequency_response'] = {
-                    'frequencies_hz': [all_frequencies_hz[i] for i in sorted_indices],
-                    'g_prime_pa': [all_g_prime_values[i] for i in sorted_indices],
-                    'g_double_prime_pa': [all_g_double_prime_values[i] for i in sorted_indices],
-                    'viscosity_pa_s': [all_viscosities[i] for i in sorted_indices]
+                    'frequencies_hz': [all_frequencies_hz[i] for i in order],
+                    'g_prime_pa': [all_gp[i] for i in order],
+                    'g_double_prime_pa': [all_gpp[i] for i in order],
+                    'viscosity_pa_s': [all_eta[i] for i in order],
+                    'g_prime_overall_mean_pa': float(np.mean(all_gp)) if all_gp else np.nan,
+                    'g_double_prime_overall_mean_pa': float(np.mean(all_gpp)) if all_gpp else np.nan,
+                    'viscosity_overall_mean_pa_s': float(np.mean(all_eta)) if all_eta else np.nan,
+                    'frequency_range_hz': [float(min(all_frequencies_hz)), float(max(all_frequencies_hz))]
                 }
-                
-                # Overall statistics
-                results['combined_frequency_response'].update({
-                    'g_prime_overall_mean_pa': np.mean(all_g_prime_values),
-                    'g_double_prime_overall_mean_pa': np.mean(all_g_double_prime_values),
-                    'viscosity_overall_mean_pa_s': np.mean(all_viscosities),
-                    'frequency_range_hz': [min(all_frequencies_hz), max(all_frequencies_hz)]
-                })
-            
-            # Dataset comparison metrics
+
             if len(results['datasets']) > 1:
-                viscosities = [ds.get('effective_viscosity_pa_s', np.nan) for ds in results['datasets']]
-                valid_viscosities = [v for v in viscosities if not np.isnan(v)]
-                
-                if len(valid_viscosities) > 1:
-                    mean_visc = np.mean(valid_viscosities)
-                    std_visc = np.std(valid_viscosities)
-                    
+                visc = [ds.get('effective_viscosity_pa_s', np.nan) for ds in results['datasets']]
+                visc = [v for v in visc if np.isfinite(v)]
+                if len(visc) > 1:
+                    mean_v = float(np.mean(visc))
+                    std_v = float(np.std(visc))
                     results['dataset_comparison'] = {
-                        'viscosity_variation_coefficient': std_visc / mean_visc if mean_visc > 0 else np.inf,
-                        'frequency_dependent_behavior': std_visc / mean_visc > 0.2,
-                        'viscosity_range_pa_s': [min(valid_viscosities), max(valid_viscosities)],
-                        'mean_viscosity_pa_s': mean_visc,
-                        'std_viscosity_pa_s': std_visc
+                        'mean_viscosity_pa_s': mean_v,
+                        'viscosity_variation_coefficient': (std_v/mean_v) if mean_v > 0 else np.nan,
+                        'viscosity_range_pa_s': [float(np.min(visc)), float(np.max(visc))],
+                        'frequency_dependent_behavior': bool(std_v/mean_v > 0.5) if mean_v > 0 else False
                     }
-            
+
             results['success'] = True
-            
         except Exception as e:
             results['error'] = str(e)
-
         return results
 
     def analyze_microrheology(self, tracks_df: pd.DataFrame, pixel_size_um: float,
@@ -634,28 +583,20 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
             
             for i, dataset in enumerate(datasets):
                 if 'msd_data' in dataset and not dataset['msd_data'].empty:
-                    msd_data = dataset['msd_data']
-                    color = colors[i % len(colors)]
-                    
-                    # Plot MSD data
+                    col = colors[i % len(colors)]
                     fig_msd.add_trace(go.Scatter(
-                        x=msd_data['lag_time_s'],
-                        y=msd_data['msd_m2'],
+                        x=dataset['msd_data']['lag_time_s'],
+                        y=dataset['msd_data']['msd_m2'],
                         mode='lines+markers',
-                        name=dataset['label'],
-                        line=dict(color=color),
-                        error_y=dict(
-                            type='data',
-                            array=msd_data.get('std_msd_m2', []),
-                            visible=True
-                        )
+                        name=f"{dataset['label']} MSD",
+                        line=dict(color=col)
                     ))
                     
                     # Add power law fit if available
                     if 'power_law_fit' in dataset and not np.isnan(dataset['power_law_fit']['amplitude']):
                         fit_data = dataset['power_law_fit']
-                        t_fit = np.logspace(np.log10(msd_data['lag_time_s'].min()), 
-                                          np.log10(msd_data['lag_time_s'].max()), 50)
+                        t_fit = np.logspace(np.log10(dataset['msd_data']['lag_time_s'].min()), 
+                                          np.log10(dataset['msd_data']['lag_time_s'].max()), 50)
                         msd_fit = fit_data['amplitude'] * (t_fit ** fit_data['exponent'])
                         
                         fig_msd.add_trace(go.Scatter(
@@ -663,7 +604,7 @@ def create_rheology_plots(analysis_results: Dict) -> Dict[str, go.Figure]:
                             y=msd_fit,
                             mode='lines',
                             name=f"{dataset['label']} fit (α={fit_data['exponent']:.2f})",
-                            line=dict(color=color, dash='dash'),
+                            line=dict(color=col, dash='dash'),
                             showlegend=True
                         ))
             
@@ -947,24 +888,15 @@ def display_rheology_summary(analysis_results: Dict) -> None:
             
             with col1:
                 if 'g_prime_overall_mean_pa' in freq_data:
-                    st.metric(
-                        label="Overall G' Mean",
-                        value=f"{freq_data['g_prime_overall_mean_pa']:.2e} Pa"
-                    )
+                    st.metric("Mean G' (Pa)", f"{freq_data['g_prime_overall_mean_pa']:.2e}")
             
             with col2:
                 if 'g_double_prime_overall_mean_pa' in freq_data:
-                    st.metric(
-                        label="Overall G\" Mean",
-                        value=f"{freq_data['g_double_prime_overall_mean_pa']:.2e} Pa"
-                    )
+                    st.metric("Mean G\" (Pa)", f"{freq_data['g_double_prime_overall_mean_pa']:.2e}")
             
             with col3:
                 if 'viscosity_overall_mean_pa_s' in freq_data:
-                    st.metric(
-                        label="Overall |η*| Mean",
-                        value=f"{freq_data['viscosity_overall_mean_pa_s']:.2e} Pa·s"
-                    )
+                    st.metric("Mean |η*| (Pa·s)", f"{freq_data['viscosity_overall_mean_pa_s']:.2e}")
         
         # Dataset comparison
         if 'dataset_comparison' in analysis_results and analysis_results['dataset_comparison']:
@@ -1063,9 +995,8 @@ def display_rheology_summary(analysis_results: Dict) -> None:
             
             with col3:
                 st.metric(
-                    "Loss Tangent (tan δ)",
-                    f"{moduli.get('loss_tangent', 0):.3f}",
-                    help="G\"/G' - indicates viscoelastic behavior"
+                    "Loss Tangent (G\"/G')",
+                    f"{moduli.get('loss_tangent', np.nan):.3f}" if np.isfinite(moduli.get('loss_tangent', np.inf)) else "N/A"
                 )
         
         # Viscosity summary
