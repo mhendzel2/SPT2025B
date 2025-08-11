@@ -3,6 +3,7 @@ State Manager for SPT Analysis Application
 Centralized management of session state with type safety and error checking.
 """
 
+from typing import Any, Dict, Optional
 import pandas as pd
 
 # Graceful fallback if Streamlit not installed (e.g., during tests)
@@ -294,14 +295,29 @@ class StateManager:
         if 'tracks_data' in state_data:
             tracks_df = pd.DataFrame(state_data['tracks_data'])
             self.set_tracks(tracks_df)
+        # Analysis results
         if 'analysis_results' in state_data:
-            st.session_state['analysis_results'] = dict(state_data['analysis_results'])
+            try:
+                ss['analysis_results'] = dict(state_data['analysis_results'])
+            except Exception as e:
+                st.warning(f"Failed to import analysis_results: {e}")
+
+    def clear_data(self) -> None:
+        """Clear all tracking data and dependent analysis state."""
+        st.session_state['tracks_df'] = None
+        st.session_state['raw_tracks'] = None
+        st.session_state['current_file'] = None
+        st.session_state['track_statistics'] = None
+        st.session_state['analysis_results'] = {}
+
 
 # Singleton helper
-_state_manager_instance = None
+_state_manager_instance: Optional[StateManager] = None
 
-def get_state_manager():
+def get_state_manager() -> StateManager:
     global _state_manager_instance
     if _state_manager_instance is None:
         _state_manager_instance = StateManager()
     return _state_manager_instance
+
+__all__ = ["StateManager", "get_state_manager"]
