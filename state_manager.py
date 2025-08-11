@@ -276,32 +276,26 @@ class StateManager:
         
         return exportable_state
     
-    def import_state(self, state_data: Dict[str, Any]):
-        """Import state from backup."""
-        # Import basic settings
+    def import_state(self, state_data: Dict[str, Any]) -> None:
+        """Import previously exported minimal application state."""
+        if not isinstance(state_data, dict):
+            raise TypeError("state_data must be a dict")
+        
         if 'coordinates_in_microns' in state_data:
             self.set_coordinates_in_microns(state_data['coordinates_in_microns'])
-        
         if 'frame_interval' in state_data:
             self.set_frame_interval(state_data['frame_interval'])
-        
         if 'pixel_size' in state_data:
             self.set_pixel_size(state_data['pixel_size'])
-        
         if 'current_file' in state_data:
-            st.session_state.current_file = state_data['current_file']
-        
+            st.session_state['current_file'] = state_data['current_file']
         if 'project_id' in state_data:
             self.set_project_id(state_data['project_id'])
-        
-        # Import tracking data
         if 'tracks_data' in state_data:
             tracks_df = pd.DataFrame(state_data['tracks_data'])
             self.set_tracks(tracks_df)
-        
-        # Import analysis results
         if 'analysis_results' in state_data:
-            st.session_state.analysis_results = state_data['analysis_results']
+            st.session_state['analysis_results'] = dict(state_data['analysis_results'])
 
 # Singleton helper
 _state_manager_instance = None
@@ -311,23 +305,3 @@ def get_state_manager():
     if _state_manager_instance is None:
         _state_manager_instance = StateManager()
     return _state_manager_instance
-            self.set_project_id(state_data['project_id'])
-        
-        # Import tracking data
-        if 'tracks_data' in state_data:
-            tracks_df = pd.DataFrame(state_data['tracks_data'])
-            self.set_tracks(tracks_df)
-        
-        # Import analysis results
-        if 'analysis_results' in state_data:
-            st.session_state.analysis_results = state_data['analysis_results']
-
-# Global state manager instance
-_state_manager = None
-
-def get_state_manager() -> StateManager:
-    """Get the global state manager instance."""
-    global _state_manager
-    if _state_manager is None:
-        _state_manager = StateManager()
-    return _state_manager
