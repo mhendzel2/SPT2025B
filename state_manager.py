@@ -4,27 +4,27 @@ Centralized management of session state with type safety and error checking.
 """
 
 import pandas as pd
+
+# Graceful fallback if Streamlit not installed (e.g., during tests)
 try:
     import streamlit as st
 except ImportError:
-    # Fallback shim if Streamlit not present (e.g., during pure backend tests)
-    class _Shim: session_state = {}
+    class _Shim:
+        session_state = {}
     st = _Shim()
 
-class AppState:
-    """
-    Centralized state management for the SPT Analysis application.
-    Provides type-safe access to session state with fallbacks.
-    """
-    
-    def __init__(self):
-        """Initialize the state manager."""
-        st.session_state.setdefault('raw_tracks_df', pd.DataFrame())
-        st.session_state.setdefault('pixel_size', 1.0)
-        st.session_state.setdefault('frame_interval', 1.0)
 
+class AppState:
+    def __init__(self):
+        ss = st.session_state
+        if 'raw_tracks_df' not in ss or not isinstance(ss.get('raw_tracks_df'), pd.DataFrame):
+            ss['raw_tracks_df'] = pd.DataFrame()
+        ss.setdefault('pixel_size', 1.0)
+        ss.setdefault('frame_interval', 1.0)
+
+    # ---- Tracks ----
     def get_raw_tracks(self) -> pd.DataFrame:
-        df = st.session_state.get('raw_tracks_df', None)
+        df = st.session_state.get('raw_tracks_df')
         if df is None or not isinstance(df, pd.DataFrame):
             return pd.DataFrame()
         return df
@@ -34,6 +34,7 @@ class AppState:
             df = pd.DataFrame()
         st.session_state['raw_tracks_df'] = df
 
+    # ---- Units ----
     def get_pixel_size(self) -> float:
         return float(st.session_state.get('pixel_size', 1.0))
 
@@ -46,14 +47,13 @@ class AppState:
     def set_frame_interval(self, dt: float) -> None:
         st.session_state['frame_interval'] = float(dt)
 
+
 _singleton = None
-def get_state_manager():
+def get_state_manager() -> AppState:
     global _singleton
     if _singleton is None:
         _singleton = AppState()
     return _singleton
-        if df is None or df.empty:
-            st.warning("Attempted to set empty or None DataFrame to raw_tracks.")
             st.session_state.raw_tracks = None
             st.session_state.current_file = None
             return
