@@ -7,6 +7,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from typing import Any, Dict, List, Tuple, Optional
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    go = None  # fallback so type hints referencing go.Figure don't raise NameError
 
 # Import data access utilities
 try:
@@ -14,8 +18,6 @@ try:
     DATA_UTILS_AVAILABLE = True
 except ImportError:
     DATA_UTILS_AVAILABLE = False
-
-# ...existing code...
 
 def show_biophysical_models():
     """Main interface for biophysical models."""
