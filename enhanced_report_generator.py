@@ -96,12 +96,22 @@ except Exception:
 
 warnings.filterwarnings('ignore')
 
+# Import state manager for proper data access
+try:
+    from state_manager import StateManager
+    STATE_MANAGER_AVAILABLE = True
+except ImportError:
+    STATE_MANAGER_AVAILABLE = False
+
 class EnhancedSPTReportGenerator:
     """
     Comprehensive report generation system with extensive analysis capabilities.
     """
 
     def __init__(self):
+        # Initialize state manager if available
+        self.state_manager = StateManager() if STATE_MANAGER_AVAILABLE else None
+        
         self.available_analyses = {
             'basic_statistics': {
                 'name': 'Basic Track Statistics',
@@ -212,6 +222,33 @@ class EnhancedSPTReportGenerator:
     def display_enhanced_analysis_interface(self):
         """Display comprehensive analysis selection interface."""
         st.header("📊 Enhanced Automated Report Generation")
+        
+        # Check for track data using state manager
+        has_data = False
+        tracks_df = None
+        
+        if self.state_manager:
+            has_data = self.state_manager.has_data()
+            if has_data:
+                tracks_df = self.state_manager.get_tracks()
+        else:
+            # Fallback to direct session state access
+            tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks')
+            has_data = tracks_df is not None and not tracks_df.empty if isinstance(tracks_df, pd.DataFrame) else False
+        
+        if not has_data:
+            st.error("❌ No track data loaded. Please load data first.")
+            st.info("💡 Go to the 'Data Loading' tab to upload track data.")
+            
+            # Debug information
+            if st.checkbox("Show debug information"):
+                st.write("Session state keys:", list(st.session_state.keys()))
+                if self.state_manager:
+                    st.write("State manager data summary:", self.state_manager.get_data_summary())
+                    st.write("Debug state:", self.state_manager.debug_data_state())
+            return
+        
+        st.success(f"✅ Track data loaded: {len(tracks_df)} points")
         st.markdown("Select from the available modules to create a detailed report.")
         
         categories = self._group_analyses_by_category()
@@ -221,16 +258,17 @@ class EnhancedSPTReportGenerator:
             
         if st.button("🚀 Generate Comprehensive Report", type="primary"):
             if selected_analyses:
-                # Check for track data
-                if 'raw_tracks' not in st.session_state or st.session_state.raw_tracks is None:
-                    st.error("No track data loaded. Please load data first.")
-                    return
-
-                tracks_df = st.session_state.raw_tracks
-                current_units = {
-                    'pixel_size': st.session_state.get('pixel_size', 0.1),
-                    'frame_interval': st.session_state.get('frame_interval', 0.1)
-                }
+                # Get units from state manager or session state
+                if self.state_manager:
+                    current_units = {
+                        'pixel_size': self.state_manager.get_pixel_size(),
+                        'frame_interval': self.state_manager.get_frame_interval()
+                    }
+                else:
+                    current_units = {
+                        'pixel_size': st.session_state.get('pixel_size', 0.1),
+                        'frame_interval': st.session_state.get('frame_interval', 0.1)
+                    }
 
                 self.generate_automated_report(tracks_df, selected_analyses, report_config, current_units)
             else:
@@ -354,14 +392,64 @@ class EnhancedSPTReportGenerator:
         """Execute comprehensive analysis pipeline using existing results."""
         st.subheader("📄 Generating Report from Analysis Results")
         
-        # Check if any analysis results exist
-        if 'analysis_results' not in st.session_state or not st.session_state.analysis_results:
-            st.error("No analysis results found. Please run analyses from the 'Analysis' tab first.")
-            st.info("💡 Go to the Analysis tab and run some analyses before generating a report.")
-            return
+        # Check if any analysis results exist - use state manager if available
+        analysis_results = None
+        if self.state_manager:
+            analysis_results = self.state_manager.get_analysis_results()
+        else:
+            analysis_results = st.session_state.get('analysis_results', {})
         
-        analysis_results = st.session_state.analysis_results
+        if not analysis_results:
+            st.warning("⚠️ No pre-computed analysis results found. Running analyses now...")
+            # Run analyses directly
+            self._run_analyses_for_report(tracks_df, selected_analyses, config, current_units)
+        else:
+            # Use existing results
+            self._generate_report_from_results(analysis_results, selected_analyses, config, current_units)
+
+    def _run_analyses_for_report(self, tracks_df, selected_analyses, config, current_units):
+        """Run analyses directly for report generation."""
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
+        self.report_results = {}
+        self.report_figures = {}
+        
+        for i, analysis_key in enumerate(selected_analyses):
+            if analysis_key not in self.available_analyses:
+                continue
+                
+            analysis = self.available_analyses[analysis_key]
+            status_text.text(f"Running {analysis['name']}...")
+            progress_bar.progress((i + 1) / len(selected_analyses))
+            
+            try:
+                # Run the analysis
+                result = analysis['function'](tracks_df, current_units)
+                
+                if result.get('success', False):
+                    self.report_results[analysis_key] = result
+                    
+                    # Generate visualization
+                    fig = analysis['visualization'](result)
+                    if fig:
+                        self.report_figures[analysis_key] = fig
+                    
+                    st.success(f"✅ Completed {analysis['name']}")
+                else:
+                    st.warning(f"⚠️ {analysis['name']} failed: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                st.error(f"❌ Failed to run {analysis['name']}: {str(e)}")
+        
+        status_text.text("Report generation complete!")
+        progress_bar.progress(1.0)
+        
+        # Display the generated report
+        self._display_generated_report(config, current_units)
+
+    def _generate_report_from_results(self, analysis_results, selected_analyses, config, current_units):
+        """Generate report from existing analysis results."""
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -927,6 +1015,12 @@ def show_enhanced_report_generator(track_data=None, analysis_results=None,
     """
     # Initialize the report generator
     generator = EnhancedSPTReportGenerator()
+    
+    # If track_data is passed directly, ensure it's available
+    if track_data is not None and STATE_MANAGER_AVAILABLE:
+        state_manager = StateManager()
+        if not state_manager.has_data():
+            state_manager.set_tracks(track_data)
     
     # Display the interface
     generator.display_enhanced_analysis_interface()
