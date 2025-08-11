@@ -65,6 +65,14 @@ except ImportError:
     compare_channel_dynamics = None
     MULTI_CHANNEL_ANALYSIS_AVAILABLE = False
 
+try:
+    from advanced_biophysical_metrics import AdvancedMetricsAnalyzer, MetricConfig
+    _ADV_BIOMETS_OK = True
+except Exception:
+    AdvancedMetricsAnalyzer = None
+    MetricConfig = None
+    _ADV_BIOMETS_OK = False
+
 from state_manager import get_state_manager
 
 class AnalysisManager:
@@ -137,6 +145,16 @@ class AnalysisManager:
                 'requirements': ['position_data', 'secondary_channel_data']
             }
         }
+        
+        # After self.available_analyses is created/populated:
+        # (Guard against double insertion if re-run in Streamlit)
+        if 'advanced_biophysics' not in getattr(self, 'available_analyses', {}):
+            self.available_analyses['advanced_biophysics'] = {
+                'name': 'Advanced Biophysical Metrics',
+                'description': 'NGP, van Hove, TAMSD/EAMSD, ergodicity, VACF, turning angles, Hurst',
+                'function': self.run_advanced_biophysical_metrics,
+                'requirements': ['position_data']
+            }
     
     def log(self, message: str, level: str = 'info'):
         """Log analysis messages with timestamping."""
@@ -1345,3 +1363,31 @@ class AnalysisManager:
             return [self._make_json_serializable(item) for item in obj]
         else:
             return obj
+    
+    def run_advanced_biophysical_metrics(self, parameters: dict | None = None) -> dict:
+        try:
+            if not _ADV_BIOMETS_OK or AdvancedMetricsAnalyzer is None:
+                return {'success': False, 'error': 'Advanced metrics module not available'}
+            tracks_df = self.state.get_raw_tracks()
+            if tracks_df is None or tracks_df.empty:
+                return {'success': False, 'error': 'No track data available'}
+            px = self.state.get_pixel_size()
+            dt = self.state.get_frame_interval()
+            p = parameters or {}
+            cfg = MetricConfig(
+                pixel_size=float(p.get('pixel_size', px)),
+                frame_interval=float(p.get('frame_interval', dt)),
+                min_track_length=int(p.get('min_track_length', 5)),
+                max_lag=int(p.get('max_lag', 20)),
+                log_lag=bool(p.get('log_lag', True)),
+                n_hist_bins=int(p.get('n_hist_bins', 60)),
+                seed=p.get('seed', None),
+                n_bootstrap=int(p.get('n_bootstrap', 500))
+            )
+            analyzer = AdvancedMetricsAnalyzer(tracks_df, cfg)
+            res = analyzer.compute_all()
+            res['analysis_type'] = 'advanced_biophysics'
+            return res
+        except Exception as e:
+            self.log(f"Advanced biophysical metrics failed: {e}")
+            return {'success': False, 'error': str(e)}
