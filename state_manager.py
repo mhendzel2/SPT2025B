@@ -3,11 +3,15 @@ State Manager for SPT Analysis Application
 Centralized management of session state with type safety and error checking.
 """
 
-import streamlit as st
 import pandas as pd
-from typing import Optional, Any, Dict, List
+try:
+    import streamlit as st
+except ImportError:
+    # Fallback shim if Streamlit not present (e.g., during pure backend tests)
+    class _Shim: session_state = {}
+    st = _Shim()
 
-class StateManager:
+class AppState:
     """
     Centralized state management for the SPT Analysis application.
     Provides type-safe access to session state with fallbacks.
@@ -15,43 +19,39 @@ class StateManager:
     
     def __init__(self):
         """Initialize the state manager."""
-        self._initialize_session_state()
-    
-    def _initialize_session_state(self):
-        """Initialize session state variables with defaults."""
-        defaults = {
-            'raw_tracks': None,  # Standardized key for main DataFrame
-            'current_file': None,
-            'coordinates_in_microns': False,
-            'frame_interval': 0.01,
-            'pixel_size': 0.03,
-            'analysis_results': {},
-            'current_project_id': None,
-            'track_statistics': None,
-            'image_data': None,
-            'segmentation_results': None,
-            'parameter_optimization_results': None
-        }
-        
-        for key, default_value in defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = default_value
-    
-    def has_data(self) -> bool:
-        """Check if tracking data is available."""
-        return (st.session_state.get('raw_tracks') is not None and 
-                not st.session_state.get('raw_tracks', pd.DataFrame()).empty)
-    
-    def get_tracks(self) -> Optional[pd.DataFrame]:
-        """Get the current tracking data (alias for get_raw_tracks)."""
-        return st.session_state.get('raw_tracks')
-    
-    def get_raw_tracks(self) -> Optional[pd.DataFrame]:
-        """Get the current raw tracking data."""
-        return st.session_state.get('raw_tracks')
-    
-    def set_tracks(self, df: pd.DataFrame, filename: str = None):
-        """Set tracking data with validation (alias for set_raw_tracks)."""
+        st.session_state.setdefault('raw_tracks_df', pd.DataFrame())
+        st.session_state.setdefault('pixel_size', 1.0)
+        st.session_state.setdefault('frame_interval', 1.0)
+
+    def get_raw_tracks(self) -> pd.DataFrame:
+        df = st.session_state.get('raw_tracks_df', None)
+        if df is None or not isinstance(df, pd.DataFrame):
+            return pd.DataFrame()
+        return df
+
+    def set_raw_tracks(self, df: pd.DataFrame) -> None:
+        if df is None or not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame()
+        st.session_state['raw_tracks_df'] = df
+
+    def get_pixel_size(self) -> float:
+        return float(st.session_state.get('pixel_size', 1.0))
+
+    def set_pixel_size(self, px: float) -> None:
+        st.session_state['pixel_size'] = float(px)
+
+    def get_frame_interval(self) -> float:
+        return float(st.session_state.get('frame_interval', 1.0))
+
+    def set_frame_interval(self, dt: float) -> None:
+        st.session_state['frame_interval'] = float(dt)
+
+_singleton = None
+def get_state_manager():
+    global _singleton
+    if _singleton is None:
+        _singleton = AppState()
+    return _singleton
         if df is None or df.empty:
             st.warning("Attempted to set empty or None DataFrame to raw_tracks.")
             st.session_state.raw_tracks = None

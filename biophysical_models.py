@@ -115,8 +115,8 @@ class PolymerPhysicsModel:
                     'r_squared': r_squared
                 }
 
-                # Create visualization
-                results['visualization'] = self._create_rouse_visualization(ensemble, fit_alpha)
+                # Create visualization (pass alpha explicitly)
+                results['visualization'] = self._create_rouse_visualization(ensemble, alpha, fit_alpha)
 
             except Exception as e:
                 results = {
@@ -167,8 +167,8 @@ class PolymerPhysicsModel:
                     'r_squared': r_squared
                 }
 
-                # Create visualization
-                results['visualization'] = self._create_rouse_visualization(ensemble, fit_alpha)
+                # Create visualization (pass alpha explicitly)
+                results['visualization'] = self._create_rouse_visualization(ensemble, alpha, fit_alpha)
 
             except Exception as e:
                 results = {
@@ -536,7 +536,7 @@ class PolymerPhysicsModel:
         self.results['fractal_analysis'] = results
         return results
 
-    def _create_rouse_visualization(self, ensemble_msd: pd.DataFrame, fit_alpha: bool = False) -> go.Figure:
+    def _create_rouse_visualization(self, ensemble_msd: pd.DataFrame, alpha_value: float, fit_alpha: bool = False) -> go.Figure:
         """
         Create visualization for Rouse model fit.
 
@@ -544,6 +544,8 @@ class PolymerPhysicsModel:
         ----------
         ensemble_msd : pd.DataFrame
             DataFrame with MSD data and fit
+        alpha_value : float
+            Alpha exponent used in the fit
         fit_alpha : bool
             Whether alpha was fitted or fixed
 
@@ -563,8 +565,6 @@ class PolymerPhysicsModel:
             marker=dict(color='blue')
         ))
 
-        # Plot fitted curve
-        alpha_value = self.results['rouse_model']['parameters']['alpha']
         alpha_text = f"α={alpha_value:.3f}" if fit_alpha else f"α=0.5 (fixed)"
 
         fig.add_trace(go.Scatter(
