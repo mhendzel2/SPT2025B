@@ -16,6 +16,8 @@ from state_manager import get_state_manager
 import os
 import glob
 from enhanced_report_generator import EnhancedSPTReportGenerator
+import io
+from zip_import import conditions_from_zip_bytes
 
 def create_guided_project_setup():
     """Create a guided, step-by-step project setup interface."""
@@ -254,6 +256,28 @@ def show_data_upload_step():
                 
                 st.success(f"Added {len(uploaded_files)} files to '{selected_condition}'")
                 st.rerun()
+    
+    st.markdown("#### Bulk import from ZIP (folders → conditions)")
+    zip_file = st.file_uploader(
+        "Upload ZIP archive of condition folders",
+        type=["zip"],
+        accept_multiple_files=False,
+        help="Top-level folders become conditions; allowed files: CSV, XML, MVD2, XLSX."
+    )
+    if zip_file is not None:
+        from project_management import Condition
+        new_conditions = conditions_from_zip_bytes(zip_file.getvalue(), ConditionClass=Condition)
+        existing = {c.name: c for c in project.conditions}
+        merged = created = 0
+        for cond in new_conditions:
+            if cond.name in existing:
+                existing[cond.name].files.extend(cond.files)
+                merged += 1
+            else:
+                project.conditions.append(cond)
+                created += 1
+        st.success(f"Imported ZIP: {created} new, {merged} merged.")
+        st.experimental_rerun()
     
     # Navigation
     col1, col2, col3 = st.columns(3)

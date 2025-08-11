@@ -43,11 +43,11 @@ except ImportError:
     MICRORHEOLOGY_AVAILABLE = False
 
 try:
-    from biophysical_models import analyze_motion_models
-    BIOPHYSICAL_MODELS_AVAILABLE = True
-except ImportError:
-    analyze_motion_models = None
-    BIOPHYSICAL_MODELS_AVAILABLE = False
+    from biophysical_models import PolymerPhysicsModel
+    _POLY_OK = True
+except Exception:
+    PolymerPhysicsModel = None
+    _POLY_OK = False
 
 try:
     from correlative_analysis import CorrelativeAnalyzer
@@ -455,21 +455,52 @@ class AnalysisManager:
     def run_biophysical_analysis(self, parameters: Dict = None) -> Dict[str, Any]:
         """Run biophysical model analysis."""
         try:
+            parameters = parameters or {}
             tracks_df = self.state.get_raw_tracks()
             if tracks_df.empty:
                 return {'success': False, 'error': 'No track data available'}
-            
-            if not BIOPHYSICAL_MODELS_AVAILABLE or analyze_motion_models is None:
-                return {'success': False, 'error': 'Biophysical models module not available'}
-            
-            result = analyze_motion_models(tracks_df)
-            result['analysis_type'] = 'biophysical'
-            result['timestamp'] = datetime.now().isoformat()
-            
-            return result
-            
+            if not _POLY_OK or PolymerPhysicsModel is None:
+                return {'success': False, 'error': 'Polymer physics module not available'}
+
+            px = self.state.get_pixel_size()
+            dt = self.state.get_frame_interval()
+
+            # calculate_msd assumed imported elsewhere in existing code
+            msd_df = calculate_msd(
+                tracks_df,
+                max_lag=parameters.get("max_lag", 20),
+                pixel_size=px,
+                frame_interval=dt,
+                min_track_length=parameters.get("min_track_length", 5)
+            )
+            if msd_df.empty:
+                return {'success': False, 'error': 'MSD empty; not enough tracks'}
+
+            ppm = PolymerPhysicsModel(msd_df, pixel_size=px, frame_interval=dt, lag_units="seconds")
+
+            out = {'success': True, 'analysis_type': 'biophysical'}
+            if parameters.get("run_rouse", True):
+                out['rouse'] = ppm.fit_rouse_model(
+                    fit_alpha=parameters.get("rouse_fit_alpha", False),
+                    temperature=float(parameters.get("temperature_K", 300.0)),
+                    n_beads=int(parameters.get("n_beads", 100)),
+                    friction_coefficient=float(parameters.get("friction_coefficient", 1e-8))
+                )
+            if parameters.get("run_zimm", False):
+                out['zimm'] = ppm.fit_zimm_model(
+                    temperature=float(parameters.get("temperature_K", 300.0)),
+                    solvent_viscosity=float(parameters.get("solvent_viscosity_Pa_s", 0.001)),
+                    hydrodynamic_radius=float(parameters.get("hydrodynamic_radius_m", 5e-9))
+                )
+            if parameters.get("run_reptation", False):
+                out['reptation'] = ppm.fit_reptation_model(
+                    temperature=float(parameters.get("temperature_K", 300.0)),
+                    tube_diameter=float(parameters.get("tube_diameter_m", 100e-9)),
+                    contour_length=float(parameters.get("contour_length_m", 1000e-9))
+                )
+            return out
         except Exception as e:
-            self.log(f"Biophysical analysis failed: {str(e)}")
+            self.log(f"Biophysical analysis failed: {e}")
             return {'success': False, 'error': str(e)}
     
     def run_correlative_analysis(self, parameters: Dict = None) -> Dict[str, Any]:

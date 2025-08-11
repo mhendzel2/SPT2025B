@@ -18,7 +18,8 @@ class PolymerPhysicsModel:
     This includes Rouse model, Zimm model, Reptation, and Fractal analysis.
     """
 
-    def __init__(self, msd_data: pd.DataFrame, pixel_size: float = 0.1, frame_interval: float = 0.1):
+    def __init__(self, msd_data: pd.DataFrame, pixel_size: float = 0.1, frame_interval: float = 0.1,
+                 lag_units: str = "seconds"):
         """
         Initialize polymer physics model analyzer.
 
@@ -30,11 +31,19 @@ class PolymerPhysicsModel:
             Pixel size in micrometers
         frame_interval : float
             Frame interval in seconds
+        lag_units : str
+            Units for lag time - "seconds" or "frames"
         """
         self.msd_data = msd_data
         self.pixel_size = pixel_size
         self.frame_interval = frame_interval
+        self.lag_units = lag_units  # "seconds" or "frames"
         self.results = {}
+
+    def _lag_seconds(self, ensemble_msd: pd.DataFrame) -> pd.Series:
+        if self.lag_units == "frames":
+            return ensemble_msd["lag_time"] * self.frame_interval
+        return ensemble_msd["lag_time"]
 
     def fit_rouse_model(self, fit_alpha: bool = False, temperature: float = 300.0, 
                        n_beads: int = 100, friction_coefficient: float = 1e-8) -> Dict[str, Any]:
@@ -58,10 +67,8 @@ class PolymerPhysicsModel:
             Rouse model fitting results
         """
         # Calculate ensemble MSD
-        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
-
-        # Convert lag time to seconds
-        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
+        ensemble = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
+        ensemble['lag_time_seconds'] = self._lag_seconds(ensemble)
 
         # Initialize parameters
         kB = 1.38e-23  # Boltzmann constant, J/K
@@ -78,19 +85,19 @@ class PolymerPhysicsModel:
 
             # Fit the model
             try:
-                popt, pcov = curve_fit(power_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+                popt, pcov = curve_fit(power_law, ensemble['lag_time_seconds'], ensemble['msd'], p0=p0)
                 D_macro, alpha = popt
 
                 # Calculate Gamma coefficient (depends on the polymer model)
                 Gamma = D_macro / (kB * temperature) * (6 * np.pi * n_beads * friction_coefficient)
 
                 # Calculate fit curve
-                ensemble_msd['msd_fit'] = power_law(ensemble_msd['lag_time_seconds'], D_macro, alpha)
+                ensemble['msd_fit'] = power_law(ensemble['lag_time_seconds'], D_macro, alpha)
 
                 # Calculate R-squared
-                residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+                residuals = ensemble['msd'] - ensemble['msd_fit']
                 ss_res = np.sum(residuals**2)
-                ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+                ss_tot = np.sum((ensemble['msd'] - np.mean(ensemble['msd']))**2)
                 r_squared = 1 - (ss_res / ss_tot)
 
                 # Store results
@@ -104,12 +111,12 @@ class PolymerPhysicsModel:
                         'n_beads': n_beads,
                         'friction_coefficient': friction_coefficient
                     },
-                    'ensemble_msd': ensemble_msd,
+                    'ensemble_msd': ensemble,
                     'r_squared': r_squared
                 }
 
                 # Create visualization
-                results['visualization'] = self._create_rouse_visualization(ensemble_msd, fit_alpha)
+                results['visualization'] = self._create_rouse_visualization(ensemble, fit_alpha)
 
             except Exception as e:
                 results = {
@@ -129,7 +136,7 @@ class PolymerPhysicsModel:
                 p0 = [1e-2]  # D
 
                 # Fit the model
-                popt, pcov = curve_fit(rouse_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+                popt, pcov = curve_fit(rouse_law, ensemble['lag_time_seconds'], ensemble['msd'], p0=p0)
                 D_macro = popt[0]
                 alpha = 0.5  # Fixed for standard Rouse model
 
@@ -137,12 +144,12 @@ class PolymerPhysicsModel:
                 Gamma = D_macro / (kB * temperature) * (6 * np.pi * n_beads * friction_coefficient)
 
                 # Calculate fit curve
-                ensemble_msd['msd_fit'] = rouse_law(ensemble_msd['lag_time_seconds'], D_macro)
+                ensemble['msd_fit'] = rouse_law(ensemble['lag_time_seconds'], D_macro)
 
                 # Calculate R-squared
-                residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+                residuals = ensemble['msd'] - ensemble['msd_fit']
                 ss_res = np.sum(residuals**2)
-                ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+                ss_tot = np.sum((ensemble['msd'] - np.mean(ensemble['msd']))**2)
                 r_squared = 1 - (ss_res / ss_tot)
 
                 # Store results
@@ -156,12 +163,12 @@ class PolymerPhysicsModel:
                         'n_beads': n_beads,
                         'friction_coefficient': friction_coefficient
                     },
-                    'ensemble_msd': ensemble_msd,
+                    'ensemble_msd': ensemble,
                     'r_squared': r_squared
                 }
 
                 # Create visualization
-                results['visualization'] = self._create_rouse_visualization(ensemble_msd, fit_alpha)
+                results['visualization'] = self._create_rouse_visualization(ensemble, fit_alpha)
 
             except Exception as e:
                 results = {
@@ -193,10 +200,8 @@ class PolymerPhysicsModel:
             Zimm model fitting results
         """
         # Calculate ensemble MSD
-        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
-
-        # Convert lag time to seconds
-        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
+        ensemble = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
+        ensemble['lag_time_seconds'] = self._lag_seconds(ensemble)
 
         # Initialize parameters
         kB = 1.38e-23  # Boltzmann constant, J/K
@@ -212,7 +217,7 @@ class PolymerPhysicsModel:
             p0 = [1e-2]  # D
 
             # Fit the model
-            popt, pcov = curve_fit(zimm_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+            popt, pcov = curve_fit(zimm_law, ensemble['lag_time_seconds'], ensemble['msd'], p0=p0)
             D_zimm = popt[0]
             alpha = 2/3  # Fixed for standard Zimm model
 
@@ -221,12 +226,12 @@ class PolymerPhysicsModel:
             Rg = kB * temperature / (6 * np.pi * solvent_viscosity * D_zimm)
 
             # Calculate fit curve
-            ensemble_msd['msd_fit'] = zimm_law(ensemble_msd['lag_time_seconds'], D_zimm)
+            ensemble['msd_fit'] = zimm_law(ensemble['lag_time_seconds'], D_zimm)
 
             # Calculate R-squared
-            residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+            residuals = ensemble['msd'] - ensemble['msd_fit']
             ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+            ss_tot = np.sum((ensemble['msd'] - np.mean(ensemble['msd']))**2)
             r_squared = 1 - (ss_res / ss_tot)
 
             # Store results
@@ -240,7 +245,7 @@ class PolymerPhysicsModel:
                     'solvent_viscosity': solvent_viscosity,
                     'hydrodynamic_radius': hydrodynamic_radius
                 },
-                'ensemble_msd': ensemble_msd,
+                'ensemble_msd': ensemble,
                 'r_squared': r_squared
             }
 
@@ -249,8 +254,8 @@ class PolymerPhysicsModel:
 
             # Plot original MSD data
             fig.add_trace(go.Scatter(
-                x=ensemble_msd['lag_time_seconds'],
-                y=ensemble_msd['msd'],
+                x=ensemble['lag_time_seconds'],
+                y=ensemble['msd'],
                 mode='markers',
                 name='MSD Data',
                 marker=dict(color='blue')
@@ -258,8 +263,8 @@ class PolymerPhysicsModel:
 
             # Plot fitted curve
             fig.add_trace(go.Scatter(
-                x=ensemble_msd['lag_time_seconds'],
-                y=ensemble_msd['msd_fit'],
+                x=ensemble['lag_time_seconds'],
+                y=ensemble['msd_fit'],
                 mode='lines',
                 name=f'Zimm Model Fit (α=2/3)',
                 line=dict(color='red')
@@ -310,10 +315,8 @@ class PolymerPhysicsModel:
             Reptation model fitting results
         """
         # Calculate ensemble MSD
-        ensemble_msd = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
-
-        # Convert lag time to seconds
-        ensemble_msd['lag_time_seconds'] = ensemble_msd['lag_time'] * self.frame_interval
+        ensemble = self.msd_data.groupby('lag_time')['msd'].mean().reset_index()
+        ensemble['lag_time_seconds'] = self._lag_seconds(ensemble)
 
         # Initialize parameters
         kB = 1.38e-23  # Boltzmann constant, J/K
@@ -330,7 +333,7 @@ class PolymerPhysicsModel:
 
             # Fit the model to intermediate time region (assuming the data is in this regime)
             # For a complete model, we would need to determine which regime we're in
-            popt, pcov = curve_fit(reptation_law, ensemble_msd['lag_time_seconds'], ensemble_msd['msd'], p0=p0)
+            popt, pcov = curve_fit(reptation_law, ensemble['lag_time_seconds'], ensemble['msd'], p0=p0)
             D_rep = popt[0]
             alpha = 0.25  # Fixed for reptation model intermediate times
 
@@ -342,12 +345,12 @@ class PolymerPhysicsModel:
             entanglement_time = (tube_diameter**4) / (D_rep * contour_length**2)
 
             # Calculate fit curve
-            ensemble_msd['msd_fit'] = reptation_law(ensemble_msd['lag_time_seconds'], D_rep)
+            ensemble['msd_fit'] = reptation_law(ensemble['lag_time_seconds'], D_rep)
 
             # Calculate R-squared
-            residuals = ensemble_msd['msd'] - ensemble_msd['msd_fit']
+            residuals = ensemble['msd'] - ensemble['msd_fit']
             ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((ensemble_msd['msd'] - np.mean(ensemble_msd['msd']))**2)
+            ss_tot = np.sum((ensemble['msd'] - np.mean(ensemble['msd']))**2)
             r_squared = 1 - (ss_res / ss_tot)
 
             # Store results
@@ -362,7 +365,7 @@ class PolymerPhysicsModel:
                     'tube_diameter': tube_diameter,
                     'contour_length': contour_length
                 },
-                'ensemble_msd': ensemble_msd,
+                'ensemble_msd': ensemble,
                 'r_squared': r_squared
             }
 
@@ -371,8 +374,8 @@ class PolymerPhysicsModel:
 
             # Plot original MSD data
             fig.add_trace(go.Scatter(
-                x=ensemble_msd['lag_time_seconds'],
-                y=ensemble_msd['msd'],
+                x=ensemble['lag_time_seconds'],
+                y=ensemble['msd'],
                 mode='markers',
                 name='MSD Data',
                 marker=dict(color='blue')
@@ -380,8 +383,8 @@ class PolymerPhysicsModel:
 
             # Plot fitted curve
             fig.add_trace(go.Scatter(
-                x=ensemble_msd['lag_time_seconds'],
-                y=ensemble_msd['msd_fit'],
+                x=ensemble['lag_time_seconds'],
+                y=ensemble['msd_fit'],
                 mode='lines',
                 name=f'Reptation Model Fit (α=0.25)',
                 line=dict(color='red')
