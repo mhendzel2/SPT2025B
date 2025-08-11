@@ -14,13 +14,15 @@ except ImportError:
     st = _Shim()
 
 
-class AppState:
+class StateManager:
     def __init__(self):
-        ss = st.session_state
-        if 'raw_tracks_df' not in ss or not isinstance(ss.get('raw_tracks_df'), pd.DataFrame):
-            ss['raw_tracks_df'] = pd.DataFrame()
-        ss.setdefault('pixel_size', 1.0)
-        ss.setdefault('frame_interval', 1.0)
+        # Ensure keys exist without indentation errors
+        if 'raw_tracks' not in st.session_state:
+            st.session_state.raw_tracks = None
+        if 'pixel_size' not in st.session_state:
+            st.session_state.pixel_size = 0.1
+        if 'frame_interval' not in st.session_state:
+            st.session_state.frame_interval = 0.1
 
     # ---- Tracks ----
     def get_raw_tracks(self) -> pd.DataFrame:
@@ -46,27 +48,6 @@ class AppState:
 
     def set_frame_interval(self, dt: float) -> None:
         st.session_state['frame_interval'] = float(dt)
-
-
-_singleton = None
-def get_state_manager() -> AppState:
-    global _singleton
-    if _singleton is None:
-        _singleton = AppState()
-    return _singleton
-            st.session_state.raw_tracks = None
-            st.session_state.current_file = None
-            return
-        
-        # Basic validation
-        required_cols = ['x', 'y']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            raise ValueError(f"Missing required columns in DataFrame: {missing_cols}")
-        
-        st.session_state.raw_tracks = df
-        if filename:
-            st.session_state.current_file = filename
 
     def set_raw_tracks(self, df: pd.DataFrame, filename: str = None):
         """Set raw tracking data with validation."""
@@ -311,6 +292,25 @@ def get_state_manager() -> AppState:
             st.session_state.current_file = state_data['current_file']
         
         if 'project_id' in state_data:
+            self.set_project_id(state_data['project_id'])
+        
+        # Import tracking data
+        if 'tracks_data' in state_data:
+            tracks_df = pd.DataFrame(state_data['tracks_data'])
+            self.set_tracks(tracks_df)
+        
+        # Import analysis results
+        if 'analysis_results' in state_data:
+            st.session_state.analysis_results = state_data['analysis_results']
+
+# Singleton helper
+_state_manager_instance = None
+
+def get_state_manager():
+    global _state_manager_instance
+    if _state_manager_instance is None:
+        _state_manager_instance = StateManager()
+    return _state_manager_instance
             self.set_project_id(state_data['project_id'])
         
         # Import tracking data
