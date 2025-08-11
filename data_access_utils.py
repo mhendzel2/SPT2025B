@@ -132,6 +132,7 @@ def check_data_availability(show_error: bool = True) -> bool:
                 try:
                     state_manager = StateManager()
                     st.write("**State manager summary:**", state_manager.get_data_summary())
+                    st.write("**Debug state:**", state_manager.debug_data_state())
                 except Exception as e:
                     st.write(f"State manager error: {e}")
     

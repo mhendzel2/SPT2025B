@@ -96,7 +96,14 @@ except Exception:
 
 warnings.filterwarnings('ignore')
 
-# Import state manager for proper data access
+# Import data access utilities for consistent data handling
+try:
+    from data_access_utils import get_track_data, check_data_availability, get_units, get_analysis_results, display_data_summary
+    DATA_UTILS_AVAILABLE = True
+except ImportError:
+    DATA_UTILS_AVAILABLE = False
+
+# Import state manager for proper data access (keep as fallback)
 try:
     from state_manager import StateManager
     STATE_MANAGER_AVAILABLE = True
@@ -109,7 +116,7 @@ class EnhancedSPTReportGenerator:
     """
 
     def __init__(self):
-        # Initialize state manager if available
+        # Initialize state manager if available (for fallback)
         self.state_manager = StateManager() if STATE_MANAGER_AVAILABLE else None
         
         self.available_analyses = {
@@ -223,32 +230,40 @@ class EnhancedSPTReportGenerator:
         """Display comprehensive analysis selection interface."""
         st.header("📊 Enhanced Automated Report Generation")
         
-        # Check for track data using state manager
-        has_data = False
-        tracks_df = None
-        
-        if self.state_manager:
-            has_data = self.state_manager.has_data()
-            if has_data:
-                tracks_df = self.state_manager.get_tracks()
+        # Use centralized data access utilities
+        if DATA_UTILS_AVAILABLE:
+            if not check_data_availability():
+                return
+            tracks_df, _ = get_track_data()
+            display_data_summary()
         else:
-            # Fallback to direct session state access
-            tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks')
-            has_data = tracks_df is not None and not tracks_df.empty if isinstance(tracks_df, pd.DataFrame) else False
-        
-        if not has_data:
-            st.error("❌ No track data loaded. Please load data first.")
-            st.info("💡 Go to the 'Data Loading' tab to upload track data.")
+            # Fallback to original method
+            has_data = False
+            tracks_df = None
             
-            # Debug information
-            if st.checkbox("Show debug information"):
-                st.write("Session state keys:", list(st.session_state.keys()))
-                if self.state_manager:
-                    st.write("State manager data summary:", self.state_manager.get_data_summary())
-                    st.write("Debug state:", self.state_manager.debug_data_state())
-            return
+            if self.state_manager:
+                has_data = self.state_manager.has_data()
+                if has_data:
+                    tracks_df = self.state_manager.get_tracks()
+            else:
+                # Fallback to direct session state access
+                tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks')
+                has_data = tracks_df is not None and not tracks_df.empty if isinstance(tracks_df, pd.DataFrame) else False
+            
+            if not has_data:
+                st.error("❌ No track data loaded. Please load data first.")
+                st.info("💡 Go to the 'Data Loading' tab to upload track data.")
+                
+                # Debug information
+                if st.checkbox("Show debug information"):
+                    st.write("Session state keys:", list(st.session_state.keys()))
+                    if self.state_manager:
+                        st.write("State manager data summary:", self.state_manager.get_data_summary())
+                        st.write("Debug state:", self.state_manager.debug_data_state())
+                return
+            
+            st.success(f"✅ Track data loaded: {len(tracks_df)} points")
         
-        st.success(f"✅ Track data loaded: {len(tracks_df)} points")
         st.markdown("Select from the available modules to create a detailed report.")
         
         categories = self._group_analyses_by_category()
@@ -258,8 +273,10 @@ class EnhancedSPTReportGenerator:
             
         if st.button("🚀 Generate Comprehensive Report", type="primary"):
             if selected_analyses:
-                # Get units from state manager or session state
-                if self.state_manager:
+                # Get units using centralized utilities
+                if DATA_UTILS_AVAILABLE:
+                    current_units = get_units()
+                elif self.state_manager:
                     current_units = {
                         'pixel_size': self.state_manager.get_pixel_size(),
                         'frame_interval': self.state_manager.get_frame_interval()
@@ -392,9 +409,10 @@ class EnhancedSPTReportGenerator:
         """Execute comprehensive analysis pipeline using existing results."""
         st.subheader("📄 Generating Report from Analysis Results")
         
-        # Check if any analysis results exist - use state manager if available
-        analysis_results = None
-        if self.state_manager:
+        # Get analysis results using centralized utilities
+        if DATA_UTILS_AVAILABLE:
+            analysis_results = get_analysis_results()
+        elif self.state_manager:
             analysis_results = self.state_manager.get_analysis_results()
         else:
             analysis_results = st.session_state.get('analysis_results', {})
@@ -1017,10 +1035,17 @@ def show_enhanced_report_generator(track_data=None, analysis_results=None,
     generator = EnhancedSPTReportGenerator()
     
     # If track_data is passed directly, ensure it's available
-    if track_data is not None and STATE_MANAGER_AVAILABLE:
-        state_manager = StateManager()
-        if not state_manager.has_data():
-            state_manager.set_tracks(track_data)
+    if track_data is not None:
+        if DATA_UTILS_AVAILABLE:
+            # Check if we need to set the data
+            existing_data, has_data = get_track_data()
+            if not has_data:
+                # We need to set it in session state
+                st.session_state['tracks_df'] = track_data
+        elif STATE_MANAGER_AVAILABLE:
+            state_manager = StateManager()
+            if not state_manager.has_data():
+                state_manager.set_tracks(track_data)
     
     # Display the interface
     generator.display_enhanced_analysis_interface()
