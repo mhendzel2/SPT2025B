@@ -1754,3 +1754,38 @@ def _fit_confined_motion(displacements, dt, positions):
     error = np.mean((displacements - expected_msds)**2)
 
     return D_confined, L_confined, error
+
+# Bayesian segmentation helpers (lazy import to avoid mandatory dependency during normal use)
+def run_bocpd_segmentation(tracks_df: pd.DataFrame, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Convenience wrapper for Bayesian Online Changepoint Detection on diffusion steps.
+    Parameters
+    ----------
+    tracks_df : DataFrame with columns track_id, frame, x, y
+    config : dict of BOCPDConfig overrides
+    """
+    try:
+        from bayes_bocpd_diffusion import BOCPDDiffusion, BOCPDConfig
+    except ImportError:
+        return {'success': False, 'error': 'bayes_bocpd_diffusion module not found'}
+    cfg_kwargs = config or {}
+    cfg = BOCPDConfig(**{k: v for k, v in cfg_kwargs.items() if k in BOCPDConfig().__dict__})
+    model = BOCPDDiffusion(tracks_df, cfg)
+    return model.segment_all()
+
+def run_hmm_segmentation(tracks_df: pd.DataFrame, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Convenience wrapper for Bayesian (MAP) HMM diffusion / drift state segmentation.
+    Parameters
+    ----------
+    tracks_df : DataFrame with columns track_id, frame, x, y
+    config : dict of HMMConfig overrides
+    """
+    try:
+        from bayes_hmm_diffusion import BayesHMMDiffusion, HMMConfig
+    except ImportError:
+        return {'success': False, 'error': 'bayes_hmm_diffusion module not found'}
+    cfg_kwargs = config or {}
+    cfg = HMMConfig(**{k: v for k, v in cfg_kwargs.items() if k in HMMConfig().__dict__})
+    model = BayesHMMDiffusion(tracks_df, cfg)
+    return model.segment_all()
