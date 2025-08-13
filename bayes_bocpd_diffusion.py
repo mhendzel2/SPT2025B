@@ -74,10 +74,9 @@ class BOCPDDiffusion:
             else:
                 R_t /= tot
             R[t] = R_t
-            prev_scores = np.full(rmax+1, -np.inf)
-            prev_scores[1:] = log_growth[:-1]
-            prev_scores[0] = np.log(H) + m
-            back[t] = np.argmax(prev_scores)
+            # Store backpointers for Viterbi decoding
+            back[t, 1:] = np.arange(rmax) # For j>0, state j comes from j-1
+            back[t, 0] = np.argmax(np.log(R_prev + 1e-300) + log_pred)
             # posterior update
             a_new = np.zeros_like(a_prev); b_new = np.zeros_like(b_prev)
             a_new[0] = self.cfg.alpha0; b_new[0] = self.cfg.beta0
