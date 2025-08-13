@@ -24,43 +24,6 @@ def initialize_session_state():
     Initialize all required session state variables for the SPT2025B application.
     This function sets up default values for data storage, analysis results, and UI state.
     """
-def validate_tracks_dataframe(tracks_df: pd.DataFrame) -> Tuple[bool, str]:
-    """
-    Validate that a tracks DataFrame has the required structure and data quality.
-
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        DataFrame containing particle tracks
-
-    Returns
-    -------
-    Tuple[bool, str]
-        (is_valid, message) - validation result and descriptive message
-    """
-    if tracks_df is None:
-        return False, "DataFrame is None"
-
-    if tracks_df.empty:
-        return False, "DataFrame is empty"
-
-    required_columns = ['track_id', 'frame', 'x', 'y']
-    missing_columns = [col for col in required_columns if col not in tracks_df.columns]
-
-    if missing_columns:
-        return False, f"Missing required columns: {missing_columns}"
-
-    if tracks_df[['x', 'y']].isnull().any().any():
-        return False, "Contains null values in position columns"
-
-    if len(tracks_df['track_id'].unique()) == 0:
-        return False, "No tracks found"
-
-    min_track_length = tracks_df.groupby('track_id').size().min()
-    if min_track_length < 2:
-        return False, f"Tracks too short (minimum length: {min_track_length})"
-
-    return True, f"Valid tracks DataFrame with {len(tracks_df['track_id'].unique())} tracks"
     if 'tracks_data' not in st.session_state:
         st.session_state.tracks_data = None
     if 'track_statistics' not in st.session_state:
