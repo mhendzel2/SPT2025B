@@ -50,6 +50,73 @@ def show_biophysical_models():
 class PolymerPhysicsModel:
     """Polymer physics model implementation."""
     
+    def __init__(self, msd_data=None, pixel_size=1.0, frame_interval=0.1, lag_units='frames'):
+        self.msd_data = msd_data
+        self.pixel_size = pixel_size
+        self.frame_interval = frame_interval
+        self.lag_units = lag_units
+
+    def fit_rouse_model(self, fit_alpha=False):
+        """
+        Fits the Rouse model to the provided MSD data.
+        The Rouse model predicts MSD ~ t^0.5.
+        """
+        if self.msd_data is None or self.msd_data.empty:
+            return {'success': False, 'error': 'MSD data not available'}
+
+        lag_time = self.msd_data['lag_time'].values
+        msd = self.msd_data['msd'].values
+
+        # Avoid log(0) issues by filtering out non-positive values
+        valid_indices = (lag_time > 0) & (msd > 0)
+        if not np.any(valid_indices):
+            return {'success': False, 'error': 'No positive lag time and MSD data available for fitting.'}
+
+        lag_time = lag_time[valid_indices]
+        msd = msd[valid_indices]
+
+        log_lag_time = np.log(lag_time)
+        log_msd = np.log(msd)
+
+        params = {}
+
+        if fit_alpha:
+            # Fit for both alpha and K: log(MSD) = alpha * log(t) + log(K)
+            try:
+                # A robust way to handle potential issues with polyfit
+                if len(log_lag_time) < 2:
+                    return {'success': False, 'error': 'Not enough data points to fit model.'}
+                p = np.polyfit(log_lag_time, log_msd, 1)
+                alpha = p[0]
+                log_K = p[1]
+                K = np.exp(log_K)
+                params['alpha'] = alpha
+                params['K_rouse'] = K
+            except np.linalg.LinAlgError as e:
+                return {'success': False, 'error': f'Failed to fit model: {e}'}
+
+        else:
+            # Fixed alpha = 0.5
+            alpha = 0.5
+            # MSD = K * t^0.5  => K = MSD / t^0.5
+            # We can calculate K for each point and take the average for a simple estimate
+            with np.errstate(divide='ignore', invalid='ignore'):
+                K_values = msd / (lag_time ** alpha)
+
+            # Use nanmean to ignore potential NaNs or Infs from division issues
+            K = np.nanmean(K_values[np.isfinite(K_values)])
+
+            if np.isnan(K):
+                 return {'success': False, 'error': 'Could not determine a valid K_rouse parameter.'}
+
+            params['alpha'] = alpha
+            params['K_rouse'] = K
+
+        return {
+            'success': True,
+            'parameters': params
+        }
+
     def analyze_polymer_dynamics(self, tracks_df=None):
         """Analyze polymer dynamics from tracking data."""
         # Get data if not provided

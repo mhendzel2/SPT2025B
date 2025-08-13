@@ -513,33 +513,71 @@ class EnhancedSPTReportGenerator:
     def _analyze_basic_statistics(self, tracks_df, current_units):
         """Full implementation for basic statistics with safe data access."""
         try:
-            if tracks_df is None or tracks_df.empty:
-                return {'error': 'No track data available', 'success': False}
+            from utils import calculate_track_statistics
             
-            # Basic statistics with safe access
-            track_lengths = tracks_df.groupby('track_id').size()
+            stats_df = calculate_track_statistics(tracks_df)
             
-            # Safe velocity calculation
-            velocities = []
-            if 'velocity_x' in tracks_df.columns and 'velocity_y' in tracks_df.columns:
-                velocities = np.sqrt(tracks_df['velocity_x']**2 + tracks_df['velocity_y']**2)
-            elif 'velocity' in tracks_df.columns:
-                velocities = tracks_df['velocity'].dropna()
-            
+            if stats_df.empty:
+                return {'success': False, 'error': 'Failed to calculate track statistics.'}
+
+            # For consistency, also provide the ensemble stats in the results dict
             results = {
-                'total_tracks': len(track_lengths),
-                'mean_track_length': float(track_lengths.mean()) if not track_lengths.empty else 0.0,
-                'median_track_length': float(track_lengths.median()) if not track_lengths.empty else 0.0,
-                'track_length_std': float(track_lengths.std()) if not track_lengths.empty else 0.0,
-                'mean_velocity': float(np.mean(velocities)) if len(velocities) > 0 else 0.0,
-                'velocity_std': float(np.std(velocities)) if len(velocities) > 0 else 0.0,
-                'success': True
+                'success': True,
+                'statistics_df': stats_df,
+                'ensemble_statistics': {
+                    'total_tracks': len(stats_df),
+                    'mean_track_length': stats_df['track_length'].mean(),
+                    'median_track_length': stats_df['track_length'].median(),
+                    'mean_speed': stats_df['mean_speed'].mean()
+                }
             }
-            
+            return results
         except Exception as e:
-            results = {'error': f'Analysis failed: {str(e)}', 'success': False}
+            return {'error': f'Analysis failed: {str(e)}', 'success': False}
+
+    def _plot_basic_statistics(self, result):
+        """Full implementation for basic statistics visualization."""
+        try:
+            from visualization import plot_track_statistics
             
-        return results
+            stats_df = result.get('statistics_df')
+            if stats_df is None or stats_df.empty:
+                return _empty_fig("No statistics data to plot.")
+
+            # plot_track_statistics returns a dictionary of figures
+            figs = plot_track_statistics(stats_df)
+
+            if not figs:
+                return _empty_fig("No statistics plots generated.")
+
+            # Create a subplot figure. Let's assume 2x2 for the main stats.
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=list(figs.keys())
+            )
+
+            row, col = 1, 1
+            for name, sub_fig in figs.items():
+                # Each sub_fig is a go.Figure with one trace (a histogram)
+                # We extract the trace and add it to our main figure
+                if sub_fig.data:
+                    fig.add_trace(sub_fig.data[0], row=row, col=col)
+
+                # Move to the next subplot position
+                col += 1
+                if col > 2:
+                    col = 1
+                    row += 1
+                if row > 2:
+                    break # Stop if we have more than 4 plots
+
+            fig.update_layout(title_text="Basic Track Statistics", showlegend=False)
+            return fig
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
 
     def _analyze_diffusion(self, tracks_df, current_units):
         """Full implementation for diffusion analysis with safe access."""
@@ -569,6 +607,58 @@ class EnhancedSPTReportGenerator:
                 }
         except Exception as e:
             return {'error': str(e), 'success': False}
+
+    def _plot_motion(self, result):
+        """Full implementation for motion visualization."""
+        try:
+            from visualization import plot_motion_analysis, _empty_fig
+
+            if not result.get('success', False):
+                return _empty_fig("Motion analysis failed.")
+
+            return plot_motion_analysis(result)
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+
+    def _plot_diffusion(self, result):
+        """Full implementation for diffusion visualization."""
+        try:
+            from visualization import plot_diffusion_coefficients, plot_msd_curves, _empty_fig
+
+            if not result.get('success', False):
+                return _empty_fig("Diffusion analysis failed.")
+
+            # Create a figure with two subplots
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=("Diffusion Coefficients", "Mean Squared Displacement")
+            )
+
+            # Plot diffusion coefficients
+            diff_fig = plot_diffusion_coefficients(result)
+            if diff_fig.data:
+                fig.add_trace(diff_fig.data[0], row=1, col=1)
+                if len(diff_fig.layout.shapes) > 0:
+                    for shape in diff_fig.layout.shapes:
+                        fig.add_shape(shape, row=1, col=1)
+
+            # Plot MSD curves
+            if 'msd_data' in result:
+                msd_fig = plot_msd_curves(result['msd_data'])
+                if msd_fig.data:
+                    for trace in msd_fig.data:
+                        fig.add_trace(trace, row=1, col=2)
+
+            fig.update_layout(title_text="Diffusion Analysis", showlegend=False)
+            return fig
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
 
     def _analyze_motion(self, tracks_df, current_units):
         """Full implementation for motion analysis."""
@@ -640,30 +730,68 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'error': str(e), 'success': False}
 
+    def _plot_clustering(self, result):
+        """Full implementation for clustering visualization."""
+        try:
+            from visualization import plot_clustering_analysis, _empty_fig
+
+            if not result.get('success', False):
+                return _empty_fig("Clustering analysis failed.")
+
+            return plot_clustering_analysis(result)
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+
     def _analyze_anomalies(self, tracks_df, current_units):
         """Full implementation for anomaly detection."""
         try:
-            if ANOMALY_DETECTION_AVAILABLE:
-                detector = AnomalyDetector()
-                return detector.detect_anomalies(tracks_df)
-            else:
-                # Simple outlier detection based on track length
-                track_lengths = tracks_df.groupby('track_id').size()
-                q75, q25 = np.percentile(track_lengths, [75, 25])
-                iqr = q75 - q25
-                lower_bound = q25 - 1.5 * iqr
-                upper_bound = q75 + 1.5 * iqr
-                
-                outliers = track_lengths[(track_lengths < lower_bound) | (track_lengths > upper_bound)]
-                
-                return {
-                    'outlier_tracks': outliers.index.tolist(),
-                    'outlier_count': len(outliers),
-                    'outlier_fraction': len(outliers) / len(track_lengths) if len(track_lengths) > 0 else 0,
-                    'success': True
-                }
+            from anomaly_detection import AnomalyDetector
+
+            detector = AnomalyDetector()
+            anomaly_results = detector.comprehensive_anomaly_detection(tracks_df)
+
+            # Classify anomalies
+            anomaly_classifications = []
+            for track_id in tracks_df['track_id'].unique():
+                anomaly_type, _, _ = detector.classify_anomaly_type(
+                    track_id,
+                    anomaly_results.get('velocity_anomalies', {}),
+                    anomaly_results.get('confinement_violations', {}),
+                    anomaly_results.get('directional_anomalies', {}),
+                    anomaly_results.get('ml_anomaly_scores', {}),
+                    anomaly_results.get('spatial_clustering', {})
+                )
+                anomaly_classifications.append({'track_id': track_id, 'anomaly_type': anomaly_type})
+
+            anomaly_classification_df = pd.DataFrame(anomaly_classifications)
+
+            results = {
+                'success': True,
+                'anomaly_df': pd.merge(tracks_df, anomaly_classification_df, on='track_id'),
+                'anomaly_summary': detector.get_anomaly_summary()
+            }
+
+            return results
         except Exception as e:
             return {'error': str(e), 'success': False}
+
+    def _plot_anomalies(self, result):
+        """Full implementation for anomaly visualization."""
+        try:
+            from visualization import plot_anomaly_analysis, _empty_fig
+
+            if not result.get('success', False):
+                return _empty_fig("Anomaly analysis failed.")
+
+            return plot_anomaly_analysis(result)
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
 
     def _analyze_changepoints(self, tracks_df, current_units):
         """Implementation for changepoint detection."""
@@ -676,16 +804,6 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'error': str(e), 'success': False}
 
-    def _analyze_polymer_physics(self, tracks_df, current_units):
-        """Implementation for polymer physics analysis."""
-        try:
-            if BIOPHYSICAL_MODELS_AVAILABLE:
-                model = PolymerPhysicsModel()
-                return model.analyze_polymer_dynamics(tracks_df)
-            else:
-                return {'error': 'Biophysical models module not available', 'success': False}
-        except Exception as e:
-            return {'error': str(e), 'success': False}
 
     def _analyze_microrheology(self, tracks_df, units):
         """Analyze microrheological properties from particle tracking data."""
@@ -778,6 +896,71 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             import traceback
             return {'success': False, 'error': f'Microrheology analysis failed: {str(e)}', 'traceback': traceback.format_exc()}
+
+    def _plot_microrheology(self, result):
+        """Full implementation for microrheology visualization."""
+        try:
+            from rheology import create_rheology_plots
+            from visualization import _empty_fig
+
+            if not result.get('success', False):
+                return _empty_fig("Microrheology analysis failed.")
+
+            figs = create_rheology_plots(result)
+
+            if not figs:
+                return _empty_fig("No rheology plots generated.")
+
+            # Create a subplot figure.
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=list(figs.keys())
+            )
+
+            row, col = 1, 1
+            for name, sub_fig in figs.items():
+                if sub_fig.data:
+                    for trace in sub_fig.data:
+                        fig.add_trace(trace, row=row, col=col)
+
+                col += 1
+                if col > 2:
+                    break
+
+            fig.update_layout(title_text="Microrheology Analysis", showlegend=False)
+            return fig
+
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+
+    def _analyze_polymer_physics(self, tracks_df, current_units):
+        """Full implementation for polymer physics analysis."""
+        try:
+            from analysis import analyze_polymer_physics
+
+            polymer_results = analyze_polymer_physics(
+                tracks_df,
+                pixel_size=current_units.get('pixel_size', 1.0),
+                frame_interval=current_units.get('frame_interval', 1.0)
+            )
+
+            return polymer_results
+        except Exception as e:
+            return {'error': str(e), 'success': False}
+
+    def _plot_polymer_physics(self, result):
+        """Full implementation for polymer physics visualization."""
+        try:
+            from visualization import plot_polymer_physics_results
+            return plot_polymer_physics_results(result)
+        except ImportError:
+            return None
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
 
     def generate_batch_report(self, tracks_df, selected_analyses, condition_name):
         """Generate automated report for batch processing (non-Streamlit)."""

@@ -763,6 +763,406 @@ def comparative_histogram(
 
 
 # ------------------------------------------------------------------ #
+#   Intensity Analysis
+# ------------------------------------------------------------------ #
+
+def plot_intensity_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for intensity analysis results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from analyze_intensity_profiles function, with 'all_intensities' added.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot summarizing intensity analysis.
+    """
+    if not analysis_results or 'intensity_statistics' not in analysis_results:
+        return _empty_fig("No intensity analysis data available")
+
+    stats = analysis_results['intensity_statistics']
+    track_profiles = analysis_results.get('track_profiles', {})
+    all_intensities = analysis_results.get('all_intensities')
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        specs=[[{"type": "domain"}, {"type": "xy"}],
+               [{"type": "xy", "colspan": 2}, None]],
+        subplot_titles=("Intensity Behavior", "Intensity Distribution", "Example Intensity Profiles")
+    )
+
+    # Pie chart for intensity behavior
+    n_total = len(track_profiles) if track_profiles else 0
+    if n_total > 0:
+        bleaching_set = set(stats.get('photobleaching_detected', []))
+        blinking_set = set(stats.get('blinking_events', {}).keys())
+        stable_set = set(track_profiles.keys()) - bleaching_set - blinking_set
+
+        labels = ['Stable', 'Photobleaching', 'Blinking']
+        values = [len(stable_set), len(bleaching_set), len(blinking_set)]
+
+        fig.add_trace(go.Pie(labels=labels, values=values, name="Behavior", hole=.3), row=1, col=1)
+
+    # Histogram of all intensities
+    if all_intensities:
+        fig.add_trace(go.Histogram(x=all_intensities, name='Intensity'), row=1, col=2)
+        fig.update_xaxes(title_text="Intensity", row=1, col=2)
+        fig.update_yaxes(title_text="Frequency", row=1, col=2)
+
+
+    # Example intensity profiles
+    if track_profiles:
+        # Use a deterministic way to select tracks to show, e.g., sort by ID
+        track_ids = sorted(list(track_profiles.keys()))
+
+        # Show up to 3 example tracks
+        for i, track_id in enumerate(track_ids[:3]):
+            profile = track_profiles[track_id]
+            frames = profile['frames']
+            raw_intensities = profile['raw_intensities']
+            smoothed_intensities = profile['smoothed_intensities']
+
+            color = px.colors.qualitative.Plotly[i % len(px.colors.qualitative.Plotly)]
+
+            fig.add_trace(go.Scatter(x=frames, y=raw_intensities, mode='lines', name=f'Track {track_id} (Raw)',
+                                     legendgroup=f'track_{track_id}', showlegend=True,
+                                     line=dict(color=color, width=1, dash='dot')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=frames, y=smoothed_intensities, mode='lines', name=f'Track {track_id} (Smoothed)',
+                                     legendgroup=f'track_{track_id}', showlegend=True,
+                                     line=dict(color=color, width=2)), row=2, col=1)
+
+    fig.update_layout(
+        title_text="Intensity Analysis Summary",
+        height=800,
+        showlegend=True,
+        template="plotly_white"
+    )
+    fig.update_xaxes(title_text="Frame", row=2, col=1)
+    fig.update_yaxes(title_text="Intensity", row=2, col=1)
+
+    return fig
+
+def plot_confinement_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for confinement analysis results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from confinement analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot summarizing confinement analysis.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No confinement analysis data available")
+
+    n_total = analysis_results.get('n_total_tracks', 0)
+    n_confined = analysis_results.get('n_confined_tracks', 0)
+    confined_results = analysis_results.get('track_results', pd.DataFrame())
+    tracks_df = analysis_results.get('tracks_df')
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        specs=[[{"type": "domain"}, {"type": "xy"}],
+               [{"type": "xy", "colspan": 2}, None]],
+        subplot_titles=("Confined Fraction", "Confinement Radii", "Spatial Distribution of Confined Tracks")
+    )
+
+    # Pie chart for confined fraction
+    if n_total > 0:
+        labels = ['Confined', 'Unconfined']
+        values = [n_confined, n_total - n_confined]
+        fig.add_trace(go.Pie(labels=labels, values=values, name="Confinement", hole=.3), row=1, col=1)
+
+    # Histogram of confinement radii
+    if not confined_results.empty and 'confinement_radius' in confined_results.columns:
+        radii = confined_results['confinement_radius'].dropna()
+        if not radii.empty:
+            fig.add_trace(go.Histogram(x=radii, name='Radius'), row=1, col=2)
+            fig.update_xaxes(title_text="Confinement Radius (µm)", row=1, col=2)
+            fig.update_yaxes(title_text="Frequency", row=1, col=2)
+
+    # Scatter plot of all tracks, with confined tracks highlighted
+    if tracks_df is not None and not tracks_df.empty:
+        # Plot all tracks in grey
+        for track_id, track_data in tracks_df.groupby('track_id'):
+            fig.add_trace(go.Scatter(x=track_data['x'], y=track_data['y'], mode='lines',
+                                     line=dict(color='lightgrey', width=1),
+                                     showlegend=False), row=2, col=1)
+
+        # Plot confined tracks in color
+        if not confined_results.empty:
+            confined_track_ids = confined_results['track_id'].unique()
+            confined_tracks_df = tracks_df[tracks_df['track_id'].isin(confined_track_ids)]
+
+            for i, (track_id, track_data) in enumerate(confined_tracks_df.groupby('track_id')):
+                color = px.colors.qualitative.Plotly[i % len(px.colors.qualitative.Plotly)]
+                fig.add_trace(go.Scatter(x=track_data['x'], y=track_data['y'], mode='lines',
+                                         line=dict(color=color, width=2),
+                                         name=f'Track {track_id}'), row=2, col=1)
+
+    fig.update_layout(
+        title_text="Confinement Analysis Summary",
+        height=800,
+        showlegend=False,
+        template="plotly_white"
+    )
+    fig.update_xaxes(title_text="X (µm)", row=2, col=1)
+    fig.update_yaxes(title_text="Y (µm)", row=2, col=1)
+
+    return fig
+
+def plot_velocity_correlation_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for velocity correlation analysis results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from velocity correlation analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot of velocity autocorrelation.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No velocity correlation data available")
+
+    mean_autocorr = analysis_results.get('mean_autocorr')
+    lags = analysis_results.get('lags')
+    individual_autocorrs = analysis_results.get('individual_autocorrs', [])
+
+    if not mean_autocorr or not lags:
+        return _empty_fig("Mean autocorrelation data is missing.")
+
+    fig = go.Figure()
+
+    # Plot individual tracks with low opacity
+    for i, ac in enumerate(individual_autocorrs):
+        fig.add_trace(go.Scatter(x=lags[:len(ac)], y=ac, mode='lines',
+                                 line=dict(color='rgba(128,128,128,0.2)'),
+                                 showlegend=False))
+
+    # Plot mean autocorrelation
+    fig.add_trace(go.Scatter(x=lags, y=mean_autocorr, mode='lines+markers',
+                             line=dict(color='red', width=3),
+                             name='Mean Autocorrelation'))
+
+    fig.add_hline(y=0, line_dash="dash", line_color="black")
+
+    fig.update_layout(
+        title_text="Velocity Autocorrelation",
+        xaxis_title="Lag Time (s)",
+        yaxis_title="Autocorrelation",
+        template="plotly_white"
+    )
+
+    return fig
+
+def plot_anomaly_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for anomaly detection results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from anomaly detection analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot of tracks with anomalies highlighted.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No anomaly analysis data available")
+
+    anomaly_df = analysis_results.get('anomaly_df')
+
+    if anomaly_df is None or anomaly_df.empty:
+        return _empty_fig("No anomaly data to plot.")
+
+    fig = px.scatter(anomaly_df, x="x", y="y", color="anomaly_type",
+                     hover_data=['track_id', 'frame'],
+                     title="Anomaly Detection Results")
+
+    fig.update_layout(
+        xaxis_title="X (µm)",
+        yaxis_title="Y (µm)",
+        template="plotly_white"
+    )
+
+    return fig
+
+def plot_clustering_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for clustering analysis results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from clustering analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot summarizing clustering analysis.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No clustering analysis data available")
+
+    cluster_tracks = analysis_results.get('cluster_tracks')
+
+    if cluster_tracks is None or cluster_tracks.empty:
+        return _empty_fig("No cluster data to plot.")
+
+    # For simplicity, we plot the clusters at a single frame (e.g., the first frame with clusters)
+    first_frame_with_clusters = cluster_tracks['frame'].min()
+    frame_data = cluster_tracks[cluster_tracks['frame'] == first_frame_with_clusters]
+
+    fig = px.scatter(frame_data, x="centroid_x", y="centroid_y", color="cluster_track_id",
+                     size="n_points", hover_data=['n_tracks', 'radius'],
+                     title=f"Clusters at Frame {first_frame_with_clusters}")
+
+    fig.update_layout(
+        xaxis_title="X (µm)",
+        yaxis_title="Y (µm)",
+        template="plotly_white"
+    )
+
+    return fig
+
+def plot_changepoint_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for changepoint detection results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from changepoint detection analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot of tracks with changepoints highlighted.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No changepoint analysis data available")
+
+    tracks_df = analysis_results.get('tracks_df')
+    changepoints = analysis_results.get('changepoints') # This is a dict {track_id: [frame1, frame2]}
+
+    if tracks_df is None or changepoints is None:
+        return _empty_fig("Track or changepoint data is missing.")
+
+    fig = go.Figure()
+
+    # Plot all tracks
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        fig.add_trace(go.Scatter(x=track_data['x'], y=track_data['y'], mode='lines',
+                                 line=dict(color='lightgrey', width=1),
+                                 showlegend=False))
+
+    # Highlight changepoints
+    if changepoints:
+        for track_id, cp_frames in changepoints.items():
+            track_data = tracks_df[tracks_df['track_id'] == track_id]
+            if not track_data.empty:
+                cp_data = track_data[track_data['frame'].isin(cp_frames)]
+                if not cp_data.empty:
+                    fig.add_trace(go.Scatter(x=cp_data['x'], y=cp_data['y'], mode='markers',
+                                             marker=dict(color='red', size=8, symbol='x'),
+                                             name=f'Changepoints Track {track_id}'))
+
+    fig.update_layout(
+        title_text="Changepoint Detection",
+        xaxis_title="X (µm)",
+        yaxis_title="Y (µm)",
+        template="plotly_white"
+    )
+
+    return fig
+
+def plot_particle_interaction_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create visualization for particle interaction analysis results.
+
+    Parameters
+    ----------
+    analysis_results : dict
+        Results from crowding analysis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot summarizing particle interactions.
+    """
+    if not analysis_results.get('success', False):
+        return _empty_fig("No particle interaction data available")
+
+    crowding_data = analysis_results.get('crowding_data')
+    track_results = analysis_results.get('track_results')
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Particle Density Map", "Mobility vs. Local Density")
+    )
+
+    # Density map
+    if crowding_data is not None and not crowding_data.empty:
+        # Re-using logic from plot_track_density_map
+        x = crowding_data['x'].values
+        y = crowding_data['y'].values
+
+        h, x_edges, y_edges = np.histogram2d(x, y, bins=50)
+
+        from scipy.ndimage import gaussian_filter
+        h_smooth = gaussian_filter(h, sigma=2.0)
+
+        fig.add_trace(go.Heatmap(
+            z=h_smooth.T,
+            x=x_edges,
+            y=y_edges,
+            colorscale='Viridis',
+            colorbar=dict(title='Density')
+        ), row=1, col=1)
+
+    # Mobility vs. Density scatter plot
+    if track_results is not None and not track_results.empty:
+        if 'mean_density' in track_results.columns and 'mean_displacement' in track_results.columns:
+            fig.add_trace(go.Scatter(
+                x=track_results['mean_density'],
+                y=track_results['mean_displacement'],
+                mode='markers',
+                marker=dict(
+                    color=track_results['density_displacement_correlation'],
+                    colorscale='RdBu',
+                    colorbar=dict(title='Correlation'),
+                    showscale=True
+                ),
+                text=track_results['track_id']
+            ), row=1, col=2)
+
+            fig.update_xaxes(title_text="Mean Local Density", row=1, col=2)
+            fig.update_yaxes(title_text="Mean Displacement (µm)", row=1, col=2)
+
+    fig.update_layout(
+        title_text="Multi-Particle Interaction Analysis",
+        height=500,
+        showlegend=False,
+        template="plotly_white"
+    )
+
+    return fig
+
+
+# ------------------------------------------------------------------ #
 #   Export helpers
 # ------------------------------------------------------------------ #
 
