@@ -11,7 +11,7 @@ import os
 import json
 from typing import List, Dict, Tuple, Any, Optional, Union
 from PIL import Image
-from utils import format_track_data
+from utils import format_track_data, validate_tracks_dataframe
 from special_file_handlers import load_trackmate_file, load_cropped_cell3_spots, load_ms2_spots_file, load_imaris_file
 from mvd2_handler import load_mvd2_file
 from volocity_handler import load_volocity_file
@@ -268,7 +268,11 @@ def load_tracks_file(file) -> pd.DataFrame:
                 tracks_df['frame'] = tracks_df.groupby('track_id').cumcount()
             
             st.success(f"Successfully loaded {len(tracks_df)} data points from {tracks_df['track_id'].nunique()} tracks")
-            return format_track_data(tracks_df)
+            standardized_df = format_track_data(tracks_df)
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
+            return standardized_df
             
         except Exception as e:
             st.error(f"Error loading Excel file: {str(e)}")
@@ -427,6 +431,11 @@ def load_tracks_file(file) -> pd.DataFrame:
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
             
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
+
             return standardized_df
             
         except Exception as e:
@@ -439,6 +448,11 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
             
             return standardized_df
             
@@ -488,6 +502,11 @@ def load_tracks_file(file) -> pd.DataFrame:
                     # Standardize the track data format
                     standardized_df = format_track_data(tracks_df)
                     
+                    # Validate the standardized dataframe
+                    is_valid, message = validate_tracks_dataframe(standardized_df)
+                    if not is_valid:
+                        raise ValueError(f"Track data validation failed: {message}")
+
                     return standardized_df
                 else:
                     raise ValueError("No suitable datasets found in the HDF5 file")
@@ -505,6 +524,10 @@ def load_tracks_file(file) -> pd.DataFrame:
             tracks_df = load_imaris_file(file)
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
             return standardized_df
         except Exception as e:
             raise ValueError(f"Error loading Imaris file: {str(e)}")
@@ -515,6 +538,10 @@ def load_tracks_file(file) -> pd.DataFrame:
             tracks_df = load_volocity_file(file)
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
             return standardized_df
         except Exception as e:
             raise ValueError(f"Error loading Volocity file: {str(e)}")
@@ -525,6 +552,10 @@ def load_tracks_file(file) -> pd.DataFrame:
             tracks_df = load_mvd2_file(file)
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
             return standardized_df
         except Exception as e:
             raise ValueError(f"Error loading MVD2 file: {str(e)}")
@@ -643,6 +674,11 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+
+            # Validate the standardized dataframe
+            is_valid, message = validate_tracks_dataframe(standardized_df)
+            if not is_valid:
+                raise ValueError(f"Track data validation failed: {message}")
             
             return standardized_df
             
