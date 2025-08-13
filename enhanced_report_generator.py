@@ -247,7 +247,7 @@ class EnhancedSPTReportGenerator:
                     tracks_df = self.state_manager.get_tracks()
             else:
                 # Fallback to direct session state access
-                tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks')
+                tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks') or st.session_state.get('tracks_data')
                 has_data = tracks_df is not None and not tracks_df.empty if isinstance(tracks_df, pd.DataFrame) else False
             
             if not has_data:
