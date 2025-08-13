@@ -97,6 +97,36 @@ def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min
 
     return pd.DataFrame(msd_results)
 
+def _calculate_goodness_of_fit(y_true, y_pred, n_params):
+    """Calculate R-squared, AIC, and BIC."""
+    # R-squared
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+    # AIC and BIC
+    n_samples = len(y_true)
+    rss = np.sum((y_true - y_pred) ** 2)
+    if rss == 0:
+        log_likelihood = 0
+    else:
+        log_likelihood = -n_samples / 2 * np.log(2 * np.pi) - n_samples / 2 * np.log(rss / n_samples) - n_samples / 2
+
+    aic = 2 * n_params - 2 * log_likelihood
+    bic = n_params * np.log(n_samples) - 2 * log_likelihood
+
+    return {'r_squared': r_squared, 'aic': aic, 'bic': bic}
+
+def _calculate_confidence_interval(value, std_err, n_samples, alpha=0.95):
+    """Calculate the confidence interval for a given value."""
+    if n_samples < 2 or std_err is np.nan:
+        return np.nan, np.nan
+
+    from scipy.stats import t
+    t_val = t.ppf((1 + alpha) / 2, n_samples - 1)
+    margin_of_error = t_val * std_err
+    return value - margin_of_error, value + margin_of_error
+
 def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
                      frame_interval: float = 1.0, min_track_length: int = 5, 
                      fit_method: str = 'linear', analyze_anomalous: bool = True, 
@@ -176,69 +206,54 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             # Linear fit
             if short_lag_cutoff >= 2:
                 slope, intercept, r_value, p_value, std_err = linregress(
-                    lag_times[:short_lag_cutoff], 
+                    lag_times[:short_lag_cutoff],
                     msd_values[:short_lag_cutoff]
                 )
                 D_short = slope / 4  # µm²/s
                 D_err = std_err / 4
+                y_pred = slope * lag_times[:short_lag_cutoff] + intercept
+                gof = _calculate_goodness_of_fit(msd_values[:short_lag_cutoff], y_pred, 2)
+                track_result.update(gof)
             else:
-                D_short = np.nan
-                D_err = np.nan
+                D_short, D_err = np.nan, np.nan
 
-        elif fit_method == 'weighted':
+        elif fit_method == 'weighted' or fit_method == 'nonlinear':
             if short_lag_cutoff >= 2:
                 def linear_func_with_offset(t, D, offset):
                     return 4 * D * t + offset
                 try:
-                    # Weights inversely proportional to lag time (variance ~ t)
-                    # So, sigma ~ sqrt(t) for curve_fit
-                    sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
-                    # Ensure sigma_vals are not zero
-                    sigma_vals[sigma_vals == 0] = 1e-9
+                    if fit_method == 'weighted':
+                        sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
+                        sigma_vals[sigma_vals == 0] = 1e-9
+                    else:
+                        sigma_vals = None
 
                     popt, pcov = optimize.curve_fit(
-                        linear_func_with_offset, 
-                        lag_times[:short_lag_cutoff], 
+                        linear_func_with_offset,
+                        lag_times[:short_lag_cutoff],
                         msd_values[:short_lag_cutoff],
                         sigma=sigma_vals,
-                        absolute_sigma=True
+                        absolute_sigma=True if sigma_vals is not None else False
                     )
-                    D_short = popt[0]  # µm²/s
+                    D_short = popt[0]
                     D_err = np.sqrt(pcov[0, 0])
+                    y_pred = linear_func_with_offset(lag_times[:short_lag_cutoff], *popt)
+                    gof = _calculate_goodness_of_fit(msd_values[:short_lag_cutoff], y_pred, 2)
+                    track_result.update(gof)
                 except (RuntimeError, ValueError):
-                    D_short = np.nan
-                    D_err = np.nan
+                    D_short, D_err = np.nan, np.nan
             else:
-                D_short = np.nan
-                D_err = np.nan
-
-        elif fit_method == 'nonlinear':
-            # Nonlinear fit for MSD = 4*D*t + offset
-            if short_lag_cutoff >= 3:
-                def msd_func(t, D, offset):
-                    return 4 * D * t + offset
-
-                try:
-                    popt, pcov = optimize.curve_fit(
-                        msd_func, 
-                        lag_times[:short_lag_cutoff], 
-                        msd_values[:short_lag_cutoff]
-                    )
-                    D_short = popt[0]  # µm²/s
-                    D_err = np.sqrt(pcov[0, 0])
-                except:
-                    D_short = np.nan
-                    D_err = np.nan
-            else:
-                D_short = np.nan
-                D_err = np.nan
+                D_short, D_err = np.nan, np.nan
         else:
-            D_short = np.nan
-            D_err = np.nan
+            D_short, D_err = np.nan, np.nan
 
         # Store diffusion coefficient results
         track_result['diffusion_coefficient'] = D_short
         track_result['diffusion_coefficient_error'] = D_err
+        if not np.isnan(D_short) and not np.isnan(D_err):
+            ci_lower, ci_upper = _calculate_confidence_interval(D_short, D_err, short_lag_cutoff)
+            track_result['diffusion_coefficient_ci_lower'] = ci_lower
+            track_result['diffusion_coefficient_ci_upper'] = ci_upper
 
         # Analyze anomalous diffusion
         if analyze_anomalous and len(lag_times) >= 5:
@@ -254,7 +269,6 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
 
                     # Alpha is the slope in log-log space
                     alpha = slope
-                    alpha_err = std_err_slope
 
                     # Categorize diffusion type
                     diffusion_type = 'normal'
@@ -264,8 +278,13 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                         diffusion_type = 'superdiffusive'
 
                     track_result['alpha'] = alpha
-                    track_result['alpha_error'] = alpha_err
+                    track_result['alpha_error'] = std_err_slope
                     track_result['diffusion_type'] = diffusion_type
+
+                    ci_lower, ci_upper = _calculate_confidence_interval(alpha, std_err_slope, len(log_lag_valid))
+                    track_result['alpha_ci_lower'] = ci_lower
+                    track_result['alpha_ci_upper'] = ci_upper
+
                 except ValueError:
                     track_result['alpha'] = np.nan
                     track_result['alpha_error'] = np.nan
@@ -1632,14 +1651,40 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
         # Otherwise, continue with adjusted_n_populations
         n_populations = adjusted_n_populations
 
-    # Fit Gaussian mixture model
-    gmm = GaussianMixture(n_components=n_populations, random_state=42)
-    gmm.fit(log_D_valid.reshape(-1, 1))
+    # Fit Gaussian mixture model and select best number of components
+    best_gmm = None
+    lowest_bic = np.inf
 
-    # Get population parameters
-    means = gmm.means_.flatten()
-    covariances = gmm.covariances_.flatten()
-    weights = gmm.weights_
+    # Test a range of components to find the best fit
+    n_components_range = range(1, n_populations + 2)
+    bics = []
+    aics = []
+
+    for n_components in n_components_range:
+        if len(log_D_valid) < n_components:
+            break
+        gmm = GaussianMixture(n_components=n_components, random_state=42)
+        gmm.fit(log_D_valid.reshape(-1, 1))
+        bic = gmm.bic(log_D_valid.reshape(-1, 1))
+        aic = gmm.aic(log_D_valid.reshape(-1, 1))
+        bics.append(bic)
+        aics.append(aic)
+        if bic < lowest_bic:
+            lowest_bic = bic
+            best_gmm = gmm
+
+    if best_gmm is None:
+        # This can happen if log_D_valid is empty
+        return {
+            'success': False,
+            'error': 'Could not fit GMM to diffusion coefficients'
+        }
+
+    # Get population parameters from the best model
+    n_populations = best_gmm.n_components
+    means = best_gmm.means_.flatten()
+    covariances = best_gmm.covariances_.flatten()
+    weights = best_gmm.weights_
 
     # Sort populations by mean diffusion coefficient (ascending)
     sorted_indices = np.argsort(means)
@@ -1670,7 +1715,7 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
 
     if valid_indices.sum() > 0:
         valid_track_indices = np.where(valid_indices)[0]
-        predictions = gmm.predict(log_D_valid.reshape(-1, 1))
+        predictions = best_gmm.predict(log_D_valid.reshape(-1, 1))
 
         # Reindex predictions according to sorted populations
         prediction_map = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted_indices)}
@@ -1702,7 +1747,10 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
         'track_assignments': track_assignments_df,
         'raw_diffusion_data': diffusion_df,
         'n_tracks_analyzed': len(diffusion_df),
-        'n_valid_tracks': valid_indices.sum()
+        'n_valid_tracks': valid_indices.sum(),
+        'gmm_bic': lowest_bic,
+        'gmm_aic': aics[np.argmin(bics)],
+        'gmm_n_components': n_populations
     }
 
     # Calculate additional statistics for each population
