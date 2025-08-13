@@ -24,6 +24,43 @@ def initialize_session_state():
     Initialize all required session state variables for the SPT2025B application.
     This function sets up default values for data storage, analysis results, and UI state.
     """
+def validate_tracks_dataframe(tracks_df: pd.DataFrame) -> Tuple[bool, str]:
+    """
+    Validate that a tracks DataFrame has the required structure and data quality.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing particle tracks
+
+    Returns
+    -------
+    Tuple[bool, str]
+        (is_valid, message) - validation result and descriptive message
+    """
+    if tracks_df is None:
+        return False, "DataFrame is None"
+
+    if tracks_df.empty:
+        return False, "DataFrame is empty"
+
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    missing_columns = [col for col in required_columns if col not in tracks_df.columns]
+
+    if missing_columns:
+        return False, f"Missing required columns: {missing_columns}"
+
+    if tracks_df[['x', 'y']].isnull().any().any():
+        return False, "Contains null values in position columns"
+
+    if len(tracks_df['track_id'].unique()) == 0:
+        return False, "No tracks found"
+
+    min_track_length = tracks_df.groupby('track_id').size().min()
+    if min_track_length < 2:
+        return False, f"Tracks too short (minimum length: {min_track_length})"
+
+    return True, f"Valid tracks DataFrame with {len(tracks_df['track_id'].unique())} tracks"
     if 'tracks_data' not in st.session_state:
         st.session_state.tracks_data = None
     if 'track_statistics' not in st.session_state:
@@ -351,217 +388,58 @@ def merge_close_detections(tracks_df: pd.DataFrame, distance_threshold: float = 
 def format_track_data(tracks_df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardize track data format to ensure compatibility with analysis functions.
-    
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        Raw track data DataFrame
-    
-    Returns
-    -------
-    pd.DataFrame
-        Standardized DataFrame with required columns: track_id, frame, x, y
+    This function combines the logic of the two previous implementations.
     """
     if tracks_df is None or tracks_df.empty:
-        return tracks_df
-    
+        return pd.DataFrame()
+
     formatted_df = tracks_df.copy()
-    
-    if 'TRACK_ID' in formatted_df.columns:
-        formatted_df = formatted_df[~formatted_df['TRACK_ID'].astype(str).str.contains('Track|ID|track', case=False, na=False)]
-    
+
+    # Define a comprehensive column mapping
     column_mapping = {
-        'TRACK_ID': 'track_id',
-        'Track_ID': 'track_id',
-        'TrackID': 'track_id',
-        'track_ID': 'track_id',
-        'Track': 'track_id',
-        'FRAME': 'frame',
-        'Frame': 'frame',
-        'Time': 'frame',
-        'T': 'frame',
-        'POSITION_X': 'x',
-        'POSITION_Y': 'y',
-        'X': 'x',
-        'Y': 'y',
-        'Position_X': 'x',
-        'Position_Y': 'y',
-        'Pos_X': 'x',
-        'Pos_Y': 'y'
+        'TRACK_ID': 'track_id', 'Track_ID': 'track_id', 'TrackID': 'track_id',
+        'track_ID': 'track_id', 'Track': 'track_id', 'particle': 'track_id',
+        'trajectory': 'track_id', 'id': 'track_id',
+        'FRAME': 'frame', 'Frame': 'frame', 'Time': 'frame', 'time': 'frame',
+        't': 'frame', 'timepoint': 'frame',
+        'POSITION_X': 'x', 'Position_X': 'x', 'Pos_X': 'x', 'X': 'x',
+        'POSITION_Y': 'y', 'Position_Y': 'y', 'Pos_Y': 'y', 'Y': 'y',
+        'POSITION_Z': 'z', 'Position_Z': 'z', 'Pos_Z': 'z', 'Z': 'z',
+        'Quality': 'quality', 'QUALITY': 'quality',
+        'SNR': 'snr', 'snr': 'snr',
+        'Intensity': 'intensity', 'intensity': 'intensity',
     }
-    
+
+    # Rename columns based on the mapping
+    # Use a loop to handle cases where multiple old names map to the same new name
     for old_name, new_name in column_mapping.items():
         if old_name in formatted_df.columns and new_name not in formatted_df.columns:
-            formatted_df = formatted_df.rename(columns={old_name: new_name})
-    
+            formatted_df.rename(columns={old_name: new_name}, inplace=True)
+
+    # Define required columns
     required_columns = ['track_id', 'frame', 'x', 'y']
     missing_columns = [col for col in required_columns if col not in formatted_df.columns]
-    
+
     if missing_columns:
         raise ValueError(f"Cannot format track data: missing required columns {missing_columns}")
-    
-    formatted_df['track_id'] = pd.to_numeric(formatted_df['track_id'], errors='coerce')
-    formatted_df['frame'] = pd.to_numeric(formatted_df['frame'], errors='coerce')
-    formatted_df['x'] = pd.to_numeric(formatted_df['x'], errors='coerce')
-    formatted_df['y'] = pd.to_numeric(formatted_df['y'], errors='coerce')
-    
-    formatted_df = formatted_df.dropna(subset=['track_id', 'frame', 'x', 'y'])
-    
-    formatted_df['track_id'] = formatted_df['track_id'].astype(int)
-    formatted_df['frame'] = formatted_df['frame'].astype(int)
-    
+
+    # Convert columns to numeric types, coercing errors
+    for col in required_columns + ['z']:
+        if col in formatted_df.columns:
+            formatted_df[col] = pd.to_numeric(formatted_df[col], errors='coerce')
+
+    # Drop rows where essential columns are NaN
+    formatted_df.dropna(subset=required_columns, inplace=True)
+
+    # Convert integer columns to int type
+    for col in ['track_id', 'frame']:
+        if col in formatted_df.columns:
+            formatted_df[col] = formatted_df[col].astype(int)
+
+    # Sort the DataFrame and reset the index
     formatted_df = formatted_df.sort_values(['track_id', 'frame']).reset_index(drop=True)
-    
+
     return formatted_df
-    """
-    Format track data into a standardized format.
-    
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        Input track data
-        
-    Returns
-    -------
-    pd.DataFrame
-        Standardized track data
-    """
-    # Check if basic required columns exist and try to identify their equivalents
-    required_columns = ['track_id', 'frame', 'x', 'y']
-    column_mapping = {}
-    
-    # List of potential column names for each required attribute
-    potential_names = {
-        'track_id': ['track_id', 'track', 'trackID', 'particle', 'id', 'trajectory'],
-        'frame': ['frame', 't', 'time', 'timepoint'],
-        'x': ['x', 'X', 'pos_x', 'position_x'],
-        'y': ['y', 'Y', 'pos_y', 'position_y']
-    }
-    
-    # Check for each required column
-    for req_col, potential_cols in potential_names.items():
-        # Direct match
-        if req_col in tracks_df.columns:
-            column_mapping[req_col] = req_col
-        else:
-            # Try alternative names
-            for alt_col in potential_cols:
-                if alt_col in tracks_df.columns:
-                    column_mapping[req_col] = alt_col
-                    break
-    
-    # If we couldn't find all required columns, try to guess based on dtypes and values
-    missing_cols = [col for col in required_columns if col not in column_mapping]
-    
-    if missing_cols:
-        numeric_cols = tracks_df.select_dtypes(include=['number']).columns.tolist()
-        
-        for missing in missing_cols:
-            if missing == 'track_id':
-                # Look for categorical columns or columns with few unique values
-                candidates = []
-                for col in tracks_df.columns:
-                    if col not in column_mapping.values():
-                        if tracks_df[col].dtype.name in ['category', 'object', 'int64']:
-                            unique_ratio = tracks_df[col].nunique() / len(tracks_df)
-                            if unique_ratio < 0.5:  # Track IDs typically have few unique values relative to row count
-                                candidates.append((col, unique_ratio))
-                
-                if candidates:
-                    # Sort by uniqueness ratio (lower is better for track IDs)
-                    candidates.sort(key=lambda x: x[1])
-                    column_mapping['track_id'] = candidates[0][0]
-            
-            elif missing == 'frame':
-                # Look for monotonically increasing values or time-like columns
-                for col in numeric_cols:
-                    if col not in column_mapping.values():
-                        # Check if values are monotonically increasing within groups
-                        if 'track_id' in column_mapping:
-                            is_monotonic = True
-                            for track in tracks_df[column_mapping['track_id']].unique():
-                                track_col_values = tracks_df[tracks_df[column_mapping['track_id']] == track][col].values
-                                # Check if values are monotonically increasing
-                                if len(track_col_values) > 1:
-                                    if not all(track_col_values[i] <= track_col_values[i+1] for i in range(len(track_col_values)-1)):
-                                        is_monotonic = False
-                                        break
-                            if is_monotonic:
-                                column_mapping['frame'] = col
-                                break
-                        # Fallback: choose column with regularly spaced values
-                        elif col not in column_mapping.values():
-                            diffs = tracks_df[col].diff().dropna().unique()
-                            if len(diffs) < 10:  # Few unique differences suggests regular spacing
-                                column_mapping['frame'] = col
-                                break
-            
-            elif missing in ['x', 'y']:
-                # For coordinates, look for remaining numeric columns
-                # Typically, the x coordinate varies more than y in most datasets
-                remaining_num_cols = [col for col in numeric_cols if col not in column_mapping.values()]
-                
-                if len(remaining_num_cols) >= 2:
-                    # Calculate variance for each column
-                    variances = [(col, tracks_df[col].var()) for col in remaining_num_cols]
-                    variances.sort(key=lambda x: x[1], reverse=True)
-                    
-                    if missing == 'x' and 'y' not in column_mapping:
-                        # If both x and y are missing, assign them based on variance
-                        column_mapping['x'] = variances[0][0]
-                        column_mapping['y'] = variances[1][0]
-                        break
-                    elif missing == 'x':
-                        # If only x is missing, take the remaining column with highest variance
-                        column_mapping['x'] = variances[0][0]
-                    elif missing == 'y':
-                        # If only y is missing, take the remaining column
-                        column_mapping['y'] = remaining_num_cols[0]
-    
-    # Apply the mapping and create a standardized DataFrame
-    if len(column_mapping) == len(required_columns):
-        # Create a new dataframe with standardized column names
-        standardized_df = pd.DataFrame()
-        
-        for std_col, orig_col in column_mapping.items():
-            if orig_col in tracks_df.columns:
-                standardized_df[std_col] = tracks_df[orig_col].copy()
-            else:
-                # Handle case where mapping refers to non-existent column
-                raise ValueError(f"Column '{orig_col}' not found in the data")
-        
-        # Include any additional columns that might be useful
-        additional_cols = ['z', 'intensity', 'quality', 'SNR', 'sigma']
-        for col in additional_cols:
-            if col in tracks_df.columns:
-                standardized_df[col] = tracks_df[col].copy()
-        
-        # Ensure track_id is integer, handle possible header rows
-        try:
-            standardized_df['track_id'] = pd.to_numeric(standardized_df['track_id'], errors='coerce')
-            # Drop any rows where track_id couldn't be converted (like headers)
-            standardized_df = standardized_df.dropna(subset=['track_id'])
-            standardized_df['track_id'] = standardized_df['track_id'].astype(int)
-        except (ValueError, TypeError) as e:
-            # If conversion fails completely, it may indicate a deeper issue
-            raise ValueError(f"Could not convert track_id column to numeric values: {str(e)}")
-        
-        # Ensure frame is integer, handle possible header rows
-        try:
-            standardized_df['frame'] = pd.to_numeric(standardized_df['frame'], errors='coerce')
-            # Drop any rows where frame couldn't be converted
-            standardized_df = standardized_df.dropna(subset=['frame'])
-            standardized_df['frame'] = standardized_df['frame'].astype(int)
-        except (ValueError, TypeError) as e:
-            # If conversion fails completely, it may indicate a deeper issue
-            raise ValueError(f"Could not convert frame column to numeric values: {str(e)}")
-        
-        return standardized_df
-    else:
-        # If we couldn't map all required columns, raise an error
-        missing = [col for col in required_columns if col not in column_mapping]
-        error_msg = f"Could not identify required columns: {', '.join(missing)}"
-        raise ValueError(error_msg)
 
 def calculate_track_statistics(tracks_df: pd.DataFrame) -> pd.DataFrame:
     """

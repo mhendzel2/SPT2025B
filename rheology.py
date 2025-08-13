@@ -12,6 +12,7 @@ from typing import Dict, Tuple, Optional, List
 from scipy.optimize import curve_fit
 from scipy import integrate
 from scipy.special import gamma
+from analysis import calculate_msd
 
 # Added imports
 import numpy as np
@@ -41,70 +42,6 @@ class MicrorheologyAnalyzer:
         self.particle_radius_m = particle_radius_m
         self.temperature_K = temperature_K
         self.kB = 1.380649e-23  # Boltzmann constant in J/K
-        
-    def calculate_msd_from_tracks(self, tracks_df: pd.DataFrame, 
-                                  pixel_size_um: float, frame_interval_s: float,
-                                  max_lag_frames: int = 50) -> pd.DataFrame:
-        """
-        Calculate ensemble mean squared displacement from track data.
-        
-        Parameters
-        ----------
-        tracks_df : pd.DataFrame
-            Track data with columns: track_id, frame, x, y
-        pixel_size_um : float
-            Pixel size in micrometers
-        frame_interval_s : float
-            Time interval between frames in seconds
-        max_lag_frames : int
-            Maximum lag time in frames to calculate
-            
-        Returns
-        -------
-        pd.DataFrame
-            MSD data with columns: lag_time_s, msd_m2, std_msd_m2, n_tracks
-        """
-        msd_results = []
-        if tracks_df is None or tracks_df.empty:
-            return pd.DataFrame(columns=['lag_time_s', 'msd_m2', 'std_msd_m2', 'n_tracks'])
-
-        # ensure required cols
-        for c in ('track_id', 'frame', 'x', 'y'):
-            if c not in tracks_df.columns:
-                return pd.DataFrame(columns=['lag_time_s', 'msd_m2', 'std_msd_m2', 'n_tracks'])
-
-        px_to_m = pixel_size_um * 1e-6
-        tracks_grouped = tracks_df.groupby('track_id')
-
-        max_frame = int(min(max_lag_frames, tracks_df['frame'].nunique()))
-        for lag in range(1, max_frame + 1):
-            lag_time_s = lag * frame_interval_s
-            disp2 = []
-            n_tracks_used = 0
-
-            for _, track in tracks_grouped:
-                if len(track) <= lag:
-                    continue
-                track = track.sort_values('frame')
-                # compute squared displacements at this lag
-                x = track['x'].to_numpy() * px_to_m
-                y = track['y'].to_numpy() * px_to_m
-                dx = x[lag:] - x[:-lag]
-                dy = y[lag:] - y[:-lag]
-                if dx.size > 0:
-                    n_tracks_used += 1
-                    disp2.extend((dx*dx + dy*dy).tolist())
-
-            if disp2:
-                disp2 = np.asarray(disp2, dtype=float)
-                msd_results.append({
-                    'lag_time_s': lag_time_s,
-                    'msd_m2': float(np.mean(disp2)),
-                    'std_msd_m2': float(np.std(disp2)),
-                    'n_tracks': int(n_tracks_used)
-                })
-
-        return pd.DataFrame(msd_results)
 
     def calculate_complex_modulus_gser(self, msd_df: pd.DataFrame,
                                        omega_rad_s: float) -> Tuple[float, float]:
@@ -377,9 +314,11 @@ class MicrorheologyAnalyzer:
 
             for i, (tracks_df, dt) in enumerate(zip(track_datasets, frame_intervals_s)):
                 dataset_label = f"Dataset_{i+1}_{dt:.3f}s"
-                msd_data = self.calculate_msd_from_tracks(tracks_df, pixel_size_um, dt)
+                msd_data = calculate_msd(tracks_df, pixel_size=pixel_size_um, frame_interval=dt)
                 if msd_data is None or msd_data.empty:
                     continue
+                msd_data = msd_data.rename(columns={'lag_time': 'lag_time_s', 'msd': 'msd_m2'})
+                msd_data['msd_m2'] = msd_data['msd_m2'] * 1e-12
 
                 fit = self.fit_power_law_msd(msd_data)
 
@@ -469,9 +408,11 @@ class MicrorheologyAnalyzer:
                               frame_interval_s: float, max_lag: int = 20) -> Dict:
         """High level single dataset microrheology analysis."""
 
-        msd_df = self.calculate_msd_from_tracks(
-            tracks_df, pixel_size_um, frame_interval_s, max_lag_frames=max_lag
+        msd_df = calculate_msd(
+            tracks_df, pixel_size=pixel_size_um, frame_interval=frame_interval_s, max_lag=max_lag
         )
+        msd_df = msd_df.rename(columns={'lag_time': 'lag_time_s', 'msd': 'msd_m2'})
+        msd_df['msd_m2'] = msd_df['msd_m2'] * 1e-12
 
         if msd_df.empty:
             return {'success': False, 'error': 'Insufficient data for MSD calculation'}
