@@ -322,25 +322,29 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             'n_tracks': len(results['track_results'])
         }
 
-        if analyze_anomalous:
+        if analyze_anomalous and 'alpha' in results['track_results'].columns:
             results['ensemble_results']['mean_alpha'] = results['track_results']['alpha'].mean()
             results['ensemble_results']['median_alpha'] = results['track_results']['alpha'].median()
             results['ensemble_results']['std_alpha'] = results['track_results']['alpha'].std()
 
             # Count diffusion types
-            type_counts = results['track_results']['diffusion_type'].value_counts()
-            for diff_type in ['normal', 'subdiffusive', 'superdiffusive']:
-                if diff_type in type_counts:
-                    results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
-                    results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
-                else:
-                    results['ensemble_results'][f'{diff_type}_count'] = 0
-                    results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
+            if 'diffusion_type' in results['track_results'].columns:
+                type_counts = results['track_results']['diffusion_type'].value_counts()
+                for diff_type in ['normal', 'subdiffusive', 'superdiffusive', 'unknown']:
+                    if diff_type in type_counts:
+                        results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
+                        results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
+                    else:
+                        results['ensemble_results'][f'{diff_type}_count'] = 0
+                        results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
 
-        if check_confinement:
+        if check_confinement and 'confined' in results['track_results'].columns:
             confined_tracks = results['track_results'][results['track_results']['confined'] == True]
             results['ensemble_results']['confined_count'] = len(confined_tracks)
-            results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
+            if len(results['track_results']) > 0:
+                results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
+            else:
+                results['ensemble_results']['confined_fraction'] = 0
 
             if len(confined_tracks) > 0:
                 results['ensemble_results']['mean_confinement_radius'] = confined_tracks['confinement_radius'].mean()
