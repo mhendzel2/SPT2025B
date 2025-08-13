@@ -7,14 +7,14 @@ Enhanced with density map segmentation for nuclear density classification.
 """
 
 import numpy as np
-import pandas as pd  # Missing import
+import pandas as pd
 from skimage import measure, filters, morphology, draw
 from skimage.filters import threshold_otsu, threshold_triangle, gaussian
 from skimage.morphology import remove_small_objects, binary_closing, disk, opening, binary_erosion, binary_dilation, label
 from skimage.segmentation import find_boundaries
 from skimage.draw import polygon
 from concurrent.futures import ThreadPoolExecutor
-import multiprocessing  # Missing import
+import multiprocessing
 from functools import partial
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 import warnings
@@ -22,7 +22,7 @@ from scipy.ndimage import binary_fill_holes
 from skimage.measure import label, regionprops
 from skimage.morphology import binary_erosion, binary_dilation
 from typing import List, Dict, Tuple, Any, Optional
-import streamlit as st  # Missing import
+import streamlit as st
 
 def segment_image_channel_otsu(image_channel: np.ndarray, min_object_size: int = 50, 
                               pixel_size: float = 1.0) -> List[Dict[str, Any]]:
@@ -82,6 +82,7 @@ def segment_image_channel_otsu(image_channel: np.ndarray, min_object_size: int =
                 'id': f'otsu_{i+1}',
                 'method': 'otsu',
                 'centroid_um': centroid_um,
+                'area_pixels': props.area,
                 'area_um2': area_um2,
                 'bbox_um': bbox_um,
                 'contour_um': contour_um.tolist(),

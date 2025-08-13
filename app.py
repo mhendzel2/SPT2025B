@@ -93,9 +93,10 @@ from multi_channel_analysis import (
 from analysis import (
     calculate_msd, analyze_diffusion, analyze_motion, analyze_clustering,
     analyze_dwell_time, analyze_gel_structure, analyze_diffusion_population,
-    analyze_crowding, analyze_active_transport, analyze_boundary_crossing, 
+    analyze_crowding, analyze_active_transport, analyze_boundary_crossing,
     analyze_polymer_physics
 )
+from ornstein_uhlenbeck_analyzer import analyze_ornstein_uhlenbeck
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,
     correlate_intensity_movement, create_intensity_movement_plots,
@@ -6955,7 +6956,8 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Biophysical Models", 
             "Changepoint Detection", 
             "Correlative Analysis",
-            "Microrheology"
+            "Microrheology",
+            "Ornstein-Uhlenbeck"
         ])
         
         # Biophysical Models tab
@@ -7759,6 +7761,33 @@ elif st.session_state.active_page == "Advanced Analysis":
                         if 'frequency_sweep' in results:
                             st.subheader("Frequency Sweep Data")
                             st.dataframe(results['frequency_sweep'])
+
+            with adv_tabs[4]:
+                st.header("Ornstein-Uhlenbeck Analysis")
+                st.write("Analyze tracks assuming an Ornstein-Uhlenbeck process, which models a particle in a harmonic potential.")
+
+                if st.button("Run Ornstein-Uhlenbeck Analysis"):
+                    with st.spinner("Running Ornstein-Uhlenbeck analysis..."):
+                        units = get_current_units()
+                        ou_results = analyze_ornstein_uhlenbeck(
+                            st.session_state.tracks_data,
+                            pixel_size=units['pixel_size'],
+                            frame_interval=units['frame_interval']
+                        )
+                        st.session_state.analysis_results["ornstein_uhlenbeck"] = ou_results
+                        st.success("Ornstein-Uhlenbeck analysis completed!")
+
+                if "ornstein_uhlenbeck" in st.session_state.analysis_results:
+                    results = st.session_state.analysis_results["ornstein_uhlenbeck"]
+                    if results['success']:
+                        st.subheader("OU Parameters")
+                        st.dataframe(results['ou_parameters'])
+
+                        st.subheader("Velocity Autocorrelation Function (VACF)")
+                        fig = px.line(results['vacf_data'], x='lag', y='vacf', color='track_id', title="VACF per Track")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.error(f"Analysis failed: {results.get('error', 'Unknown error')}")
 
 # AI Anomaly Detection page
 elif st.session_state.active_page == "AI Anomaly Detection":
