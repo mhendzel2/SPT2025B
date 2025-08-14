@@ -97,7 +97,7 @@ def boundaries_from_segments(segments: pd.DataFrame) -> List[int]:
     if segments is None or segments.empty:
         return []
     ends = sorted(int(e) for e in segments['end_frame'])
-    return ends
+    return ends[:-1] if len(ends) > 0 else []
 
 def boundaries_from_truth(truth: pd.DataFrame) -> List[int]:
     if truth is None or truth.empty:
