@@ -4244,7 +4244,7 @@ Dilation expands detected particles to restore size after erosion."""
             with col1:
                 linking_method = st.selectbox(
                     "Linking Method",
-                    ["NearestNeighbor", "Hungarian", "IDL"],
+                    ["NearestNeighbor", "Hungarian", "IDL", "btrack"],
                     help="Method for linking particles between frames"
                 )
                 
@@ -4302,23 +4302,42 @@ Dilation expands detected particles to restore size after erosion."""
                                     detection_dict[frame_num] = pd.DataFrame(columns=['x', 'y', 'intensity', 'SNR', 'sigma'])
                             
                             # Link particles using the tracking module
-                            linked_tracks_df = link_particles(
-                                detection_dict,
-                                method=linking_method,
-                                max_distance=max_distance,
-                                max_frame_gap=max_frame_gap
-                            )
-                            
+                            if linking_method == "btrack":
+                                from advanced_tracking import AdvancedTracking
+                                advanced_tracker = AdvancedTracking()
+                                # btrack expects a single dataframe with a 't' column for the frame
+                                all_detections_list = []
+                                for frame, detections in st.session_state.all_detections.items():
+                                    if detections:
+                                        df = pd.DataFrame(detections, columns=['x', 'y', 'intensity', 'SNR'])
+                                        df['t'] = frame
+                                        df['z'] = 0
+                                        df['label'] = 0
+                                        all_detections_list.append(df)
+                                if all_detections_list:
+                                    all_detections_df = pd.concat(all_detections_list, ignore_index=True)
+                                    tracks_data = advanced_tracker.track_particles_btrack(all_detections_df, min_track_length)
+                                else:
+                                    tracks_data = pd.DataFrame()
+                            else:
+                                linked_tracks_df = link_particles(
+                                    detection_dict,
+                                    method=linking_method,
+                                    max_distance=max_distance,
+                                    max_frame_gap=max_frame_gap
+                                )
+                                if not linked_tracks_df.empty:
+                                    track_lengths = linked_tracks_df.groupby('track_id').size()
+                                    valid_tracks = track_lengths[track_lengths >= min_track_length].index
+                                    tracks_data = linked_tracks_df[linked_tracks_df['track_id'].isin(valid_tracks)]
+                                else:
+                                    tracks_data = pd.DataFrame()
+
                             # Filter by minimum track length and store directly
-                            if not linked_tracks_df.empty:
-                                track_lengths = linked_tracks_df.groupby('track_id').size()
-                                valid_tracks = track_lengths[track_lengths >= min_track_length].index
-                                tracks_data = linked_tracks_df[linked_tracks_df['track_id'].isin(valid_tracks)]
-                                
+                            if not tracks_data.empty:
                                 # Store the filtered DataFrame directly
                                 st.session_state.tracks_data = tracks_data
                                 
-                            if not tracks_data.empty:
                                 # Data is already in DataFrame format, just store results
                                 st.session_state.track_results = {
                                     "n_tracks": tracks_data['track_id'].nunique(),

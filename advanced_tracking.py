@@ -10,7 +10,51 @@ from skimage import feature, measure, filters
 from sklearn.neighbors import KDTree
 from typing import Dict, List, Tuple, Optional, Any
 import warnings
+from track import run_btrack
+from filter import filter_tracks_by_length
 warnings.filterwarnings('ignore')
+
+class BtrackTracker:
+    """
+    Wrapper for the btrack tracker.
+    """
+    def __init__(self, config_path: str = "models/cell_config.json"):
+        self.config_path = config_path
+
+    def track(self, detections: pd.DataFrame, min_track_length: int = 5) -> pd.DataFrame:
+        """
+        Track particles using btrack.
+
+        Args:
+            detections: DataFrame with columns 'x', 'y', 'z', 't', and 'label'.
+            min_track_length: The minimum length of a track to be kept.
+
+        Returns:
+            A DataFrame with the tracked particles.
+        """
+        tracks, properties, graph = run_btrack(detections, self.config_path)
+
+        # Convert tracks to a DataFrame
+        track_data = []
+        for tracklet in tracks:
+            for particle in tracklet:
+                track_data.append({
+                    'track_id': tracklet.ID,
+                    'frame': particle.t,
+                    'x': particle.x,
+                    'y': particle.y,
+                    'z': particle.z,
+                })
+
+        if not track_data:
+            return pd.DataFrame()
+
+        tracks_df = pd.DataFrame(track_data)
+
+        # Filter tracks by length
+        tracks_df = filter_tracks_by_length(tracks_df, min_track_length)
+
+        return tracks_df
 
 class AdvancedParticleDetector:
     """
@@ -704,6 +748,25 @@ class AdvancedTracking:
     
     def __init__(self):
         pass
+    def track_particles_btrack(self, detections: pd.DataFrame,
+                                 min_track_length: int = 5) -> pd.DataFrame:
+        """
+        Track particles using btrack.
+
+        Parameters
+        ----------
+        detections : pd.DataFrame
+            DataFrame with columns 'x', 'y', 'z', 't', and 'label'.
+        min_track_length : int
+            Minimum track length to keep
+
+        Returns
+        -------
+        pd.DataFrame
+            Track data with filtered trajectories
+        """
+        btrack_tracker = BtrackTracker()
+        return btrack_tracker.track(detections, min_track_length)
         
     def track_particles(self, detections: Dict[int, pd.DataFrame], 
                         max_search_radius: float = 20.0,

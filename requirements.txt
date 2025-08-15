@@ -17,4 +17,6 @@ openpyxl>=3.0.0
 opencv-python>=4.5.0
 # segment-anything>=1.0
 # cellpose>=2.0
+btrack
+deeptrack
 pytest>=7.0.0
