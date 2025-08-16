@@ -935,6 +935,15 @@ class EnhancedSPTReportGenerator:
             fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
             return fig
 
+    def _analyze_intensity(self, tracks_df, current_units):
+        """Placeholder for intensity analysis."""
+        return {'success': True, 'message': 'Intensity analysis not yet implemented.'}
+
+    def _plot_intensity(self, result):
+        """Placeholder for intensity visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Intensity analysis not yet implemented.")
+
     def _analyze_polymer_physics(self, tracks_df, current_units):
         """Full implementation for polymer physics analysis."""
         try:

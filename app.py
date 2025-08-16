@@ -6314,7 +6314,7 @@ elif st.session_state.active_page == "Analysis":
                         
                     # Crossing statistics
                     st.subheader("Crossing Statistics")
-                    if 'ensemble_results' in results:
+                    if 'crossing_stats' in results and results['crossing_stats']:
                         for key, value in results['crossing_stats'].items():
                             st.text(f"{key}: {value}")
                     else:
