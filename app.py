@@ -97,6 +97,7 @@ from analysis import (
     analyze_polymer_physics
 )
 from ornstein_uhlenbeck_analyzer import analyze_ornstein_uhlenbeck
+from hmm_analysis import fit_hmm
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,
     correlate_intensity_movement, create_intensity_movement_plots,
@@ -6976,9 +6977,75 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Changepoint Detection", 
             "Correlative Analysis",
             "Microrheology",
-            "Ornstein-Uhlenbeck"
+            "Ornstein-Uhlenbeck",
+            "HMM Analysis"
         ])
         
+        # HMM Analysis tab
+        with adv_tabs[5]:
+            st.header("Hidden Markov Model (HMM) Analysis")
+            st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
+
+            if st.session_state.tracks_data is not None:
+                # Parameters
+                st.subheader("HMM Parameters")
+                n_states = st.slider("Number of Hidden States", 2, 10, 3, 1)
+                n_iter = st.slider("Number of Iterations", 10, 200, 100, 10)
+
+                if st.button("Run HMM Analysis"):
+                    with st.spinner("Fitting HMM..."):
+                        model, predictions = fit_hmm(st.session_state.tracks_data, n_states, n_iter)
+                        st.session_state.analysis_results["hmm"] = {
+                            "model": model,
+                            "predictions": predictions
+                        }
+                        st.success("HMM analysis complete!")
+
+                if "hmm" in st.session_state.analysis_results:
+                    results = st.session_state.analysis_results["hmm"]
+                    model = results["model"]
+                    predictions = results["predictions"]
+
+                    st.subheader("HMM Results")
+                    st.write("Fitted Model Parameters:")
+                    st.write("Means (dx, dy):")
+                    st.write(model.means_)
+                    st.write("Covariances:")
+                    st.write(model.covars_)
+                    st.write("Transition Matrix:")
+                    st.write(model.transmat_)
+
+                    st.subheader("State Predictions")
+                    # Add state predictions to the tracks dataframe for visualization
+                    tracks_with_states = st.session_state.tracks_data.copy()
+                    state_assignments = []
+                    for i, row in tracks_with_states.iterrows():
+                        track_id = row['track_id']
+                        frame = row['frame']
+                        if track_id in predictions:
+                            # The predictions are for displacements, so we need to align them with the frames
+                            # The first frame of a track has no displacement, so we can assign it the state of the first displacement
+                            track_predictions = predictions[track_id]
+                            if frame > tracks_with_states[tracks_with_states['track_id'] == track_id]['frame'].min():
+                                state_idx = frame - tracks_with_states[tracks_with_states['track_id'] == track_id]['frame'].min() -1
+                                if state_idx < len(track_predictions):
+                                    state_assignments.append(track_predictions[state_idx])
+                                else:
+                                    state_assignments.append(np.nan) # Or some other indicator for missing state
+                            else:
+                                state_assignments.append(track_predictions[0])
+                        else:
+                            state_assignments.append(np.nan)
+
+                    # This part is tricky because the number of states is not the same as the number of points
+                    # I will simplify and just show the predictions for the first few tracks
+                    st.write("State sequences for the first 5 tracks:")
+                    for i, (track_id, states) in enumerate(predictions.items()):
+                        if i >= 5:
+                            break
+                        st.write(f"Track {track_id}: {states}")
+
+
         # Biophysical Models tab
         with adv_tabs[0]:
             st.header("Biophysical Models")

@@ -19,4 +19,5 @@ opencv-python>=4.5.0
 # cellpose>=2.0
 btrack
 deeptrack
+hmmlearn
 pytest>=7.0.0
