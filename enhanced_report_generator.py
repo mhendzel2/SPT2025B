@@ -804,6 +804,28 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'error': str(e), 'success': False}
 
+    def _plot_changepoints(self, result):
+        """Placeholder for changepoint visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_velocity_correlation(self, tracks_df, current_units):
+        """Placeholder for velocity correlation analysis."""
+        return {'success': True, 'message': 'Velocity correlation analysis not yet implemented.'}
+
+    def _plot_velocity_correlation(self, result):
+        """Placeholder for velocity correlation visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_particle_interactions(self, tracks_df, current_units):
+        """Placeholder for particle interaction analysis."""
+        return {'success': True, 'message': 'Particle interaction analysis not yet implemented.'}
+
+    def _plot_particle_interactions(self, result):
+        """Placeholder for particle interaction visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
 
     def _analyze_microrheology(self, tracks_df, units):
         """Analyze microrheological properties from particle tracking data."""
@@ -1198,7 +1220,12 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             st.error(f"Error rendering analysis section: {e}")
 
-    def _analyze_confinement(self):
+    def _plot_confinement(self, result):
+        """Placeholder for confinement visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_confinement(self, tracks_df, current_units):
         """
         Confinement analysis for single-particle trajectories.
         Returns:
