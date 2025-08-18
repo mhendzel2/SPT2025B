@@ -111,6 +111,7 @@ from intensity_analysis import (
 from unit_converter import UnitConverter
 from md_integration import MDSimulation, load_md_file
 from biophysics_tab import show_advanced_biophysical_metrics, show_biophysical_models
+from simulation import show_simulation_page
 from logic import (
     calculate_population_metrics,
     perform_class_based_analysis,
@@ -660,7 +661,7 @@ nav_option = st.sidebar.radio(
     "Navigation",
     [
         "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
-        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration"
+        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
     ]
 )
 
@@ -8550,6 +8551,9 @@ elif st.session_state.active_page == "Comparative Analysis":
     st.title("Comparative Analysis")
     
     st.info("Comparative analysis functionality coming soon.")
+
+elif st.session_state.active_page == "Simulation":
+    show_simulation_page()
 
 # Add any remaining helper functions or cleanup code here
 
