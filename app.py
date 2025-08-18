@@ -8020,6 +8020,35 @@ elif st.session_state.active_page == "Report Generation":
         st.error("Report generator module not available.")
 
 # ...existing code...
+def handle_track_upload(uploaded_file):
+    """
+    Wrapper for file upload -> load -> persist.
+    Call wherever the upload widget processes a new file.
+    """
+    if not uploaded_file:
+        return None
+    import io, os
+    name = getattr(uploaded_file, "name", "uploaded_tracks")
+    path_hint = name
+    # Detect Excel vs CSV by extension
+    data_bytes = uploaded_file.read()
+    bio = io.BytesIO(data_bytes)
+    if name.lower().endswith((".xls", ".xlsx")):
+        import pandas as pd
+        df = pd.read_excel(bio, engine="openpyxl")
+    else:
+        import pandas as pd
+        df = pd.read_csv(bio)
+    # Reuse loader cleaning / persistence pipeline
+    from data_loader import load_tracks_file
+    # Provide a pseudo path string for metadata
+    df_clean = load_tracks_file(path_hint, persist=True, state_manager=StateManager.get_instance(), raw_df=df)
+    return df_clean
+
+def get_active_tracks():
+    sm = StateManager.get_instance()
+    return sm.get_tracks_or_none()
+# ...existing code...
 
 # Complete the Motion Analysis tab implementation
         with tabs[2]:

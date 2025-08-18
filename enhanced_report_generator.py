@@ -115,9 +115,17 @@ class EnhancedSPTReportGenerator:
     Comprehensive report generation system with extensive analysis capabilities.
     """
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
         self.state_manager = StateManager() if STATE_MANAGER_AVAILABLE else None
+        
+        # Ensure track data available if previously loaded
+        sm = StateManager.get_instance()
+        if not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty):
+            tracks = sm.get_tracks_or_none()
+            if tracks is not None:
+                self.track_df = tracks
+                self.tracks = tracks  # legacy alias
         
         self.available_analyses = {
             'basic_statistics': {

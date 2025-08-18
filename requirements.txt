@@ -21,3 +21,5 @@ btrack
 deeptrack
 hmmlearn>=0.3.0
 pytest>=7.0.0
+# (Optional) streamlit types for dev tooling (not required at runtime)
+# types-requests

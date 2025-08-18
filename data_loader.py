@@ -15,6 +15,7 @@ from utils import format_track_data, validate_tracks_dataframe
 from special_file_handlers import load_trackmate_file, load_cropped_cell3_spots, load_ms2_spots_file, load_imaris_file
 from mvd2_handler import load_mvd2_file
 from volocity_handler import load_volocity_file
+from state_manager import StateManager
 
 
 def validate_column_mapping(df, x_col, y_col, frame_col, track_id_col):
@@ -395,6 +396,10 @@ def load_tracks_file(file) -> pd.DataFrame:
             is_valid, message = validate_tracks_dataframe(standardized_df)
             if not is_valid:
                 raise ValueError(f"Track data validation failed: {message}")
+            
+            sm = StateManager.get_instance()
+            sm.set_tracks(standardized_df, filename=file.name)
+            
             return standardized_df
             
         except Exception as e:

@@ -5,6 +5,7 @@ Centralized management of session state with type safety and error checking.
 
 from typing import Any, Dict, Optional
 import pandas as pd
+import datetime
 
 # Graceful fallback if Streamlit not installed (e.g., during tests)
 try:
@@ -66,6 +67,9 @@ class StateManager:
         self.tracks = df
         self.track_df = df
         self._tracks_filename = filename
+        # New incremental logic
+        self._tracks_loaded_at = datetime.datetime.utcnow()
+        self._tracks_persisted = True
         return self
 
     def get_track_filename(self):
@@ -76,10 +80,22 @@ class StateManager:
         """Return the currently stored tracks DataFrame (or None)."""
         return getattr(self, "_tracks", None)
 
+    def get_tracks_or_none(self):
+        """Alias for code paths expecting a safe getter."""
+        return self.get_tracks()
+
     @property
     def has_tracks(self) -> bool:
         df = self.get_tracks()
-        return df is not None and not df.empty
+        return df is not None and not df.empty if not hasattr(super(), "has_tracks") else super().has_tracks
+
+    def tracks_metadata(self):
+        """Lightweight dict for debugging/persistence info."""
+        return {
+            "filename": getattr(self, "_tracks_filename", None),
+            "loaded_at": getattr(self, "_tracks_loaded_at", None),
+            "rows": (len(self._tracks) if self.get_tracks() is not None else 0),
+        }
 
     # ---- Units ----
     def get_pixel_size(self) -> float:
@@ -356,12 +372,12 @@ class StateManager:
 
 
 # Singleton helper
-_state_manager_instance: Optional[StateManager] = None
+_STATE_MANAGER_SINGLETON: Optional[StateManager] = None
 
 def get_state_manager() -> StateManager:
-    global _state_manager_instance
-    if _state_manager_instance is None:
-        _state_manager_instance = StateManager()
-    return _state_manager_instance
+    global _STATE_MANAGER_SINGLETON
+    if _STATE_MANAGER_SINGLETON is None:
+        _STATE_MANAGER_SINGLETON = StateManager()
+    return _STATE_MANAGER_SINGLETON
 
 __all__ = ["StateManager", "get_state_manager"]
