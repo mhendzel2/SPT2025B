@@ -37,6 +37,38 @@ class StateManager:
             df = pd.DataFrame()
         st.session_state['raw_tracks_df'] = df
 
+    def set_tracks(self, tracks, copy: bool = True):
+        """
+        Store trajectory/track dataframe in manager.
+        Args:
+            tracks: pandas DataFrame or None
+            copy: whether to copy the DataFrame (default True)
+        Side effects:
+            Updates internal _tracks plus legacy aliases (tracks, track_df)
+        """
+        import pandas as pd
+        if tracks is None:
+            self._tracks = None
+            self.tracks = None
+            self.track_df = None
+            return
+        if not isinstance(tracks, pd.DataFrame):
+            raise TypeError(f"tracks must be a pandas DataFrame or None, got {type(tracks)}")
+        df = tracks.copy() if copy else tracks
+        self._tracks = df
+        # Backward compatibility attributes some code might expect
+        self.tracks = df
+        self.track_df = df
+
+    def get_tracks(self):
+        """Return the currently stored tracks DataFrame (or None)."""
+        return getattr(self, "_tracks", None)
+
+    @property
+    def has_tracks(self) -> bool:
+        df = self.get_tracks()
+        return df is not None and not df.empty
+
     # ---- Units ----
     def get_pixel_size(self) -> float:
         return float(st.session_state.get('pixel_size', 1.0))
