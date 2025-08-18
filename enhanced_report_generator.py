@@ -917,7 +917,7 @@ class EnhancedSPTReportGenerator:
                 subplot_titles=list(figs.keys())
             )
 
-            row, col = 1, 1
+            row, col = 1
             for name, sub_fig in figs.items():
                 if sub_fig.data:
                     for trace in sub_fig.data:
@@ -1197,6 +1197,128 @@ class EnhancedSPTReportGenerator:
         
         except Exception as e:
             st.error(f"Error rendering analysis section: {e}")
+
+    def _analyze_confinement(self):
+        """
+        Confinement analysis for single-particle trajectories.
+        Returns:
+            dict with:
+              data: DataFrame of per-trajectory metrics
+              summary: human-readable summary string
+              figures: list of (optional) plotly figures
+        Metrics:
+          path_length: cumulative step length
+          net_displacement: distance start->end
+          confinement_ratio: net_displacement / path_length (lower => more confined)
+          radius_gyration: spatial dispersion (Rg)
+          max_span: max of x-span, y-span
+          localized_flag: heuristic boolean for confinement
+        Heuristics are conservative and meant as a first-pass screening.
+        """
+        import pandas as pd, numpy as np
+
+        # Locate a trajectory dataframe among common attribute names
+        track_df = None
+        for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
+            if hasattr(self, attr):
+                cand = getattr(self, attr)
+                if cand is not None and len(cand) > 0:
+                    track_df = cand
+                    break
+
+        if track_df is None or len(track_df) == 0:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "No trajectory data available for confinement analysis.",
+                "figures": [],
+            }
+
+        # Identify trajectory id column
+        id_col = None
+        for c in ("track_id", "trajectory_id", "particle", "id", "track"):
+            if c in track_df.columns:
+                id_col = c
+                break
+        if id_col is None:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "Could not determine trajectory id column; expected one of track_id / trajectory_id / particle / id / track.",
+                "figures": [],
+            }
+
+        # Require coordinate columns
+        x_col = "x" if "x" in track_df.columns else None
+        y_col = "y" if "y" in track_df.columns else None
+        if x_col is None or y_col is None:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "Missing coordinate columns (x,y) required for confinement analysis.",
+                "figures": [],
+            }
+
+        metrics = []
+        for tid, g in track_df.groupby(id_col):
+            if len(g) < 2:
+                metrics.append({
+                    id_col: tid,
+                    "path_length": 0.0,
+                    "net_displacement": 0.0,
+                    "confinement_ratio": float("nan"),
+                    "radius_gyration": 0.0,
+                    "max_span": 0.0,
+                    "localized_flag": False,
+                })
+                continue
+
+            coords = g[[x_col, y_col]].to_numpy()
+            steps = np.diff(coords, axis=0)
+            step_lengths = np.linalg.norm(steps, axis=1)
+            path_length = float(step_lengths.sum())
+            net_disp = float(np.linalg.norm(coords[-1] - coords[0]))
+            confinement_ratio = net_disp / path_length if path_length > 0 else float("nan")
+            rg = float(np.sqrt(((coords - coords.mean(axis=0)) ** 2).sum(axis=1).mean()))
+            span_x = coords[:, 0].max() - coords[:, 0].min()
+            span_y = coords[:, 1].max() - coords[:, 1].min()
+            max_span = float(max(span_x, span_y))
+
+            # Heuristic: localized if path folds a lot and spatial extent modest relative to dispersion
+            localized_flag = (
+                (confinement_ratio < 0.3) and  # strong winding
+                (max_span < 4 * rg if rg > 0 else False)
+            )
+
+            metrics.append({
+                id_col: tid,
+                "path_length": path_length,
+                "net_displacement": net_disp,
+                "confinement_ratio": confinement_ratio,
+                "radius_gyration": rg,
+                "max_span": max_span,
+                "localized_flag": localized_flag,
+            })
+
+        df_metrics = pd.DataFrame(metrics)
+        confined_pct = df_metrics["localized_flag"].mean() * 100 if len(df_metrics) else 0.0
+        summary = (
+            f"Confinement analysis computed for {len(df_metrics)} trajectories. "
+            f"{confined_pct:.1f}% flagged as localized (heuristic)."
+        )
+
+        figures = []
+        try:
+            import plotly.express as px
+            fig = px.histogram(
+                df_metrics.dropna(subset=["confinement_ratio"]),
+                x="confinement_ratio",
+                nbins=30,
+                title="Confinement Ratio Distribution"
+            )
+            figures.append(fig)
+        except Exception:
+            # Silently ignore visualization issues to keep analysis robust
+            pass
+
+        return {"data": df_metrics, "summary": summary, "figures": figures}
 
 # Streamlit app integration
 def show_enhanced_report_generator(track_data=None, analysis_results=None, 

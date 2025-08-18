@@ -97,7 +97,12 @@ from analysis import (
     analyze_polymer_physics
 )
 from ornstein_uhlenbeck_analyzer import analyze_ornstein_uhlenbeck
-from hmm_analysis import fit_hmm
+try:
+    from hmm_analysis import fit_hmm, ensure_hmmlearn
+except RuntimeError as e:
+    fit_hmm = None
+    def _hmm_warning():
+        return f"HMM features disabled: {e}"
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,
     correlate_intensity_movement, create_intensity_movement_plots,
@@ -6987,6 +6992,11 @@ elif st.session_state.active_page == "Advanced Analysis":
             st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
 
             if st.session_state.tracks_data is not None:
+                if fit_hmm is None:
+                    st.warning(_hmm_warning())
+                else:
+                    # proceed with HMM analysis using fit_hmm
+                    pass  # ...existing code...
                 # Parameters
                 st.subheader("HMM Parameters")
                 n_states = st.slider("Number of Hidden States", 2, 10, 3, 1)
