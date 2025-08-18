@@ -125,6 +125,55 @@ def load_image_file(file) -> List[np.ndarray]:
     else:
         raise ValueError(f"Unsupported image format: {file_extension}")
 
+def _standardize_trackmate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detect TrackMate-style exported columns and map to internal schema.
+    Expected incoming columns (example):
+        TRACK_ID, POSITION_X, POSITION_Y, POSITION_Z, FRAME, POSITION_T (optional)
+    Output standardized columns:
+        track_id, x, y, z (if present), frame, t (if POSITION_T present)
+    Non-existing targets are skipped gracefully.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+
+    # Heuristic: presence of several signature columns
+    signature = {"TRACK_ID", "POSITION_X", "POSITION_Y", "FRAME"}
+    if not signature.issubset(set(df.columns)):
+        return df  # Not TrackMate style; leave untouched
+
+    mappings = {
+        "TRACK_ID": "track_id",
+        "POSITION_X": "x",
+        "POSITION_Y": "y",
+        "POSITION_Z": "z",
+        "FRAME": "frame",
+        "POSITION_T": "t",
+    }
+    rename_map = {src: dst for src, dst in mappings.items() if src in df.columns}
+    df = df.rename(columns=rename_map)
+
+    # Ensure integer track_id / frame where possible
+    for col in ("track_id", "frame"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    return df
+
+
+def _safe_to_numeric_series(df: pd.DataFrame, columns) -> None:
+    """
+    Convert listed columns to numeric if they exist and are 1-D Series.
+    Skips silently if column missing or not convertible.
+    """
+    for col in columns:
+        if col in df.columns:
+            ser = df[col]
+            # Only convert if it's a Series (not already numeric or not an object like list-of-lists)
+            if isinstance(ser, pd.Series):
+                df[col] = pd.to_numeric(ser, errors="coerce")
+
+
 def load_tracks_file(file) -> pd.DataFrame:
     """
     Load track data from various file formats.
@@ -787,4 +836,3 @@ def load_tracks_file(file) -> pd.DataFrame:
     # Unsupported format
     else:
         raise ValueError(f"Unsupported track data format: {file_extension}")
-    

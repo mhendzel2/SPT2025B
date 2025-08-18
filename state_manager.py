@@ -37,21 +37,27 @@ class StateManager:
             df = pd.DataFrame()
         st.session_state['raw_tracks_df'] = df
 
-    def set_tracks(self, tracks, copy: bool = True):
+    def set_tracks(self, tracks, copy: bool = True, filename: str = None, **kwargs):
         """
         Store trajectory/track dataframe in manager.
         Args:
             tracks: pandas DataFrame or None
             copy: whether to copy the DataFrame (default True)
+            filename: optional source filename (stored for reference)
+            **kwargs: ignored (forward compatibility so unexpected keywords don't break)
         Side effects:
             Updates internal _tracks plus legacy aliases (tracks, track_df)
+            Stores source filename in self._tracks_filename
+        Returns:
+            self
         """
         import pandas as pd
         if tracks is None:
             self._tracks = None
             self.tracks = None
             self.track_df = None
-            return
+            self._tracks_filename = filename
+            return self
         if not isinstance(tracks, pd.DataFrame):
             raise TypeError(f"tracks must be a pandas DataFrame or None, got {type(tracks)}")
         df = tracks.copy() if copy else tracks
@@ -59,6 +65,12 @@ class StateManager:
         # Backward compatibility attributes some code might expect
         self.tracks = df
         self.track_df = df
+        self._tracks_filename = filename
+        return self
+
+    def get_track_filename(self):
+        """Return stored track source filename (or None)."""
+        return getattr(self, "_tracks_filename", None)
 
     def get_tracks(self):
         """Return the currently stored tracks DataFrame (or None)."""
