@@ -117,6 +117,10 @@ class PolymerPhysicsModel:
             'parameters': params
         }
 
+    def analyze_fractal_dimension(self):
+        """Placeholder for fractal dimension analysis."""
+        return {'success': True, 'message': 'Fractal dimension analysis not yet implemented.'}
+
     def analyze_polymer_dynamics(self, tracks_df=None):
         """Analyze polymer dynamics from tracking data."""
         # Get data if not provided
@@ -1032,6 +1036,24 @@ def analyze_motion_models(tracks_df, models=None, min_track_length=10, time_wind
         results['error'] = f'Error in motion model analysis: {str(e)}'
 
     return results
+
+def _determine_best_model(model_errors):
+    """Determine the best model based on the lowest error."""
+    if not model_errors:
+        return 'unknown', float('inf')
+
+    # Using a robust min operation that handles if a model's error is not calculated
+    best_model = min(model_errors, key=lambda model: model_errors.get(model, float('inf')))
+    return best_model, model_errors[best_model]
+
+def _summarize_motion_analysis(results):
+    """Summarize motion analysis results."""
+    summary = {}
+    if 'classifications' in results:
+        classifications = list(results['classifications'].values())
+        summary['total_tracks_analyzed'] = len(classifications)
+        summary['model_counts'] = {model: classifications.count(model) for model in set(classifications)}
+    return summary
 
 def _fit_motion_models(positions, times, models):
     """
