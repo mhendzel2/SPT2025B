@@ -115,6 +115,7 @@ def test_enhanced_report_generator():
             print(f"  - Analyses completed: {len(batch_result.get('analysis_results', {}))}")
         else:
             print(f"✗ Batch report generation failed")
+            return False
         
         return True
         
@@ -176,6 +177,7 @@ def test_biophysical_models():
                     print(f"  - Alpha: {params.get('alpha', 0):.3f}")
                 else:
                     print(f"✗ Rouse model fitting failed: {rouse_result.get('error')}")
+                    return False
                 
                 # Test fractal analysis
                 fractal_result = polymer_model.analyze_fractal_dimension()
@@ -183,14 +185,18 @@ def test_biophysical_models():
                     print("✓ Fractal dimension analysis successful")
                 else:
                     print(f"✗ Fractal dimension analysis failed: {fractal_result.get('error')}")
+                    return False
                     
             else:
                 print("✗ MSD calculation failed or returned empty data")
+                return False
                 
         except ImportError as e:
             print(f"⚠ Could not import analysis module: {e}")
+            return False
         except Exception as e:
             print(f"✗ Polymer physics test failed: {e}")
+            return False
         
         return True
         
