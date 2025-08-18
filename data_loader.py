@@ -174,6 +174,80 @@ def _safe_to_numeric_series(df: pd.DataFrame, columns) -> None:
                 df[col] = pd.to_numeric(ser, errors="coerce")
 
 
+def _remove_redundant_header_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove accidental repeated header rows inside the data.
+    Heuristics:
+      - A row is flagged if, for key columns, the cell value (case-insensitive)
+        equals the column name or a known header alias (e.g. 'Track ID').
+      - Or if a high fraction of non-null string cells match column headers.
+    """
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    col_lower = {c.lower(): c for c in df.columns}
+    header_aliases = {
+        "track id": {"track id", "track_id", "TRACK_ID"},
+        "frame": {"frame", "FRAME"},
+        "x": {"x", "position_x", "POSITION_X"},
+        "y": {"y", "position_y", "POSITION_Y"},
+        "z": {"z", "position_z", "POSITION_Z"},
+        "t": {"t", "position_t", "POSITION_T"},
+        "quality": {"quality", "QUALITY"},
+    }
+    # Map actual present columns to alias sets (only those that exist)
+    present_alias_sets = []
+    for canonical, aliases in header_aliases.items():
+        # include if at least one alias corresponds to an existing column name
+        if any(a in df.columns for a in aliases):
+            present_alias_sets.append(aliases)
+
+    header_name_set = set(a for s in present_alias_sets for a in s)
+    header_name_set |= set(df.columns)
+    header_name_set_lower = {h.lower() for h in header_name_set}
+
+    rows_to_drop = []
+    for idx, row in df.iterrows():
+        values = row.values
+        # Count header-like matches
+        header_like = 0
+        string_cells = 0
+        key_column_hits = 0
+
+        for col, val in row.items():
+            if isinstance(val, str):
+                string_cells += 1
+                v = val.strip().lower()
+                if v in header_name_set_lower:
+                    header_like += 1
+                    # If this value equals (case-insensitive) the column name or alias for a key column
+                    for alias_set in present_alias_sets:
+                        if v in {a.lower() for a in alias_set}:
+                            key_column_hits += 1
+
+        if string_cells == 0:
+            continue
+
+        fraction_header_like = header_like / max(1, string_cells)
+
+        # Heuristic conditions:
+        # 1. All key columns present in this row appear as header tokens
+        # 2. Or >= 70% of its string cells look like header tokens and at least 3 such cells
+        if (key_column_hits >= max(2, len(present_alias_sets) // 2)) or (
+            header_like >= 3 and fraction_header_like >= 0.7
+        ):
+            rows_to_drop.append(idx)
+
+    if rows_to_drop:
+        df = df.drop(rows_to_drop)
+        df = df.reset_index(drop=True)
+        # Optional: simple debug print (replace with logging if available)
+        try:
+            print(f"Removed {len(rows_to_drop)} repeated header row(s): indices {rows_to_drop}")
+        except Exception:
+            pass
+    return df
+
 def load_tracks_file(file) -> pd.DataFrame:
     """
     Load track data from various file formats.
