@@ -118,12 +118,12 @@ class EnhancedSPTReportGenerator:
     def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
         self.state_manager = get_state_manager() if STATE_MANAGER_AVAILABLE else None
-        
+
         # Ensure track data available if previously loaded
-        sm = get_state_manager()
-        if not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty):
+        sm = get_state_manager() if STATE_MANAGER_AVAILABLE else None
+        if sm and (not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty)):
             tracks = sm.get_tracks_or_none()
-            if tracks is not None:
+            if tracks is not None and hasattr(tracks, 'empty') and not tracks.empty:
                 self.track_df = tracks
                 self.tracks = tracks  # legacy alias
         
@@ -248,11 +248,14 @@ class EnhancedSPTReportGenerator:
             # Fallback to original method
             has_data = False
             tracks_df = None
-            
+
             if self.state_manager:
-                has_data = self.state_manager.has_data()
-                if has_data:
-                    tracks_df = self.state_manager.get_tracks()
+                try:
+                    has_data = self.state_manager.has_data()
+                    if has_data:
+                        tracks_df = self.state_manager.get_tracks()
+                except Exception:
+                    has_data = False
             else:
                 # Fallback to direct session state access
                 tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks') or st.session_state.get('tracks_data')
@@ -266,8 +269,11 @@ class EnhancedSPTReportGenerator:
                 if st.checkbox("Show debug information"):
                     st.write("Session state keys:", list(st.session_state.keys()))
                     if self.state_manager:
-                        st.write("State manager data summary:", self.state_manager.get_data_summary())
-                        st.write("Debug state:", self.state_manager.debug_data_state())
+                        try:
+                            st.write("State manager data summary:", self.state_manager.get_data_summary())
+                            st.write("Debug state:", self.state_manager.debug_data_state())
+                        except Exception as e:
+                            st.write(f"State manager error: {e}")
                 return
             
             st.success(f"✅ Track data loaded: {len(tracks_df)} points")
@@ -504,7 +510,8 @@ class EnhancedSPTReportGenerator:
                 
                 # Generate visualization from existing data
                 fig = analysis['visualization'](analysis_results[analysis_key])
-                if fig:
+                # Some visualization functions may return dict of plotly figs or matplotlib
+                if fig is not None:
                     self.report_figures[analysis_key] = fig
                 st.success(f"✅ Added {analysis['name']} to report")
                 
@@ -546,7 +553,7 @@ class EnhancedSPTReportGenerator:
     def _plot_basic_statistics(self, result):
         """Full implementation for basic statistics visualization."""
         try:
-            from visualization import plot_track_statistics
+            from visualization import plot_track_statistics, _empty_fig
             
             stats_df = result.get('statistics_df')
             if stats_df is None or stats_df.empty:
@@ -1115,7 +1122,16 @@ class EnhancedSPTReportGenerator:
                     
                     # Display visualization if available
                     if analysis_key in self.report_figures:
-                        st.plotly_chart(self.report_figures[analysis_key], use_container_width=True)
+                        fig = self.report_figures[analysis_key]
+                        # Support both Plotly and Matplotlib figures
+                        try:
+                            from matplotlib.figure import Figure as MplFigure
+                        except Exception:
+                            MplFigure = None
+                        if MplFigure is not None and isinstance(fig, MplFigure):
+                            st.pyplot(fig, use_container_width=True)
+                        else:
+                            st.plotly_chart(fig, use_container_width=True)
 
     def _display_basic_stats(self, stats):
         """Display basic statistics in a formatted way."""
@@ -1392,9 +1408,12 @@ def show_enhanced_report_generator(track_data=None, analysis_results=None,
                 # We need to set it in session state
                 st.session_state['tracks_df'] = track_data
         elif STATE_MANAGER_AVAILABLE:
-            state_manager = StateManager()
-            if not state_manager.has_data():
-                state_manager.set_tracks(track_data)
+            sm = get_state_manager()
+            try:
+                if not sm.has_data():
+                    sm.set_tracks(track_data)
+            except Exception:
+                st.session_state['tracks_df'] = track_data
     
     # Display the interface
     generator.display_enhanced_analysis_interface()
