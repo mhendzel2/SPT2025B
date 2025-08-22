@@ -105,7 +105,7 @@ except ImportError:
 
 # Import state manager for proper data access (keep as fallback)
 try:
-    from state_manager import StateManager
+    from state_manager import get_state_manager
     STATE_MANAGER_AVAILABLE = True
 except ImportError:
     STATE_MANAGER_AVAILABLE = False
@@ -117,10 +117,10 @@ class EnhancedSPTReportGenerator:
 
     def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
-        self.state_manager = StateManager() if STATE_MANAGER_AVAILABLE else None
+        self.state_manager = get_state_manager() if STATE_MANAGER_AVAILABLE else None
         
         # Ensure track data available if previously loaded
-        sm = StateManager.get_instance()
+        sm = get_state_manager()
         if not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty):
             tracks = sm.get_tracks_or_none()
             if tracks is not None:
