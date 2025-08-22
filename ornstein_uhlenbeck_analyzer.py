@@ -47,6 +47,9 @@ def fit_vacf(vacf_df):
         lags = track_vacf['lag'].values
         vacf = track_vacf['vacf'].values
 
+        if len(vacf) < 2:
+            continue
+
         try:
             # Fit the data
             popt, pcov = curve_fit(exponential_decay, lags, vacf, p0=(1.0, vacf[0]))

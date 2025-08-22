@@ -105,7 +105,7 @@ except ImportError:
 
 # Import state manager for proper data access (keep as fallback)
 try:
-    from state_manager import StateManager
+    from state_manager import get_state_manager
     STATE_MANAGER_AVAILABLE = True
 except ImportError:
     STATE_MANAGER_AVAILABLE = False
@@ -115,9 +115,17 @@ class EnhancedSPTReportGenerator:
     Comprehensive report generation system with extensive analysis capabilities.
     """
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
-        self.state_manager = StateManager() if STATE_MANAGER_AVAILABLE else None
+        self.state_manager = get_state_manager() if STATE_MANAGER_AVAILABLE else None
+        
+        # Ensure track data available if previously loaded
+        sm = get_state_manager()
+        if not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty):
+            tracks = sm.get_tracks_or_none()
+            if tracks is not None:
+                self.track_df = tracks
+                self.tracks = tracks  # legacy alias
         
         self.available_analyses = {
             'basic_statistics': {
@@ -804,6 +812,28 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'error': str(e), 'success': False}
 
+    def _plot_changepoints(self, result):
+        """Placeholder for changepoint visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_velocity_correlation(self, tracks_df, current_units):
+        """Placeholder for velocity correlation analysis."""
+        return {'success': True, 'message': 'Velocity correlation analysis not yet implemented.'}
+
+    def _plot_velocity_correlation(self, result):
+        """Placeholder for velocity correlation visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_particle_interactions(self, tracks_df, current_units):
+        """Placeholder for particle interaction analysis."""
+        return {'success': True, 'message': 'Particle interaction analysis not yet implemented.'}
+
+    def _plot_particle_interactions(self, result):
+        """Placeholder for particle interaction visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
 
     def _analyze_microrheology(self, tracks_df, units):
         """Analyze microrheological properties from particle tracking data."""
@@ -917,7 +947,7 @@ class EnhancedSPTReportGenerator:
                 subplot_titles=list(figs.keys())
             )
 
-            row, col = 1, 1
+            row, col = 1
             for name, sub_fig in figs.items():
                 if sub_fig.data:
                     for trace in sub_fig.data:
@@ -934,6 +964,15 @@ class EnhancedSPTReportGenerator:
             fig = go.Figure()
             fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
             return fig
+
+    def _analyze_intensity(self, tracks_df, current_units):
+        """Placeholder for intensity analysis."""
+        return {'success': True, 'message': 'Intensity analysis not yet implemented.'}
+
+    def _plot_intensity(self, result):
+        """Placeholder for intensity visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Intensity analysis not yet implemented.")
 
     def _analyze_polymer_physics(self, tracks_df, current_units):
         """Full implementation for polymer physics analysis."""
@@ -1188,6 +1227,133 @@ class EnhancedSPTReportGenerator:
         
         except Exception as e:
             st.error(f"Error rendering analysis section: {e}")
+
+    def _plot_confinement(self, result):
+        """Placeholder for confinement visualization."""
+        from visualization import _empty_fig
+        return _empty_fig("Not implemented")
+
+    def _analyze_confinement(self, tracks_df, current_units):
+        """
+        Confinement analysis for single-particle trajectories.
+        Returns:
+            dict with:
+              data: DataFrame of per-trajectory metrics
+              summary: human-readable summary string
+              figures: list of (optional) plotly figures
+        Metrics:
+          path_length: cumulative step length
+          net_displacement: distance start->end
+          confinement_ratio: net_displacement / path_length (lower => more confined)
+          radius_gyration: spatial dispersion (Rg)
+          max_span: max of x-span, y-span
+          localized_flag: heuristic boolean for confinement
+        Heuristics are conservative and meant as a first-pass screening.
+        """
+        import pandas as pd, numpy as np
+
+        # Locate a trajectory dataframe among common attribute names
+        track_df = None
+        for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
+            if hasattr(self, attr):
+                cand = getattr(self, attr)
+                if cand is not None and len(cand) > 0:
+                    track_df = cand
+                    break
+
+        if track_df is None or len(track_df) == 0:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "No trajectory data available for confinement analysis.",
+                "figures": [],
+            }
+
+        # Identify trajectory id column
+        id_col = None
+        for c in ("track_id", "trajectory_id", "particle", "id", "track"):
+            if c in track_df.columns:
+                id_col = c
+                break
+        if id_col is None:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "Could not determine trajectory id column; expected one of track_id / trajectory_id / particle / id / track.",
+                "figures": [],
+            }
+
+        # Require coordinate columns
+        x_col = "x" if "x" in track_df.columns else None
+        y_col = "y" if "y" in track_df.columns else None
+        if x_col is None or y_col is None:
+            return {
+                "data": pd.DataFrame(),
+                "summary": "Missing coordinate columns (x,y) required for confinement analysis.",
+                "figures": [],
+            }
+
+        metrics = []
+        for tid, g in track_df.groupby(id_col):
+            if len(g) < 2:
+                metrics.append({
+                    id_col: tid,
+                    "path_length": 0.0,
+                    "net_displacement": 0.0,
+                    "confinement_ratio": float("nan"),
+                    "radius_gyration": 0.0,
+                    "max_span": 0.0,
+                    "localized_flag": False,
+                })
+                continue
+
+            coords = g[[x_col, y_col]].to_numpy()
+            steps = np.diff(coords, axis=0)
+            step_lengths = np.linalg.norm(steps, axis=1)
+            path_length = float(step_lengths.sum())
+            net_disp = float(np.linalg.norm(coords[-1] - coords[0]))
+            confinement_ratio = net_disp / path_length if path_length > 0 else float("nan")
+            rg = float(np.sqrt(((coords - coords.mean(axis=0)) ** 2).sum(axis=1).mean()))
+            span_x = coords[:, 0].max() - coords[:, 0].min()
+            span_y = coords[:, 1].max() - coords[:, 1].min()
+            max_span = float(max(span_x, span_y))
+
+            # Heuristic: localized if path folds a lot and spatial extent modest relative to dispersion
+            localized_flag = (
+                (confinement_ratio < 0.3) and  # strong winding
+                (max_span < 4 * rg if rg > 0 else False)
+            )
+
+            metrics.append({
+                id_col: tid,
+                "path_length": path_length,
+                "net_displacement": net_disp,
+                "confinement_ratio": confinement_ratio,
+                "radius_gyration": rg,
+                "max_span": max_span,
+                "localized_flag": localized_flag,
+            })
+
+        df_metrics = pd.DataFrame(metrics)
+        confined_pct = df_metrics["localized_flag"].mean() * 100 if len(df_metrics) else 0.0
+        summary = (
+            f"Confinement analysis computed for {len(df_metrics)} trajectories. "
+            f"{confined_pct:.1f}% flagged as localized (heuristic)."
+        )
+
+        figures = []
+        try:
+            import plotly.express as px
+            fig = px.histogram(
+                df_metrics.dropna(subset=["confinement_ratio"]),
+                x="confinement_ratio",
+                nbins=30,
+                title="Confinement Ratio Distribution"
+            )
+            figures.append(fig)
+        except Exception:
+            # Silently ignore visualization issues to keep analysis robust
+            pass
+
+        return {"data": df_metrics, "summary": summary, "figures": figures}
 
 # Streamlit app integration
 def show_enhanced_report_generator(track_data=None, analysis_results=None, 
