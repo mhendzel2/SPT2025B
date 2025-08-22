@@ -235,6 +235,17 @@ class AdvancedMetricsAnalyzer:
             rows.append({'track_id': tid, 'alpha': alpha, 'H': alpha/2 if np.isfinite(alpha) else np.nan})
         return pd.DataFrame(rows)
 
+    def fbm_analysis(self):
+        """
+        Perform Fractional Brownian Motion (fBm) analysis on all tracks.
+        """
+        rows = []
+        for tid, g in self.df.groupby('track_id'):
+            result = fit_fbm_model(g, self.cfg.pixel_size, self.cfg.frame_interval)
+            row = {'track_id': tid, 'H_fbm': result.get('H'), 'D_fbm': result.get('D'), 'fbm_fit_error': result.get('error')}
+            rows.append(row)
+        return pd.DataFrame(rows)
+
     # -------- Orchestrator --------
     def compute_all(self) -> Dict[str, object]:
         if self.df.empty or self.lags.size == 0:
@@ -245,11 +256,13 @@ class AdvancedMetricsAnalyzer:
         vacf_df = self.vacf()
         ang_df = self.turning_angles()
         hurst_df = self.hurst_from_tamsd(tamsd_df)
+        fbm_df = self.fbm_analysis()
         summary = {
             'n_tracks': int(self.df['track_id'].nunique()),
             'median_track_len': int(self.df.groupby('track_id').size().median()),
             'lags': self.lags.tolist(),
-            'H_median': float(np.nanmedian(hurst_df['H'])) if not hurst_df.empty else np.nan
+            'H_median': float(np.nanmedian(hurst_df['H'])) if not hurst_df.empty else np.nan,
+            'H_fbm_median': float(np.nanmedian(fbm_df['H_fbm'])) if not fbm_df.empty else np.nan
         }
         return {
             'success': True,
@@ -261,5 +274,87 @@ class AdvancedMetricsAnalyzer:
             'ngp': ngp_df,
             'vacf': vacf_df,
             'turning_angles': ang_df,
-            'hurst': hurst_df
+            'hurst': hurst_df,
+            'fbm': fbm_df
         }
+
+def fit_fbm_model(track_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0):
+    """
+    Fit a Fractional Brownian Motion (fBm) model to a single trajectory.
+
+    Parameters
+    ----------
+    track_df : pd.DataFrame
+        DataFrame for a single track with 'x', 'y', and 'frame' columns.
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 1.0.
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0.
+
+    Returns
+    -------
+    dict
+        A dictionary with the estimated Hurst parameter 'H' and diffusion coefficient 'D'.
+    """
+    try:
+        import fbm
+        from scipy.optimize import curve_fit
+    except ImportError:
+        return {'H': np.nan, 'D': np.nan, 'error': 'fbm or scipy not installed.'}
+
+    if track_df.empty or len(track_df) < 10: # Need more points for robust estimation
+        return {'H': np.nan, 'D': np.nan, 'error': 'Track too short for fitting.'}
+
+    # Prepare data
+    track = track_df.sort_values('frame').copy()
+    track['x_um'] = track['x'] * pixel_size
+    track['y_um'] = track['y'] * pixel_size
+
+    results = {}
+
+    try:
+        # Estimate Hurst exponent from the trajectory increments
+        dx = np.diff(track['x_um'].values)
+        dy = np.diff(track['y_um'].values)
+
+        # fbm.hurst expects a 1D array of increments
+        h_x = fbm.hurst(dx)
+        h_y = fbm.hurst(dy)
+        H = (h_x + h_y) / 2.0
+
+        # Now, calculate MSD and fit for the diffusion coefficient D
+        # MSD(t) = 4*D*t^H for 2D fBm
+
+        msd_values = []
+        lag_times = []
+        max_lag = min(len(track) - 1, 20)
+        for lag in range(1, max_lag + 1):
+            if len(track) > lag:
+                disp_x = track['x_um'].values[lag:] - track['x_um'].values[:-lag]
+                disp_y = track['y_um'].values[lag:] - track['y_um'].values[:-lag]
+                sq_disp = disp_x**2 + disp_y**2
+                msd_values.append(np.mean(sq_disp))
+                lag_times.append(lag * frame_interval)
+
+        msd_values = np.array(msd_values)
+        lag_times = np.array(lag_times)
+
+        def msd_model(t, D):
+            return 4 * D * (t ** H)
+
+        if len(lag_times) > 0:
+            popt, _ = curve_fit(msd_model, lag_times, msd_values)
+            D = popt[0]
+        else:
+            D = np.nan
+
+        results['H'] = H
+        results['D'] = D
+        results['error'] = None
+
+    except Exception as e:
+        results['H'] = np.nan
+        results['D'] = np.nan
+        results['error'] = str(e)
+
+    return results
