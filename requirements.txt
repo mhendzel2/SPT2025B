@@ -15,6 +15,8 @@ xmltodict>=0.13.0
 lxml>=4.9.0
 openpyxl>=3.0.0
 opencv-python>=4.5.0
+networkx>=3.0
+fbm>=0.2.0
 # segment-anything>=1.0
 # cellpose>=2.0
 btrack
