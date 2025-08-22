@@ -1632,3 +1632,119 @@ def plot_polymer_physics_results(polymer_data):
     except Exception as e:
         st.error(f"Error creating polymer physics plot: {e}")
         return go.Figure()
+
+def plot_hmm_state_transition_diagram(model) -> go.Figure:
+    """
+    Visualizes an HMM as a state transition diagram.
+
+    Args:
+        model: A trained hmmlearn GaussianHMM model.
+
+    Returns:
+        A Plotly Figure object showing the state transition diagram.
+    """
+    if not hasattr(model, 'transmat_'):
+        return _empty_fig("Invalid HMM model provided")
+
+    n_states = model.n_components
+    trans_matrix = model.transmat_
+
+    # Calculate stationary distribution for node sizes
+    try:
+        # Find the eigenvector corresponding to the eigenvalue 1
+        eigenvals, eigenvecs = np.linalg.eig(trans_matrix.T)
+        stationary_dist = np.real(eigenvecs[:, np.isclose(eigenvals, 1)][:, 0])
+        stationary_dist /= stationary_dist.sum()
+    except Exception:
+        # Fallback to uniform distribution if calculation fails
+        stationary_dist = np.ones(n_states) / n_states
+
+    # Calculate diffusion coefficients for node colors
+    # D = (var(dx) + var(dy)) / (2 * dt), assuming dt=1 for simplicity here
+    diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
+
+    # Node positions in a circle
+    angle_step = 2 * np.pi / n_states
+    node_x = [np.cos(i * angle_step) for i in range(n_states)]
+    node_y = [np.sin(i * angle_step) for i in range(n_states)]
+
+    # Create figure
+    fig = go.Figure()
+
+    # Create edges (arrows)
+    for i in range(n_states):
+        for j in range(n_states):
+            prob = trans_matrix[i, j]
+            if prob > 0.01:  # Only draw significant transitions
+                # Arrow properties
+                if i == j: # Self-transition loop
+                    # Position loop slightly offset from node
+                    loop_angle = i * angle_step + np.pi / 2
+                    x_start = node_x[i] + 0.1 * np.cos(loop_angle - 0.3)
+                    y_start = node_y[i] + 0.1 * np.sin(loop_angle - 0.3)
+                    x_end = node_x[i] + 0.1 * np.cos(loop_angle + 0.3)
+                    y_end = node_y[i] + 0.1 * np.sin(loop_angle + 0.3)
+
+                    fig.add_annotation(
+                        x=x_end, y=y_end, ax=x_start, ay=y_start,
+                        xref='x', yref='y', axref='x', ayref='y',
+                        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=prob * 5 + 1,
+                        opacity=prob
+                    )
+                    # Label for the loop
+                    fig.add_annotation(
+                        x=node_x[i] + 0.2 * np.cos(loop_angle),
+                        y=node_y[i] + 0.2 * np.sin(loop_angle),
+                        text=f"{prob:.2f}", showarrow=False,
+                        font=dict(size=10, color="black")
+                    )
+                else: # Transitions between different nodes
+                    fig.add_annotation(
+                        x=node_x[j], y=node_y[j], ax=node_x[i], ay=node_y[i],
+                        xref='x', yref='y', axref='x', ayref='y',
+                        showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=prob * 5 + 1,
+                        opacity=min(1.0, prob * 2)
+                    )
+                    # Add transition probability label
+                    fig.add_annotation(
+                        x=(node_x[i] + node_x[j]) / 2,
+                        y=(node_y[i] + node_y[j]) / 2,
+                        text=f'{prob:.2f}',
+                        showarrow=False,
+                        font=dict(size=10, color="black")
+                    )
+
+    # Create nodes
+    node_sizes = stationary_dist * 100 + 20
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers+text',
+        marker=dict(
+            size=node_sizes,
+            color=diffusion_coeffs,
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title='Diffusion Coeff.'),
+            cmin=min(diffusion_coeffs),
+            cmax=max(diffusion_coeffs)
+        ),
+        text=[f"State {i}" for i in range(n_states)],
+        textposition="top center",
+        hoverinfo='text',
+        hovertext=[f"State {i}<br>Stationary Prob: {p:.2f}<br>Diffusion Coeff: {d:.4f}"
+                   for i, (p, d) in enumerate(zip(stationary_dist, diffusion_coeffs))]
+    ))
+
+    # Update layout
+    fig.update_layout(
+        title="HMM State Transition Diagram",
+        showlegend=False,
+        xaxis=dict(visible=False, range=[-1.5, 1.5]),
+        yaxis=dict(visible=False, range=[-1.5, 1.5]),
+        template="plotly_white",
+        width=600,
+        height=600
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+
+    return fig
