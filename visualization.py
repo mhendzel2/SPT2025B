@@ -1765,7 +1765,8 @@ def plot_hmm_state_transition_diagram(model) -> go.Figure:
             showscale=True,
             colorbar=dict(title='Diffusion Coeff.'),
             cmin=min(diffusion_coeffs),
-            cmax=max(diffusion_coeffs)
+            cmin=cmin,
+            cmax=cmax
         ),
         text=[f"State {i}" for i in range(n_states)],
         textposition="top center",
