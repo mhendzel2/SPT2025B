@@ -813,7 +813,13 @@ class EnhancedSPTReportGenerator:
         try:
             if CHANGEPOINT_DETECTION_AVAILABLE:
                 detector = ChangePointDetector()
-                return detector.detect_changepoints(tracks_df)
+                # Use the implemented API in changepoint_detection.py
+                res = detector.detect_motion_regime_changes(tracks_df)
+                # Attach tracks for downstream visualization
+                if isinstance(res, dict):
+                    res.setdefault('tracks_df', tracks_df)
+                    res.setdefault('success', bool(res.get('changepoints', pd.DataFrame()).shape[0] or res.get('motion_segments', pd.DataFrame()).shape[0]))
+                return res
             else:
                 return {'error': 'Changepoint detection module not available', 'success': False}
         except Exception as e:
@@ -821,8 +827,14 @@ class EnhancedSPTReportGenerator:
 
     def _plot_changepoints(self, result):
         """Placeholder for changepoint visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        try:
+            from visualization import plot_changepoint_analysis, _empty_fig
+            if not result or not result.get('success', False):
+                return _empty_fig("Changepoint analysis failed.")
+            return plot_changepoint_analysis(result)
+        except Exception:
+            from visualization import _empty_fig
+            return _empty_fig("Changepoint visualization unavailable")
 
     def _analyze_velocity_correlation(self, tracks_df, current_units):
         """Placeholder for velocity correlation analysis."""
@@ -991,8 +1003,12 @@ class EnhancedSPTReportGenerator:
                 pixel_size=current_units.get('pixel_size', 1.0),
                 frame_interval=current_units.get('frame_interval', 1.0)
             )
-
-            return polymer_results
+            # Normalize structure and avoid ambiguous truth-value on DataFrames
+            if isinstance(polymer_results, dict):
+                polymer_results.setdefault('success', 'error' not in polymer_results)
+                # Some fields may be numpy arrays; ensure serializable where possible in report JSON path
+                return polymer_results
+            return {'success': False, 'error': 'Unexpected polymer physics result format'}
         except Exception as e:
             return {'error': str(e), 'success': False}
 
@@ -1245,9 +1261,47 @@ class EnhancedSPTReportGenerator:
             st.error(f"Error rendering analysis section: {e}")
 
     def _plot_confinement(self, result):
-        """Placeholder for confinement visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        """Visualization for confinement analysis using provided helper when possible."""
+        try:
+            from visualization import plot_confinement_analysis, _empty_fig
+            # Map our analysis result to the expected schema for the plotter
+            if not result:
+                return _empty_fig("No confinement results available")
+
+            if 'success' not in result:
+                result['success'] = True
+
+            # If keys already match, plot directly
+            if {'n_total_tracks', 'n_confined_tracks', 'track_results'}.issubset(result.keys()):
+                return plot_confinement_analysis(result)
+
+            data_df = result.get('data', pd.DataFrame())
+            tracks_df = result.get('tracks_df')
+            # Ensure a track_id column exists for plotting
+            if not data_df.empty and 'track_id' not in data_df.columns:
+                # Try to find the id column and rename
+                for c in ("track_id", "trajectory_id", "particle", "id", "track"):
+                    if c in data_df.columns:
+                        if c != 'track_id':
+                            data_df = data_df.rename(columns={c: 'track_id'})
+                        break
+
+            if not data_df.empty and 'confinement_radius' not in data_df.columns and 'max_span' in data_df.columns:
+                # Approximate radius as half of max span
+                data_df = data_df.copy()
+                data_df['confinement_radius'] = data_df['max_span'] / 2.0
+
+            mapped = {
+                'success': True,
+                'n_total_tracks': int(data_df['track_id'].nunique()) if not data_df.empty and 'track_id' in data_df.columns else 0,
+                'n_confined_tracks': int(data_df['localized_flag'].sum()) if not data_df.empty and 'localized_flag' in data_df.columns else 0,
+                'track_results': data_df,
+                'tracks_df': tracks_df,
+            }
+            return plot_confinement_analysis(mapped)
+        except Exception:
+            from visualization import _empty_fig
+            return _empty_fig("Confinement visualization unavailable")
 
     def _analyze_confinement(self, tracks_df, current_units):
         """
@@ -1268,20 +1322,25 @@ class EnhancedSPTReportGenerator:
         """
         import pandas as pd, numpy as np
 
-        # Locate a trajectory dataframe among common attribute names
+        # Prefer the provided tracks_df; fall back to common attributes
         track_df = None
-        for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
-            if hasattr(self, attr):
-                cand = getattr(self, attr)
-                if cand is not None and len(cand) > 0:
-                    track_df = cand
-                    break
+        if isinstance(tracks_df, pd.DataFrame) and not tracks_df.empty:
+            track_df = tracks_df
+        else:
+            for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
+                if hasattr(self, attr):
+                    cand = getattr(self, attr)
+                    if isinstance(cand, pd.DataFrame) and not cand.empty:
+                        track_df = cand
+                        break
 
         if track_df is None or len(track_df) == 0:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "No trajectory data available for confinement analysis.",
                 "figures": [],
+                'tracks_df': tracks_df if isinstance(tracks_df, pd.DataFrame) else None,
             }
 
         # Identify trajectory id column
@@ -1292,9 +1351,11 @@ class EnhancedSPTReportGenerator:
                 break
         if id_col is None:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "Could not determine trajectory id column; expected one of track_id / trajectory_id / particle / id / track.",
                 "figures": [],
+                'tracks_df': track_df,
             }
 
         # Require coordinate columns
@@ -1302,9 +1363,11 @@ class EnhancedSPTReportGenerator:
         y_col = "y" if "y" in track_df.columns else None
         if x_col is None or y_col is None:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "Missing coordinate columns (x,y) required for confinement analysis.",
                 "figures": [],
+                'tracks_df': track_df,
             }
 
         metrics = []
@@ -1349,6 +1412,9 @@ class EnhancedSPTReportGenerator:
             })
 
         df_metrics = pd.DataFrame(metrics)
+        # Ensure a standard track_id column exists for downstream consumers
+        if id_col != 'track_id' and id_col in df_metrics.columns:
+            df_metrics = df_metrics.rename(columns={id_col: 'track_id'})
         confined_pct = df_metrics["localized_flag"].mean() * 100 if len(df_metrics) else 0.0
         summary = (
             f"Confinement analysis computed for {len(df_metrics)} trajectories. "
@@ -1369,7 +1435,15 @@ class EnhancedSPTReportGenerator:
             # Silently ignore visualization issues to keep analysis robust
             pass
 
-        return {"data": df_metrics, "summary": summary, "figures": figures}
+        return {
+            'success': True,
+            "data": df_metrics,
+            "summary": summary,
+            "figures": figures,
+            'n_total_tracks': int(df_metrics['track_id'].nunique()) if not df_metrics.empty else 0,
+            'n_confined_tracks': int(df_metrics['localized_flag'].sum()) if not df_metrics.empty else 0,
+            'tracks_df': track_df,
+        }
 
 # Streamlit app integration
 def show_enhanced_report_generator(track_data=None, analysis_results=None, 

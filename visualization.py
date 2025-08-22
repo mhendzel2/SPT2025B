@@ -1056,9 +1056,9 @@ def plot_changepoint_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
         return _empty_fig("No changepoint analysis data available")
 
     tracks_df = analysis_results.get('tracks_df')
-    changepoints = analysis_results.get('changepoints') # This is a dict {track_id: [frame1, frame2]}
+    cp_obj = analysis_results.get('changepoints') # May be dict or DataFrame
 
-    if tracks_df is None or changepoints is None:
+    if tracks_df is None or (isinstance(tracks_df, pd.DataFrame) and tracks_df.empty) or cp_obj is None:
         return _empty_fig("Track or changepoint data is missing.")
 
     fig = go.Figure()
@@ -1070,11 +1070,27 @@ def plot_changepoint_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
                                  showlegend=False))
 
     # Highlight changepoints
-    if changepoints:
-        for track_id, cp_frames in changepoints.items():
+    if isinstance(cp_obj, dict):
+        for track_id, cp_frames in cp_obj.items():
             track_data = tracks_df[tracks_df['track_id'] == track_id]
-            if not track_data.empty:
-                cp_data = track_data[track_data['frame'].isin(cp_frames)]
+            if not track_data.empty and cp_frames:
+                cp_data = track_data[track_data['frame'].isin(cp_frames)] if 'frame' in track_data.columns else track_data.iloc[[0]]
+                if not cp_data.empty:
+                    fig.add_trace(go.Scatter(x=cp_data['x'], y=cp_data['y'], mode='markers',
+                                             marker=dict(color='red', size=8, symbol='x'),
+                                             name=f'Changepoints Track {track_id}'))
+    else:
+        # Assume DataFrame with columns track_id and changepoint_frame
+        cp_df = cp_obj
+        if isinstance(cp_df, pd.DataFrame) and not cp_df.empty and 'track_id' in cp_df.columns:
+            for track_id, cp_rows in cp_df.groupby('track_id'):
+                track_data = tracks_df[tracks_df['track_id'] == track_id]
+                if track_data.empty:
+                    continue
+                if 'frame' in track_data.columns and 'changepoint_frame' in cp_rows.columns:
+                    cp_data = track_data[track_data['frame'].isin(cp_rows['changepoint_frame'])]
+                else:
+                    cp_data = track_data.iloc[[0]]
                 if not cp_data.empty:
                     fig.add_trace(go.Scatter(x=cp_data['x'], y=cp_data['y'], mode='markers',
                                              marker=dict(color='red', size=8, symbol='x'),
@@ -1580,12 +1596,10 @@ def plot_energy_landscape(energy_data):
         
         return fig
         
-    except KeyError as e:
-        st.error(f"Missing required data for energy landscape plot: {e}")
-        return go.Figure()
-    except Exception as e:
-        st.error(f"Error creating energy landscape plot: {e}")
-        return go.Figure()
+    except KeyError:
+        return _empty_fig("Missing energy landscape data")
+    except Exception:
+        return _empty_fig("Failed to render energy landscape")
 
 def plot_polymer_physics_results(polymer_data):
     """
@@ -1629,6 +1643,5 @@ def plot_polymer_physics_results(polymer_data):
         
         return fig
         
-    except Exception as e:
-        st.error(f"Error creating polymer physics plot: {e}")
-        return go.Figure()
+    except Exception:
+        return _empty_fig("Failed to render polymer physics plot")
