@@ -1661,7 +1661,46 @@ def plot_hmm_state_transition_diagram(model) -> go.Figure:
 
     # Calculate diffusion coefficients for node colors
     # D = (var(dx) + var(dy)) / (2 * dt), assuming dt=1 for simplicity here
-    diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
+    # Handle different covariance types
+    cov_type = getattr(model, "covariance_type", "full")
+    n_states = model.n_components
+    n_features = getattr(model, "n_features", None)
+    if n_features is None:
+        # Try to infer n_features from covars_ shape
+        if cov_type == "full":
+            n_features = model.covars_.shape[1]
+        elif cov_type == "diag":
+            n_features = model.covars_.shape[1]
+        elif cov_type == "spherical":
+            n_features = 1  # fallback, may be updated below
+        elif cov_type == "tied":
+            n_features = model.covars_.shape[-1]
+    diffusion_coeffs = []
+    if cov_type == "full":
+        # model.covars_ shape: (n_states, n_features, n_features)
+        diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
+    elif cov_type == "diag":
+        # model.covars_ shape: (n_states, n_features)
+        diffusion_coeffs = [np.sum(cov) / 2 for cov in model.covars_]
+    elif cov_type == "spherical":
+        # model.covars_ shape: (n_states,) or (n_states, 1)
+        # Each cov is a scalar variance, but for multi-dimensional data, total variance is cov * n_features
+        for cov in model.covars_:
+            diffusion_coeffs.append((cov * n_features) / 2)
+    elif cov_type == "tied":
+        # model.covars_ shape: (n_features, n_features) or (n_features,)
+        cov = model.covars_
+        if cov.ndim == 2:
+            val = np.trace(cov) / 2
+        else:
+            val = np.sum(cov) / 2
+        diffusion_coeffs = [val] * n_states
+    else:
+        # fallback: try to use trace if possible
+        try:
+            diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
+        except Exception:
+            diffusion_coeffs = [0.0] * n_states
 
     # Node positions in a circle
     angle_step = 2 * np.pi / n_states
