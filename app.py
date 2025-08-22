@@ -691,7 +691,7 @@ nav_option = st.sidebar.radio(
     "Navigation",
     [
         "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
-        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
+        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation", "Interactive Dashboard"
     ]
 )
 
@@ -8056,6 +8056,10 @@ elif st.session_state.active_page == "Report Generation":
         show_enhanced_report_generator()
     else:
         st.error("Report generator module not available.")
+
+elif st.session_state.active_page == "Interactive Dashboard":
+    from interactive_dashboard import show
+    show()
 
 # Footer
 st.markdown("---")

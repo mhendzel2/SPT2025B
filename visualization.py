@@ -414,6 +414,102 @@ def plot_tracks_on_mask(
     return fig
 
 
+def generate_kymograph(
+    tracks_df: pd.DataFrame,
+    axis_start: Tuple[float, float],
+    axis_end: Tuple[float, float],
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0,
+    title: str = "Kymograph"
+) -> go.Figure:
+    """
+    Generate a kymograph from particle tracks along a user-defined axis.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
+    axis_start : Tuple[float, float]
+        The (x, y) coordinates of the start of the axis in pixels.
+    axis_end : Tuple[float, float]
+        The (x, y) coordinates of the end of the axis in pixels.
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 1.0.
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0.
+    title : str, optional
+        The plot title, by default "Kymograph".
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the kymograph.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data for kymograph.")
+
+    # Convert to physical units
+    df = tracks_df.copy()
+    df['x_um'] = df['x'] * pixel_size
+    df['y_um'] = df['y'] * pixel_size
+
+    # Axis vector in physical units
+    p1 = np.array(axis_start) * pixel_size
+    p2 = np.array(axis_end) * pixel_size
+    axis_vector = p2 - p1
+    axis_length = np.linalg.norm(axis_vector)
+    if axis_length == 0:
+        return _empty_fig("Axis for kymograph cannot have zero length.")
+    unit_axis_vector = axis_vector / axis_length
+
+    # Project all points onto the axis
+    points = df[['x_um', 'y_um']].values
+    vectors_from_start = points - p1
+    projections = np.dot(vectors_from_start, unit_axis_vector)
+
+    df['projection'] = projections
+
+    # Create the kymograph image
+    min_frame = int(df['frame'].min())
+    max_frame = int(df['frame'].max())
+    n_frames = max_frame - min_frame + 1
+
+    n_bins = int(axis_length / pixel_size)
+    if n_bins == 0:
+        n_bins = 100
+
+    kymograph_image = np.zeros((n_frames, n_bins))
+
+    projection_bins = np.linspace(0, axis_length, n_bins + 1)
+
+    df['frame_idx'] = (df['frame'] - min_frame).astype(int)
+    df['proj_bin'] = np.digitize(df['projection'], projection_bins) - 1
+
+    for _, row in df.iterrows():
+        frame_idx = int(row['frame_idx'])
+        proj_bin = int(row['proj_bin'])
+        if 0 <= frame_idx < n_frames and 0 <= proj_bin < n_bins:
+            kymograph_image[frame_idx, proj_bin] += 1
+
+    # Create the figure
+    fig = px.imshow(
+        kymograph_image,
+        labels=dict(x="Position along axis (µm)", y="Time (s)", color="Particle Count"),
+        x=np.linspace(0, axis_length, n_bins),
+        y=np.linspace(min_frame * frame_interval, max_frame * frame_interval, n_frames),
+        origin='lower'
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=f"Position along axis ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        yaxis_title=f"Time (s)",
+        template="plotly_white"
+    )
+
+    return fig
+
+
 def plot_hmm_state_diagram(model) -> MplFigure:
     """
     Create a state-transition diagram for a fitted HMM model.
@@ -471,6 +567,126 @@ def plot_hmm_state_diagram(model) -> MplFigure:
 
     ax.set_title("HMM State-Transition Diagram")
     plt.axis('off')
+
+    return fig
+
+
+def plot_velocity_field(
+    tracks_df: pd.DataFrame,
+    grid_size: int = 20,
+    min_vectors_per_bin: int = 3,
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0,
+    title: str = "Velocity Vector Field"
+) -> go.Figure:
+    """
+    Create a vector field plot of average particle velocities.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
+    grid_size : int, optional
+        The number of bins for the grid in each dimension, by default 20.
+    min_vectors_per_bin : int, optional
+        Minimum number of velocity vectors in a bin to display an arrow, by default 3.
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 1.0.
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0.
+    title : str, optional
+        The plot title, by default "Velocity Vector Field".
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the quiver plot.
+    """
+    if tracks_df.empty or len(tracks_df) < 2:
+        return _empty_fig("Not enough track data for velocity field.")
+
+    # Calculate velocities
+    tracks_df = tracks_df.sort_values(['track_id', 'frame'])
+    tracks_df['x_um'] = tracks_df['x'] * pixel_size
+    tracks_df['y_um'] = tracks_df['y'] * pixel_size
+
+    velocities = []
+    for track_id, track in tracks_df.groupby('track_id'):
+        if len(track) > 1:
+            dx = np.diff(track['x_um'].values)
+            dy = np.diff(track['y_um'].values)
+            dt = np.diff(track['frame'].values) * frame_interval
+
+            # Avoid division by zero for frames that are not consecutive
+            vx = np.divide(dx, dt, out=np.zeros_like(dx), where=dt!=0)
+            vy = np.divide(dy, dt, out=np.zeros_like(dy), where=dt!=0)
+
+            # Position is the start of the displacement vector
+            positions_x = track['x_um'].values[:-1]
+            positions_y = track['y_um'].values[:-1]
+
+            velocities.append(pd.DataFrame({
+                'x': positions_x,
+                'y': positions_y,
+                'vx': vx,
+                'vy': vy
+            }))
+
+    if not velocities:
+        return _empty_fig("Could not calculate any velocity vectors.")
+
+    all_velocities = pd.concat(velocities)
+
+    # Define grid
+    x_min, x_max = all_velocities['x'].min(), all_velocities['x'].max()
+    y_min, y_max = all_velocities['y'].min(), all_velocities['y'].max()
+
+    x_bins = np.linspace(x_min, x_max, grid_size + 1)
+    y_bins = np.linspace(y_min, y_max, grid_size + 1)
+
+    # Digitize positions to assign to bins
+    all_velocities['x_bin'] = np.digitize(all_velocities['x'], x_bins) - 1
+    all_velocities['y_bin'] = np.digitize(all_velocities['y'], y_bins) - 1
+
+    # Group by bin and calculate mean velocity
+    grouped = all_velocities.groupby(['x_bin', 'y_bin'])
+
+    x_coords, y_coords, u_vectors, v_vectors = [], [], [], []
+
+    for name, group in grouped:
+        x_bin, y_bin = name
+        if 0 <= x_bin < grid_size and 0 <= y_bin < grid_size:
+            if len(group) >= min_vectors_per_bin:
+                mean_vx = group['vx'].mean()
+                mean_vy = group['vy'].mean()
+
+                # Use center of bin for arrow position
+                x_center = (x_bins[x_bin] + x_bins[x_bin + 1]) / 2
+                y_center = (y_bins[y_bin] + y_bins[y_bin + 1]) / 2
+
+                x_coords.append(x_center)
+                y_coords.append(y_center)
+                u_vectors.append(mean_vx)
+                v_vectors.append(mean_vy)
+
+    if not x_coords:
+        return _empty_fig("No grid cells with enough vectors to plot.")
+
+    # Create quiver plot
+    from plotly import figure_factory as ff
+
+    fig = ff.create_quiver(x_coords, y_coords, u_vectors, v_vectors,
+                           scale=None,  # auto-scale
+                           arrow_scale=0.3,
+                           name='Velocity Vectors',
+                           line_width=1)
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=f"x ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        yaxis_title=f"y ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        template="plotly_white"
+    )
 
     return fig
 
