@@ -127,9 +127,9 @@ def _calculate_confidence_interval(value, std_err, n_samples, alpha=0.95):
     margin_of_error = t_val * std_err
     return value - margin_of_error, value + margin_of_error
 
-def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
-                     frame_interval: float = 1.0, min_track_length: int = 5, 
-                     fit_method: str = 'linear', analyze_anomalous: bool = True, 
+def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0,
+                     frame_interval: float = 1.0, min_track_length: int = 5,
+                     fit_method: str = 'linear', analyze_anomalous: bool = True,
                      check_confinement: bool = True) -> Dict[str, Any]:
     """
     Perform comprehensive diffusion analysis on track data.
@@ -160,10 +160,10 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
     """
     # Calculate MSD
     msd_df = calculate_msd(
-        tracks_df, 
-        max_lag=max_lag, 
-        pixel_size=pixel_size, 
-        frame_interval=frame_interval, 
+        tracks_df,
+        max_lag=max_lag,
+        pixel_size=pixel_size,
+        frame_interval=frame_interval,
         min_track_length=min_track_length
     )
 
@@ -304,12 +304,12 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             late_region = min(8, len(lag_times))
 
             early_slope, _, _, _, _ = linregress(
-                lag_times[:early_region], 
+                lag_times[:early_region],
                 msd_values[:early_region]
             )
 
             late_slope, _, _, _, _ = linregress(
-                lag_times[early_region:late_region], 
+                lag_times[early_region:late_region],
                 msd_values[early_region:late_region]
             )
 
@@ -374,9 +374,9 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
 
 # --- Motion Analysis ---
 
-def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5, 
+def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
                   analyze_velocity_autocorr: bool = True, analyze_persistence: bool = True,
-                  motion_classification: str = 'basic', min_track_length: int = 10, 
+                  motion_classification: str = 'basic', min_track_length: int = 10,
                   pixel_size: float = 1.0, frame_interval: float = 1.0) -> Dict[str, Any]:
     """
     Analyze motion characteristics of tracks.
@@ -641,11 +641,11 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
 
 # --- Clustering Analysis ---
 
-def analyze_clustering(tracks_df: pd.DataFrame, 
-                      method: str = 'DBSCAN', 
-                      epsilon: float = 0.5, 
+def analyze_clustering(tracks_df: pd.DataFrame,
+                      method: str = 'DBSCAN',
+                      epsilon: float = 0.5,
                       min_samples: int = 3,
-                      track_clusters: bool = True, 
+                      track_clusters: bool = True,
                       analyze_dynamics: bool = True,
                       pixel_size: float = 1.0) -> Dict[str, Any]:
     """
@@ -872,7 +872,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
 
                 for idx_pair in dist_indices:
                     i, j = idx_pair[0], idx_pair[1]
-                    if (j < len(prev_frame_clusters) and i < len(cluster_stats) and 
+                    if (j < len(prev_frame_clusters) and i < len(cluster_stats) and
                         j not in used_prev and cluster_track_ids[i] == -1):
                         if distances[i, j] <= 2 * epsilon:  # Use 2*epsilon as max linking distance
                             # Link this cluster to the track
@@ -978,7 +978,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
         if not cluster_dynamics_df.empty:
             results['ensemble_results']['n_cluster_tracks'] = len(cluster_dynamics_df)
             results['ensemble_results']['mean_cluster_duration'] = cluster_dynamics_df['duration'].mean()
-            results['ensemble_results']['n_stable_clusters'] = sum(cluster_dynamics_df['stable']) 
+            results['ensemble_results']['n_stable_clusters'] = sum(cluster_dynamics_df['stable'])
             results['ensemble_results']['stable_cluster_fraction'] = sum(cluster_dynamics_df['stable']) / len(cluster_dynamics_df)
         else:
             results['ensemble_results']['n_cluster_tracks'] = 0
@@ -991,8 +991,8 @@ def analyze_clustering(tracks_df: pd.DataFrame,
 
 # --- Dwell Time Analysis ---
 
-def analyze_dwell_time(tracks_df: pd.DataFrame, 
-                      regions=None, 
+def analyze_dwell_time(tracks_df: pd.DataFrame,
+                      regions=None,
                       threshold_distance: float = 0.5,
                       min_dwell_frames: int = 3,
                       pixel_size: float = 1.0,
@@ -1189,15 +1189,15 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
 
     # Create default dataframes with proper columns
     if not dwell_events:
-        dwell_events_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame', 
-                                              'dwell_frames', 'dwell_time', 'start_x', 'start_y', 
+        dwell_events_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame',
+                                              'dwell_frames', 'dwell_time', 'start_x', 'start_y',
                                               'end_x', 'end_y', 'mean_x', 'mean_y'])
     else:
         dwell_events_df = pd.DataFrame(dwell_events)
 
     if not track_results:
-        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration', 
-                                               'n_dwell_events', 'total_dwell_time', 
+        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration',
+                                               'n_dwell_events', 'total_dwell_time',
                                                'mean_dwell_time', 'dwell_fraction'])
     else:
         track_results_df = pd.DataFrame(track_results)
@@ -1241,8 +1241,8 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
 
 # --- Gel Structure Analysis ---
 
-def analyze_gel_structure(tracks_df: pd.DataFrame, 
-                         min_confinement_time: int = 5, 
+def analyze_gel_structure(tracks_df: pd.DataFrame,
+                         min_confinement_time: int = 5,
                          pixel_size: float = 1.0,
                          frame_interval: float = 1.0,
                          diffusion_threshold: float = 0.1) -> Dict[str, Any]:
@@ -1332,7 +1332,7 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
 
                 try:
                     slope, intercept, r_value, p_value, std_err = linregress(
-                        lag_times[:3], 
+                        lag_times[:3],
                         msd_values[:3]
                     )
 
@@ -1421,13 +1421,13 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
 
     # Create default dataframes with proper columns
     if not confined_regions:
-        confined_regions_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame', 'duration', 
+        confined_regions_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame', 'duration',
                                                   'center_x', 'center_y', 'radius', 'mean_diffusion'])
     else:
         confined_regions_df = pd.DataFrame(confined_regions)
 
     if not track_results:
-        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration', 'n_confined_regions', 
+        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration', 'n_confined_regions',
                                                'total_confined_time', 'confined_fraction', 'mean_confinement_radius'])
     else:
         track_results_df = pd.DataFrame(track_results)
@@ -1480,10 +1480,10 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
 
 # --- Diffusion Population Analysis ---
 
-def analyze_diffusion_population(tracks_df: pd.DataFrame, 
-                               max_lag: int = 20, 
+def analyze_diffusion_population(tracks_df: pd.DataFrame,
+                               max_lag: int = 20,
                                pixel_size: float = 1.0,
-                               frame_interval: float = 1.0, 
+                               frame_interval: float = 1.0,
                                min_track_length: int = 10,
                                n_populations: int = 2) -> Dict[str, Any]:
     """
@@ -1553,7 +1553,7 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
             try:
                 # Linear fit to first few points
                 slope, intercept, r_value, p_value, std_err = linregress(
-                    lag_times[:3], 
+                    lag_times[:3],
                     msd_values[:3]
                 )
 
@@ -1771,7 +1771,7 @@ def analyze_diffusion_population(tracks_df: pd.DataFrame,
 
 # --- Crowding Analysis ---
 
-def analyze_crowding(tracks_df: pd.DataFrame, 
+def analyze_crowding(tracks_df: pd.DataFrame,
                     radius_of_influence: float = 2.0,
                     pixel_size: float = 1.0,
                     min_track_length: int = 5) -> Dict[str, Any]:
@@ -1911,7 +1911,7 @@ def analyze_crowding(tracks_df: pd.DataFrame,
             density_tertiles = np.percentile(disp_densities, [33, 66])
 
             low_density_disp = displacements[disp_densities <= density_tertiles[0]]
-            med_density_disp = displacements[(disp_densities > density_tertiles[0]) & 
+            med_density_disp = displacements[(disp_densities > density_tertiles[0]) &
                                           (disp_densities <= density_tertiles[1])]
             high_density_disp = displacements[disp_densities > density_tertiles[1]]
 
@@ -1927,8 +1927,8 @@ def analyze_crowding(tracks_df: pd.DataFrame,
 
             # Calculate crowding effect ratio
             crowding_effect = high_density_median / low_density_median if (
-                not np.isnan(high_density_median) and 
-                not np.isnan(low_density_median) and 
+                not np.isnan(high_density_median) and
+                not np.isnan(low_density_median) and
                 low_density_median > 0
             ) else np.nan
 
@@ -1978,9 +1978,9 @@ def analyze_crowding(tracks_df: pd.DataFrame,
         }
 
         # Count tracks with different correlation types
-        neg_corr = np.sum((track_results_df['density_displacement_correlation'] < -0.3) & 
+        neg_corr = np.sum((track_results_df['density_displacement_correlation'] < -0.3) &
                           (track_results_df['correlation_p_value'] < 0.05))
-        pos_corr = np.sum((track_results_df['density_displacement_correlation'] > 0.3) & 
+        pos_corr = np.sum((track_results_df['density_displacement_correlation'] > 0.3) &
                          (track_results_df['correlation_p_value'] < 0.05))
         no_corr = len(track_results_df) - neg_corr - pos_corr
 
@@ -1997,7 +1997,7 @@ def analyze_crowding(tracks_df: pd.DataFrame,
 
 # --- Active Transport Analysis ---
 
-def analyze_active_transport(tracks_df: pd.DataFrame, 
+def analyze_active_transport(tracks_df: pd.DataFrame,
                             window_size: int = 5,
                             min_track_length: int = 10,
                             pixel_size: float = 1.0,
@@ -2246,7 +2246,7 @@ def analyze_active_transport(tracks_df: pd.DataFrame,
 
 # --- Boundary Crossing Analysis ---
 
-def analyze_boundary_crossing(tracks_df: pd.DataFrame, 
+def analyze_boundary_crossing(tracks_df: pd.DataFrame,
                              boundaries=None,
                              pixel_size: float = 1.0,
                              frame_interval: float = 1.0,
@@ -2373,7 +2373,7 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
                                         'orientation': 'y=mx+b',
                                         'x_min': np.min(cluster_points[:, 0]),
                                         'x_max': np.max(cluster_points[:, 0]),
-                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries) 
+                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries)
                                                           if labels[i] == label])
                                     }]
                                     break
@@ -2391,7 +2391,7 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
                                         'orientation': 'x=my+b',
                                         'y_min': np.min(cluster_points[:, 1]),
                                         'y_max': np.max(cluster_points[:, 1]),
-                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries) 
+                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries)
                                                           if labels[i] == label])
                                     }]
                                     break
