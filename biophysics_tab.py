@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from analysis_manager import AnalysisManager
 from advanced_biophysical_metrics import AdvancedMetricsAnalyzer, MetricConfig
+from visualization import plot_advanced_metric_diagnostics
 
 def show_advanced_biophysical_metrics():
     st.subheader("Advanced Biophysical Metrics")
@@ -44,41 +45,45 @@ def show_advanced_biophysical_metrics():
         st.subheader("Summary")
         st.write(res['summary'])
 
-        # NGP
-        ngp = res['ngp']
-        if isinstance(ngp, pd.DataFrame) and not ngp.empty:
-            st.subheader("Non-Gaussian Parameter")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=ngp['tau_s'], y=ngp['NGP_1D'], mode='lines+markers', name='NGP 1D (Δx)'))
-            fig.add_trace(go.Scatter(x=ngp['tau_s'], y=ngp['NGP_2D'], mode='lines+markers', name='NGP 2D (Δr)'))
-            fig.update_layout(xaxis_title="τ (s)", yaxis_title="NGP", hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-            with st.expander("NGP table"):
-                st.dataframe(ngp, use_container_width=True, hide_index=True)
+        # Create the composite diagnostics plot
+        st.subheader("Advanced Metric Diagnostics")
+        lags = res['summary']['lags']
+        if lags:
+            # Prepare data for the plot
+            erg_df = res.get('ergodicity', pd.DataFrame())
+            ngp_df = res.get('ngp', pd.DataFrame())
 
-        # Ergodicity metrics
-        erg = res['ergodicity']
-        if isinstance(erg, pd.DataFrame) and not erg.empty:
-            st.subheader("Ergodicity Metrics")
-            c1, c2 = st.columns(2)
-            with c1:
-                f1 = go.Figure()
-                f1.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_ratio'], mode='lines+markers', name='EB ratio'))
-                if {'EB_ratio_CI_low','EB_ratio_CI_high'}.issubset(erg.columns):
-                    f1.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_ratio_CI_low'], mode='lines', name='CI low', line=dict(dash='dot')))
-                    f1.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_ratio_CI_high'], mode='lines', name='CI high', line=dict(dash='dot'), fill='tonexty'))
-                f1.update_layout(xaxis_title="τ (s)", yaxis_title="⟨TAMSD⟩/EAMSD")
-                st.plotly_chart(f1, use_container_width=True)
-            with c2:
-                f2 = go.Figure()
-                f2.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_parameter'], mode='lines+markers', name='EB parameter'))
-                if {'EB_param_CI_low','EB_param_CI_high'}.issubset(erg.columns):
-                    f2.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_param_CI_low'], mode='lines', name='CI low', line=dict(dash='dot')))
-                    f2.add_trace(go.Scatter(x=erg['tau_s'], y=erg['EB_param_CI_high'], mode='lines', name='CI high', line=dict(dash='dot'), fill='tonexty'))
-                f2.update_layout(xaxis_title="τ (s)", yaxis_title="EB parameter")
-                st.plotly_chart(f2, use_container_width=True)
-            with st.expander("Ergodicity table"):
-                st.dataframe(erg, use_container_width=True, hide_index=True)
+            # Get Van Hove data for a short and long lag
+            cfg = MetricConfig(**params)
+            analyzer = AdvancedMetricsAnalyzer(am.state.get_raw_tracks(), cfg)
+
+            short_lag_idx = lags[0]
+            long_lag_idx = lags[min(len(lags)-1, 5)] # Use 5th lag or last if fewer
+
+            vh_short = analyzer.van_hove(short_lag_idx)
+            vh_long = analyzer.van_hove(long_lag_idx)
+
+            short_lag_time_val = short_lag_idx * params.get('frame_interval', 1.0)
+            long_lag_time_val = long_lag_idx * params.get('frame_interval', 1.0)
+
+            diag_fig = plot_advanced_metric_diagnostics(
+                ergodicity_df=erg_df,
+                ngp_df=ngp_df,
+                van_hove_short_lag=vh_short,
+                van_hove_long_lag=vh_long,
+                short_lag_time=short_lag_time_val,
+                long_lag_time=long_lag_time_val
+            )
+            st.plotly_chart(diag_fig, use_container_width=True)
+
+            # Keep expanders for detailed tables
+            with st.expander("Ergodicity Table"):
+                st.dataframe(erg_df, use_container_width=True, hide_index=True)
+            with st.expander("NGP Table"):
+                st.dataframe(ngp_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Not enough data to generate diagnostic plots.")
+
 
         # VACF
         vacf = res['vacf']
@@ -90,31 +95,6 @@ def show_advanced_biophysical_metrics():
             st.plotly_chart(f, use_container_width=True)
             with st.expander("VACF table"):
                 st.dataframe(vacf, use_container_width=True, hide_index=True)
-
-        # van Hove
-        st.subheader("van Hove Self-part Distributions")
-        lags = res['summary']['lags']
-        if lags:
-            chosen_lag = st.select_slider("Lag (frames)", options=lags, value=lags[0])
-            clip = st.slider("Clip to σ (0 = none)", 0.0, 6.0, 0.0, 0.5)
-            cfg = MetricConfig(pixel_size=float(px), frame_interval=float(dt),
-                               min_track_length=int(min_len), max_lag=max(lags),
-                               log_lag=False, n_hist_bins=int(n_bins), seed=int(seed),
-                               n_bootstrap=int(n_boot))
-            analyzer = AdvancedMetricsAnalyzer(am.state.get_raw_tracks(), cfg)
-            vh = analyzer.van_hove(chosen_lag, bins=int(n_bins), clip_sigma=None if clip == 0 else clip)
-            if vh['dx_centers'].size:
-                c1, c2 = st.columns(2)
-                with c1:
-                    fx = go.Figure()
-                    fx.add_trace(go.Bar(x=vh['dx_centers'], y=vh['dx_density'], name='p(Δx)'))
-                    fx.update_layout(xaxis_title="Δx (μm)", yaxis_title="density")
-                    st.plotly_chart(fx, use_container_width=True)
-                with c2:
-                    fr = go.Figure()
-                    fr.add_trace(go.Bar(x=vh['r_centers'], y=vh['r_density'], name='p(Δr)'))
-                    fr.update_layout(xaxis_title="Δr (μm)", yaxis_title="density")
-                    st.plotly_chart(fr, use_container_width=True)
 
         # TAMSD / EAMSD & Hurst
         tamsd = res['tamsd']; eamsd = res['eamsd']
