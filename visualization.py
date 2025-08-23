@@ -353,7 +353,7 @@ def plot_tracks(
             colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
     else:
         # Default coloring by track_id
-    colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+        colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
     
     # Determine min and max frame for time-coded colors if needed
     if plot_type == 'time_coded' and 'frame' in df.columns:
@@ -366,8 +366,8 @@ def plot_tracks(
         track_data = df[df['track_id'] == track_id]
         if 'frame' in track_data.columns:
             track_data = track_data.sort_values('frame')
-        
-    if plot_type == 'time_coded' and 'frame' in track_data.columns:
+
+        if plot_type == 'time_coded' and 'frame' in track_data.columns:
             # For time-coded tracks, use a scatter plot with color gradient
             color_vals = (track_data['frame'] - min_frame) / (max_frame - min_frame) if max_frame > min_frame else 0.5
             
