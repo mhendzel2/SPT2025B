@@ -2027,3 +2027,144 @@ def plot_polymer_physics_results(polymer_data):
         
     except Exception:
         return _empty_fig("Failed to render polymer physics plot")
+
+
+def plot_pca_results(pca_results: Dict[str, Any]) -> Dict[str, go.Figure]:
+    """
+    Create visualizations for PCA results.
+
+    Parameters
+    ----------
+    pca_results : dict
+        The results from the perform_pca function.
+
+    Returns
+    -------
+    dict
+        A dictionary of Plotly figures for the scree plot and biplot.
+    """
+    if not pca_results.get('success', False):
+        return {"empty": _empty_fig("PCA analysis failed or no data.")}
+
+    figs = {}
+
+    # 1. Scree Plot
+    explained_variance = pca_results['explained_variance_ratio']
+    n_components = len(explained_variance)
+
+    scree_fig = go.Figure()
+    scree_fig.add_trace(go.Bar(
+        x=[f'PC{i+1}' for i in range(n_components)],
+        y=explained_variance,
+        name='Explained Variance'
+    ))
+    scree_fig.add_trace(go.Scatter(
+        x=[f'PC{i+1}' for i in range(n_components)],
+        y=np.cumsum(explained_variance),
+        name='Cumulative Variance'
+    ))
+    scree_fig.update_layout(
+        title="PCA Scree Plot",
+        xaxis_title="Principal Component",
+        yaxis_title="Explained Variance Ratio",
+        template="plotly_white"
+    )
+    figs['scree_plot'] = scree_fig
+
+    # 2. Biplot (Loadings Plot)
+    components = pca_results['components']
+    labels = pca_results['feature_names']
+
+    if n_components >= 2:
+        biplot_fig = go.Figure()
+        for i, feature in enumerate(labels):
+            biplot_fig.add_shape(
+                type='line',
+                x0=0, y0=0,
+                x1=components[0, i],
+                y1=components[1, i]
+            )
+            biplot_fig.add_annotation(
+                x=components[0, i],
+                y=components[1, i],
+                ax=0, ay=0,
+                xanchor="center",
+                yanchor="bottom",
+                text=feature
+            )
+
+        # Add a circle for reference
+        biplot_fig.add_shape(type="circle",
+                           xref="x", yref="y",
+                           x0=-1, y0=-1, x1=1, y1=1,
+                           line_color="LightSeaGreen")
+
+        biplot_fig.update_layout(
+            title="PCA Biplot",
+            xaxis_title="PC1",
+            yaxis_title="PC2",
+            template="plotly_white"
+        )
+        figs['biplot'] = biplot_fig
+
+    return figs
+
+
+def plot_persistence_diagram(tda_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create a persistence diagram plot from TDA results.
+
+    Parameters
+    ----------
+    tda_results : dict
+        The results from the perform_tda function.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the persistence diagram.
+    """
+    if not tda_results.get('success', False):
+        return _empty_fig("TDA analysis failed or no data.")
+
+    try:
+        from giotto_tda.diagrams import PersistenceDiagram
+    except ImportError:
+        return _empty_fig("giotto-tda is not available.")
+
+    diagram = tda_results['diagram']
+
+    fig = go.Figure()
+
+    homology_dims = np.unique(diagram[:, 2])
+
+    for dim in homology_dims:
+        dim_points = diagram[diagram[:, 2] == dim]
+        births = dim_points[:, 0]
+        deaths = dim_points[:, 1]
+
+        # Filter out infinite death times for plotting
+        finite_mask = np.isfinite(deaths)
+        finite_deaths = deaths[finite_mask]
+        finite_births = births[finite_mask]
+
+        fig.add_trace(go.Scatter(
+            x=finite_births,
+            y=finite_deaths,
+            mode='markers',
+            name=f'H{int(dim)}'
+        ))
+
+    # Add diagonal line
+    if diagram.size > 0:
+        max_val = np.max(diagram[np.isfinite(diagram[:, 1])]) if np.any(np.isfinite(diagram[:, 1])) else 1
+        fig.add_shape(type='line', x0=0, y0=0, x1=max_val, y1=max_val, line=dict(dash='dash'))
+
+    fig.update_layout(
+        title="Persistence Diagram",
+        xaxis_title="Birth",
+        yaxis_title="Death",
+        template="plotly_white"
+    )
+
+    return fig
