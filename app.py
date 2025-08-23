@@ -52,14 +52,34 @@ from state_manager import get_state_manager
 from analysis_manager import AnalysisManager
 
 # Import new page modules for multi-page architecture
+import importlib
+
+# Attempt to dynamically import optional page modules; if unavailable, mark as not available
+PAGES_AVAILABLE = True
 try:
-    from pages.data_loading import show_data_loading_page, detect_file_format
-    from pages.analysis import show_analysis_page
-    from pages.visualization import show_visualization_page
-    from pages.tracking import show_tracking_page
+    # Import pages package and individual modules dynamically to avoid static import errors
+    _mod = importlib.import_module("pages.data_loading")
+    show_data_loading_page = getattr(_mod, "show_data_loading_page", None)
+    detect_file_format = getattr(_mod, "detect_file_format", None)
+
+    _mod = importlib.import_module("pages.analysis")
+    show_analysis_page = getattr(_mod, "show_analysis_page", None)
+
+    _mod = importlib.import_module("pages.visualization")
+    show_visualization_page = getattr(_mod, "show_visualization_page", None)
+
+    _mod = importlib.import_module("pages.tracking")
+    show_tracking_page = getattr(_mod, "show_tracking_page", None)
+
     PAGES_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
+    # Optional pages module not present — set fallbacks so rest of the app can run
     PAGES_AVAILABLE = False
+    show_data_loading_page = None
+    detect_file_format = None
+    show_analysis_page = None
+    show_visualization_page = None
+    show_tracking_page = None
 from utils import initialize_session_state, calculate_track_statistics, format_track_data, create_analysis_record, sync_global_parameters, get_global_pixel_size, get_global_frame_interval
 from special_file_handlers import load_ms2_spots_file, load_imaris_file
 from image_processing_utils import (
@@ -7060,7 +7080,39 @@ elif st.session_state.active_page == "Advanced Analysis":
                     st.write("Means (dx, dy):")
                     st.write(model.means_)
                     st.write("Covariances:")
-                    st.write(model.covars_)
+                    covars = getattr(model, "covars_", None)
+                    cov_type = getattr(model, "covariance_type", "full")
+                    if covars is None:
+                        st.info("No covariance matrix available.")
+                    else:
+                        try:
+                            if cov_type == "full":
+                                # Shape: (n_components, n_features, n_features)
+                                n_components = covars.shape[0]
+                                for i in range(n_components):
+                                    st.caption(f"State {i} covariance")
+                                    df_cov = pd.DataFrame(covars[i])
+                                    st.dataframe(df_cov)
+                            elif cov_type == "tied":
+                                # Shape: (n_features, n_features)
+                                st.dataframe(pd.DataFrame(covars))
+                            elif cov_type == "diag":
+                                # Shape: (n_components, n_features)
+                                df_diag = pd.DataFrame(covars, columns=[f"f{j}" for j in range(covars.shape[1])])
+                                df_diag.index = [f"state_{i}" for i in range(covars.shape[0])]
+                                st.dataframe(df_diag)
+                            elif cov_type == "spherical":
+                                # Shape: (n_components,)
+                                df_sph = pd.DataFrame({"variance": covars})
+                                df_sph.index = [f"state_{i}" for i in range(len(covars))]
+                                st.dataframe(df_sph)
+                            else:
+                                # Fallback: display as text/array
+                                st.write(covars)
+                        except Exception:
+                            # As a last resort, show a readable string
+                            import numpy as _np
+                            st.text(_np.array2string(_np.asarray(covars), precision=4, suppress_small=True))
                     st.write("Transition Matrix:")
                     st.write(model.transmat_)
 
