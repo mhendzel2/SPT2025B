@@ -24,12 +24,15 @@ def get_track_data() -> Tuple[Optional[pd.DataFrame], bool]:
     tuple
         (tracks_df, has_data) - DataFrame and boolean indicating if data exists
     """
-    # Method 1: Try state manager first
+    # Method 1: Try state manager first, but validate the returned object
     if STATE_MANAGER_AVAILABLE:
         try:
             sm = get_state_manager() if 'get_state_manager' in globals() else StateManager()
             if sm.has_data():
-                return sm.get_tracks(), True
+                df = sm.get_tracks()
+                # Only return if it's a valid, non-empty DataFrame; otherwise fall through to other methods
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    return df, True
         except Exception:
             pass
     
@@ -147,6 +150,10 @@ def check_data_availability(show_error: bool = True) -> bool:
 def display_data_summary():
     """Display a summary of loaded data."""
     tracks_df, has_data = get_track_data()
+    # Extra guard in case upstream returned an unexpected type
+    if has_data and not isinstance(tracks_df, pd.DataFrame):
+        has_data = False
+        tracks_df = None
     
     if has_data:
         st.success(f"✅ Track data loaded: {len(tracks_df)} points")
