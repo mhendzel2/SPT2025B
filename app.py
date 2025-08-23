@@ -5407,8 +5407,6 @@ elif st.session_state.active_page == "Analysis":
                     if 'region_stats' in results:
                         st.subheader("Region Statistics")
                         st.dataframe(results['region_stats'])
-                else:
-                    st.warning("No dwell events available to display.")
                     
                 # Dwell statistics
                 st.subheader("Dwell Statistics")
