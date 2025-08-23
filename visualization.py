@@ -309,6 +309,172 @@ def plot_tracks_3d(
     return fig
 
 
+def plot_tracks_on_mask(
+    tracks_df: pd.DataFrame,
+    segmentation_mask: np.ndarray,
+    original_image: np.ndarray,
+    max_tracks: int = 50,
+    colormap: str = 'viridis',
+    track_color: str = 'red',
+    track_width: int = 1,
+    title: str = "Tracks on Segmented Image"
+) -> go.Figure:
+    """
+    Create an interactive plot of particle tracks on a segmented image.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with columns 'track_id', 'x', 'y'.
+    segmentation_mask : np.ndarray
+        2D numpy array representing the segmentation mask.
+    original_image : np.ndarray
+        2D numpy array representing the original image.
+    max_tracks : int, optional
+        Maximum number of tracks to display, by default 50.
+    colormap : str, optional
+        Colormap for the segmentation mask, by default 'viridis'.
+    track_color : str, optional
+        Color for the tracks, by default 'red'.
+    track_width : int, optional
+        Width of the track lines, by default 1.
+    title : str, optional
+        Plot title, by default "Tracks on Segmented Image".
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Interactive plot of tracks on the segmented image.
+    """
+    fig = go.Figure()
+
+    # Add original image as background
+    # Using a workaround to get a PIL Image source for plotly
+    from PIL import Image
+    img = Image.fromarray(original_image)
+
+    fig.add_layout_image(
+        dict(
+            source=img,
+            xref="x",
+            yref="y",
+            x=0,
+            y=0,
+            sizex=original_image.shape[1],
+            sizey=original_image.shape[0],
+            sizing="stretch",
+            opacity=1.0,
+            layer="below"
+        )
+    )
+
+    # Add segmentation mask as a heatmap
+    fig.add_trace(
+        go.Heatmap(
+            z=segmentation_mask,
+            colorscale=colormap,
+            opacity=0.5,
+            showscale=False
+        )
+    )
+
+    # Get unique track IDs and limit to max_tracks
+    unique_tracks = tracks_df['track_id'].unique()
+    if max_tracks > 0 and len(unique_tracks) > max_tracks:
+        # Use a deterministic way to sample tracks
+        # Sorting ensures that we get the same tracks every time
+        unique_tracks = sorted(unique_tracks)[:max_tracks]
+
+    # Plot tracks
+    for track_id in unique_tracks:
+        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        fig.add_trace(
+            go.Scatter(
+                x=track_data['x'],
+                y=track_data['y'],
+                mode='lines',
+                line=dict(color=track_color, width=track_width),
+                name=f'Track {track_id}',
+                showlegend=False
+            )
+        )
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="x (pixels)",
+        yaxis_title="y (pixels)",
+        template="plotly_white",
+        height=original_image.shape[0],
+        width=original_image.shape[1],
+        xaxis=dict(range=[0, original_image.shape[1]]),
+        yaxis=dict(range=[0, original_image.shape[0]], autorange="reversed") # reversed to match image coordinates
+    )
+
+    return fig
+
+
+def plot_hmm_state_diagram(model) -> MplFigure:
+    """
+    Create a state-transition diagram for a fitted HMM model.
+
+    Parameters
+    ----------
+    model : hmmlearn.hmm.GaussianHMM
+        A fitted HMM model from the hmmlearn library.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        A matplotlib figure showing the state-transition diagram.
+    """
+    if not hasattr(model, 'transmat_'):
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "Invalid HMM model: missing transition matrix.",
+                ha='center', va='center')
+        return fig
+
+    try:
+        import networkx as nx
+    except ImportError:
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "NetworkX is not installed. Please install it.",
+                ha='center', va='center')
+        return fig
+
+    trans_mat = model.transmat_
+    n_states = model.n_components
+
+    G = nx.DiGraph()
+
+    for i in range(n_states):
+        G.add_node(i, label=f'State {i}')
+
+    for i in range(n_states):
+        for j in range(n_states):
+            prob = trans_mat[i, j]
+            if prob > 0.01:  # Only show significant transitions
+                G.add_edge(i, j, weight=prob, label=f'{prob:.2f}')
+
+    pos = nx.circular_layout(G)
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    nx.draw_networkx_nodes(G, pos, ax=ax, node_size=2000, node_color='skyblue')
+    nx.draw_networkx_labels(G, pos, ax=ax, labels=nx.get_node_attributes(G, 'label'), font_size=12)
+
+    # Edges
+    edge_labels = nx.get_edge_attributes(G, 'label')
+    nx.draw_networkx_edges(G, pos, ax=ax, node_size=2000, arrowstyle='->',
+                           arrowsize=20, connectionstyle='arc3,rad=0.1')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax, font_color='red')
+
+    ax.set_title("HMM State-Transition Diagram")
+    plt.axis('off')
+
+    return fig
+
+
 def plot_tracks_time_series(
     tracks: pd.DataFrame,
     y_vars: List[str],
@@ -1056,9 +1222,9 @@ def plot_changepoint_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
         return _empty_fig("No changepoint analysis data available")
 
     tracks_df = analysis_results.get('tracks_df')
-    changepoints = analysis_results.get('changepoints') # This is a dict {track_id: [frame1, frame2]}
+    cp_obj = analysis_results.get('changepoints') # May be dict or DataFrame
 
-    if tracks_df is None or changepoints is None:
+    if tracks_df is None or (isinstance(tracks_df, pd.DataFrame) and tracks_df.empty) or cp_obj is None:
         return _empty_fig("Track or changepoint data is missing.")
 
     fig = go.Figure()
@@ -1070,11 +1236,27 @@ def plot_changepoint_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
                                  showlegend=False))
 
     # Highlight changepoints
-    if changepoints:
-        for track_id, cp_frames in changepoints.items():
+    if isinstance(cp_obj, dict):
+        for track_id, cp_frames in cp_obj.items():
             track_data = tracks_df[tracks_df['track_id'] == track_id]
-            if not track_data.empty:
-                cp_data = track_data[track_data['frame'].isin(cp_frames)]
+            if not track_data.empty and cp_frames:
+                cp_data = track_data[track_data['frame'].isin(cp_frames)] if 'frame' in track_data.columns else track_data.iloc[[0]]
+                if not cp_data.empty:
+                    fig.add_trace(go.Scatter(x=cp_data['x'], y=cp_data['y'], mode='markers',
+                                             marker=dict(color='red', size=8, symbol='x'),
+                                             name=f'Changepoints Track {track_id}'))
+    else:
+        # Assume DataFrame with columns track_id and changepoint_frame
+        cp_df = cp_obj
+        if isinstance(cp_df, pd.DataFrame) and not cp_df.empty and 'track_id' in cp_df.columns:
+            for track_id, cp_rows in cp_df.groupby('track_id'):
+                track_data = tracks_df[tracks_df['track_id'] == track_id]
+                if track_data.empty:
+                    continue
+                if 'frame' in track_data.columns and 'changepoint_frame' in cp_rows.columns:
+                    cp_data = track_data[track_data['frame'].isin(cp_rows['changepoint_frame'])]
+                else:
+                    cp_data = track_data.iloc[[0]]
                 if not cp_data.empty:
                     fig.add_trace(go.Scatter(x=cp_data['x'], y=cp_data['y'], mode='markers',
                                              marker=dict(color='red', size=8, symbol='x'),
@@ -1580,12 +1762,10 @@ def plot_energy_landscape(energy_data):
         
         return fig
         
-    except KeyError as e:
-        st.error(f"Missing required data for energy landscape plot: {e}")
-        return go.Figure()
-    except Exception as e:
-        st.error(f"Error creating energy landscape plot: {e}")
-        return go.Figure()
+    except KeyError:
+        return _empty_fig("Missing energy landscape data")
+    except Exception:
+        return _empty_fig("Failed to render energy landscape")
 
 def plot_polymer_physics_results(polymer_data):
     """
@@ -1629,6 +1809,5 @@ def plot_polymer_physics_results(polymer_data):
         
         return fig
         
-    except Exception as e:
-        st.error(f"Error creating polymer physics plot: {e}")
-        return go.Figure()
+    except Exception:
+        return _empty_fig("Failed to render polymer physics plot")

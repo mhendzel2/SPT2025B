@@ -84,6 +84,30 @@ class StateManager:
         """Alias for code paths expecting a safe getter."""
         return self.get_tracks()
 
+    # Backward-compatible predicate used by multiple modules
+    def has_data(self) -> bool:
+        """Return True if any track dataframe is available and non-empty.
+
+        Checks internal stored dataframe first, then common session_state keys:
+        'tracks_df', 'tracks_data', 'raw_tracks_df', 'raw_tracks', 'track_data'.
+        """
+        try:
+            df = self.get_tracks()
+            if df is not None and hasattr(df, 'empty') and not df.empty:
+                return True
+        except Exception:
+            pass
+
+        # Fallbacks in session_state
+        for key in ('tracks_df', 'tracks_data', 'raw_tracks_df', 'raw_tracks', 'track_data'):
+            try:
+                val = st.session_state.get(key)
+                if val is not None and hasattr(val, 'empty') and not val.empty:
+                    return True
+            except Exception:
+                continue
+        return False
+
     @property
     def has_tracks(self) -> bool:
         df = self.get_tracks()
@@ -317,6 +341,23 @@ class StateManager:
 
         return summary
 
+    def debug_data_state(self) -> Dict[str, Any]:
+        """Return a diagnostic mapping of where data is found and basic shapes."""
+        info: Dict[str, Any] = {}
+        keys = ('tracks_df', 'tracks_data', 'raw_tracks_df', 'raw_tracks', 'track_data')
+        for key in keys:
+            val = st.session_state.get(key)
+            has_df = val is not None and hasattr(val, 'empty') and not val.empty
+            shape = getattr(val, 'shape', None) if has_df else None
+            info[key] = {'present': val is not None, 'as_dataframe': has_df, 'shape': shape}
+        internal = self.get_tracks()
+        info['internal'] = {
+            'present': internal is not None,
+            'as_dataframe': internal is not None and hasattr(internal, 'empty') and not internal.empty,
+            'shape': getattr(internal, 'shape', None) if internal is not None else None,
+        }
+        return info
+
     def export_state(self) -> Dict[str, Any]:
         """Export current state for backup/restore."""
         exportable_state = {}
@@ -358,7 +399,7 @@ class StateManager:
         # Analysis results
         if 'analysis_results' in state_data:
             try:
-                ss['analysis_results'] = dict(state_data['analysis_results'])
+                st.session_state['analysis_results'] = dict(state_data['analysis_results'])
             except Exception as e:
                 st.warning(f"Failed to import analysis_results: {e}")
 
