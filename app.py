@@ -5056,13 +5056,21 @@ elif st.session_state.active_page == "Analysis":
                     
                     # Generate motion analysis visualizations
                     try:
-                        motion_plots = plot_motion_analysis(results)
-                        if motion_plots and not motion_plots.get("empty"):
-                            st.subheader("Motion Analysis Visualizations")
-                            for plot_name, fig in motion_plots.items():
-                                if fig and plot_name != "empty":
-                                    st.subheader(plot_name.replace("_", " ").title())
-                                    st.plotly_chart(fig, use_container_width=True)
+                        motion_vis = plot_motion_analysis(results)
+                        # plot_motion_analysis may return a Matplotlib Figure or a dict of Plotly figures
+                        from matplotlib.figure import Figure as MplFigure
+                        if isinstance(motion_vis, MplFigure):
+                            st.subheader("Motion Analysis Visualization")
+                            st.pyplot(motion_vis, use_container_width=True)
+                        elif isinstance(motion_vis, dict):
+                            if motion_vis and not motion_vis.get("empty"):
+                                st.subheader("Motion Analysis Visualizations")
+                                for plot_name, fig in motion_vis.items():
+                                    if fig and plot_name != "empty":
+                                        st.subheader(plot_name.replace("_", " ").title())
+                                        st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("No visualization data available for motion analysis.")
                         else:
                             st.info("No visualization data available for motion analysis.")
                     except Exception as e:

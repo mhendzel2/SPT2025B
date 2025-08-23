@@ -118,12 +118,12 @@ class EnhancedSPTReportGenerator:
     def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
         self.state_manager = get_state_manager() if STATE_MANAGER_AVAILABLE else None
-        
+
         # Ensure track data available if previously loaded
-        sm = get_state_manager()
-        if not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty):
+        sm = get_state_manager() if STATE_MANAGER_AVAILABLE else None
+        if sm and (not hasattr(self, "track_df") or self.track_df is None or (hasattr(self.track_df, "empty") and self.track_df.empty)):
             tracks = sm.get_tracks_or_none()
-            if tracks is not None:
+            if tracks is not None and hasattr(tracks, 'empty') and not tracks.empty:
                 self.track_df = tracks
                 self.tracks = tracks  # legacy alias
         
@@ -248,11 +248,14 @@ class EnhancedSPTReportGenerator:
             # Fallback to original method
             has_data = False
             tracks_df = None
-            
+
             if self.state_manager:
-                has_data = self.state_manager.has_data()
-                if has_data:
-                    tracks_df = self.state_manager.get_tracks()
+                try:
+                    has_data = self.state_manager.has_data()
+                    if has_data:
+                        tracks_df = self.state_manager.get_tracks()
+                except Exception:
+                    has_data = False
             else:
                 # Fallback to direct session state access
                 tracks_df = st.session_state.get('tracks_df') or st.session_state.get('raw_tracks') or st.session_state.get('tracks_data')
@@ -266,8 +269,11 @@ class EnhancedSPTReportGenerator:
                 if st.checkbox("Show debug information"):
                     st.write("Session state keys:", list(st.session_state.keys()))
                     if self.state_manager:
-                        st.write("State manager data summary:", self.state_manager.get_data_summary())
-                        st.write("Debug state:", self.state_manager.debug_data_state())
+                        try:
+                            st.write("State manager data summary:", self.state_manager.get_data_summary())
+                            st.write("Debug state:", self.state_manager.debug_data_state())
+                        except Exception as e:
+                            st.write(f"State manager error: {e}")
                 return
             
             st.success(f"✅ Track data loaded: {len(tracks_df)} points")
@@ -504,7 +510,8 @@ class EnhancedSPTReportGenerator:
                 
                 # Generate visualization from existing data
                 fig = analysis['visualization'](analysis_results[analysis_key])
-                if fig:
+                # Some visualization functions may return dict of plotly figs or matplotlib
+                if fig is not None:
                     self.report_figures[analysis_key] = fig
                 st.success(f"✅ Added {analysis['name']} to report")
                 
@@ -546,7 +553,7 @@ class EnhancedSPTReportGenerator:
     def _plot_basic_statistics(self, result):
         """Full implementation for basic statistics visualization."""
         try:
-            from visualization import plot_track_statistics
+            from visualization import plot_track_statistics, _empty_fig
             
             stats_df = result.get('statistics_df')
             if stats_df is None or stats_df.empty:
@@ -806,7 +813,13 @@ class EnhancedSPTReportGenerator:
         try:
             if CHANGEPOINT_DETECTION_AVAILABLE:
                 detector = ChangePointDetector()
-                return detector.detect_changepoints(tracks_df)
+                # Use the implemented API in changepoint_detection.py
+                res = detector.detect_motion_regime_changes(tracks_df)
+                # Attach tracks for downstream visualization
+                if isinstance(res, dict):
+                    res.setdefault('tracks_df', tracks_df)
+                    res.setdefault('success', bool(res.get('changepoints', pd.DataFrame()).shape[0] or res.get('motion_segments', pd.DataFrame()).shape[0]))
+                return res
             else:
                 return {'error': 'Changepoint detection module not available', 'success': False}
         except Exception as e:
@@ -814,8 +827,14 @@ class EnhancedSPTReportGenerator:
 
     def _plot_changepoints(self, result):
         """Placeholder for changepoint visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        try:
+            from visualization import plot_changepoint_analysis, _empty_fig
+            if not result or not result.get('success', False):
+                return _empty_fig("Changepoint analysis failed.")
+            return plot_changepoint_analysis(result)
+        except Exception:
+            from visualization import _empty_fig
+            return _empty_fig("Changepoint visualization unavailable")
 
     def _analyze_velocity_correlation(self, tracks_df, current_units):
         """Placeholder for velocity correlation analysis."""
@@ -984,8 +1003,12 @@ class EnhancedSPTReportGenerator:
                 pixel_size=current_units.get('pixel_size', 1.0),
                 frame_interval=current_units.get('frame_interval', 1.0)
             )
-
-            return polymer_results
+            # Normalize structure and avoid ambiguous truth-value on DataFrames
+            if isinstance(polymer_results, dict):
+                polymer_results.setdefault('success', 'error' not in polymer_results)
+                # Some fields may be numpy arrays; ensure serializable where possible in report JSON path
+                return polymer_results
+            return {'success': False, 'error': 'Unexpected polymer physics result format'}
         except Exception as e:
             return {'error': str(e), 'success': False}
 
@@ -1045,11 +1068,17 @@ class EnhancedSPTReportGenerator:
             
         st.subheader("📄 Generated Report")
         
-        # Create download options
-        col1, col2, col3 = st.columns(3)
+        # Create action/download options
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
+            # Persist the interactive view across reruns so it doesn't collapse/scroll to top
+            show_key = "show_interactive_report"
+            if show_key not in st.session_state:
+                st.session_state[show_key] = False
             if st.button("📊 View Interactive Report"):
+                st.session_state[show_key] = True
+            if st.session_state[show_key]:
                 self._show_interactive_report(current_units)
         
         with col2:
@@ -1072,6 +1101,34 @@ class EnhancedSPTReportGenerator:
                     file_name=f"spt_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
+
+        with col4:
+            # On-demand HTML/PDF exports
+            exp_choice = st.selectbox("Export", ["HTML", "PDF"], key="report_export_choice")
+            if exp_choice == "HTML":
+                try:
+                    html = self._build_html_report(current_units)
+                    st.download_button(
+                        "📥 Download HTML Report",
+                        data=html.encode("utf-8"),
+                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                        mime="text/html"
+                    )
+                except Exception as e:
+                    st.error(f"Failed to build HTML: {e}")
+            else:
+                try:
+                    pdf_bytes, note = self._build_pdf_report(current_units)
+                    st.download_button(
+                        "🧾 Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf"
+                    )
+                    if note:
+                        st.info(note)
+                except Exception as e:
+                    st.error(f"Failed to build PDF: {e}")
 
     def _show_interactive_report(self, current_units):
         """Display interactive report with visualizations."""
@@ -1115,7 +1172,16 @@ class EnhancedSPTReportGenerator:
                     
                     # Display visualization if available
                     if analysis_key in self.report_figures:
-                        st.plotly_chart(self.report_figures[analysis_key], use_container_width=True)
+                        fig = self.report_figures[analysis_key]
+                        # Support both Plotly and Matplotlib figures
+                        try:
+                            from matplotlib.figure import Figure as MplFigure
+                        except Exception:
+                            MplFigure = None
+                        if MplFigure is not None and isinstance(fig, MplFigure):
+                            st.pyplot(fig, use_container_width=True)
+                        else:
+                            st.plotly_chart(fig, use_container_width=True)
 
     def _display_basic_stats(self, stats):
         """Display basic statistics in a formatted way."""
@@ -1196,7 +1262,165 @@ class EnhancedSPTReportGenerator:
             return output.getvalue()
         except Exception as e:
             st.error(f"Failed to generate CSV summary: {str(e)}")
-            return None
+
+    def _build_html_report(self, current_units) -> str:
+        """Construct a self-contained HTML report with embedded figures."""
+        import html
+        from typing import Any
+        from visualization import fig_to_base64
+        
+        def _render_section(title: str, body_html: str) -> str:
+            return f"""
+            <section style='margin:20px 0;'>
+              <h2>{html.escape(title)}</h2>
+              {body_html}
+            </section>
+            """
+        
+        # Header
+        parts = [
+            "<!DOCTYPE html>",
+            "<html lang='en'>",
+            "<head>",
+            "<meta charset='utf-8' />",
+            "<meta name='viewport' content='width=device-width, initial-scale=1' />",
+            "<title>Single Particle Tracking Analysis Report</title>",
+            "<script src='https://cdn.plot.ly/plotly-2.26.0.min.js'></script>",
+            "<style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;} .metric{display:inline-block;margin-right:24px;}</style>",
+            "</head>",
+            "<body>",
+            "<h1>Single Particle Tracking Analysis Report</h1>",
+            f"<p>Generated at: {datetime.now().isoformat()}</p>",
+            f"<p>Pixel size: {current_units.get('pixel_size', 'n/a')} µm, Frame interval: {current_units.get('frame_interval', 'n/a')} s</p>",
+        ]
+        
+        # Summary metrics if present
+        if 'basic_statistics' in self.report_results:
+            s = self.report_results['basic_statistics']
+            metrics_html = """
+            <div>
+              <div class='metric'><strong>Total Tracks:</strong> {total}</div>
+              <div class='metric'><strong>Mean Track Length:</strong> {mtl:.1f} frames</div>
+              <div class='metric'><strong>Mean Velocity:</strong> {mv:.3f} µm/s</div>
+              <div class='metric'><strong>Total Time Points:</strong> {ttp}</div>
+            </div>
+            """.format(total=html.escape(str(s.get('total_tracks','N/A'))),
+                       mtl=float(s.get('mean_track_length', 0) or 0),
+                       mv=float(s.get('mean_velocity', 0) or 0),
+                       ttp=html.escape(str(s.get('total_timepoints','N/A'))))
+            parts.append(_render_section("Summary Statistics", metrics_html))
+        
+        # Analysis sections
+        for key, result in self.report_results.items():
+            name = self.available_analyses.get(key, {}).get('name', key)
+            if isinstance(result, dict) and result.get('error'):
+                parts.append(_render_section(name, f"<p style='color:#b00;'>Error: {html.escape(result['error'])}</p>"))
+                continue
+            body = ["<pre style='background:#f7f7f9;padding:12px;border-radius:6px;'>",
+                    html.escape(json.dumps(result, indent=2, default=str)), "</pre>"]
+            # Attach figure if available
+            if key in self.report_figures:
+                fig = self.report_figures[key]
+                try:
+                    # Plotly
+                    from plotly.graph_objs import Figure as _PFig
+                    if isinstance(fig, _PFig):
+                        body.append(fig.to_html(full_html=False, include_plotlyjs=False))
+                    else:
+                        # Matplotlib -> embed base64 png
+                        b64 = fig_to_base64(fig, fmt="png")
+                        body.append(f"<img alt='{html.escape(name)}' src='data:image/png;base64,{b64}' style='max-width:100%;height:auto;border:1px solid #ddd;border-radius:6px;' />")
+                except Exception as e:
+                    body.append(f"<p style='color:#b00;'>Figure render failed: {html.escape(str(e))}</p>")
+            parts.append(_render_section(name, "".join(body)))
+        
+        parts.append("</body></html>")
+        return "\n".join(parts)
+
+    def _build_pdf_report(self, current_units) -> tuple[bytes, str]:
+        """Construct a PDF report from available figures and key metrics.
+        Returns (pdf_bytes, note) where note may include tips about optional deps.
+        """
+        import io
+        from matplotlib.backends.backend_pdf import PdfPages
+        import matplotlib.pyplot as plt
+        note = ""
+        buf = io.BytesIO()
+        with PdfPages(buf) as pdf:
+            # Title page
+            fig = plt.figure(figsize=(8.27, 11.69))  # A4 portrait inches
+            fig.suptitle("Single Particle Tracking Analysis Report", fontsize=16)
+            ax = fig.add_subplot(111)
+            ax.axis('off')
+            lines = [
+                f"Generated: {datetime.now().isoformat()}",
+                f"Pixel size: {current_units.get('pixel_size', 'n/a')} µm",
+                f"Frame interval: {current_units.get('frame_interval', 'n/a')} s",
+                "",
+                "Sections included:"
+            ] + [f" - {self.available_analyses.get(k, {}).get('name', k)}" for k in self.report_results.keys()]
+            ax.text(0.05, 0.95, "\n".join(lines), va='top', fontsize=10)
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
+
+            # Summary metrics page
+            if 'basic_statistics' in self.report_results:
+                fig = plt.figure(figsize=(8.27, 11.69))
+                ax = fig.add_subplot(111)
+                ax.axis('off')
+                s = self.report_results['basic_statistics']
+                txt = (
+                    f"Total tracks: {s.get('total_tracks','N/A')}\n"
+                    f"Mean track length: {s.get('mean_track_length', 0):.1f} frames\n"
+                    f"Mean velocity: {s.get('mean_velocity', 0):.3f} µm/s\n"
+                    f"Total time points: {s.get('total_timepoints','N/A')}\n"
+                )
+                ax.text(0.05, 0.95, "Summary Statistics\n\n" + txt, va='top', fontsize=11)
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+
+            # Figures
+            for key, fig_obj in self.report_figures.items():
+                try:
+                    from matplotlib.figure import Figure as _MF
+                    if isinstance(fig_obj, _MF):
+                        pdf.savefig(fig_obj, bbox_inches='tight')
+                        plt.close(fig_obj)
+                    else:
+                        # Try to rasterize Plotly figure via kaleido if available
+                        try:
+                            img_bytes = fig_obj.to_image(format='png', scale=2)  # requires kaleido
+                        except Exception:
+                            img_bytes = None
+                            note = (note or "") + "Plotly static export requires the 'kaleido' package. "
+                        if img_bytes:
+                            img = plt.imread(io.BytesIO(img_bytes), format='png')
+                            fig = plt.figure(figsize=(8.27, 11.69))
+                            ax = fig.add_subplot(111)
+                            ax.imshow(img)
+                            ax.axis('off')
+                            ax.set_title(self.available_analyses.get(key, {}).get('name', key))
+                            pdf.savefig(fig, bbox_inches='tight')
+                            plt.close(fig)
+                        else:
+                            # Placeholder page noting skipped figure
+                            fig = plt.figure(figsize=(8.27, 11.69))
+                            ax = fig.add_subplot(111)
+                            ax.axis('off')
+                            ax.text(0.05, 0.95, f"[Plotly figure not included: {self.available_analyses.get(key, {}).get('name', key)}]", va='top')
+                            pdf.savefig(fig, bbox_inches='tight')
+                            plt.close(fig)
+                except Exception as e:
+                    # Add an error page
+                    fig = plt.figure(figsize=(8.27, 11.69))
+                    ax = fig.add_subplot(111)
+                    ax.axis('off')
+                    ax.text(0.05, 0.95, f"Error including figure '{key}': {e}", va='top', color='red')
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+
+        buf.seek(0)
+        return buf.read(), note.strip()
 
     def _render_analysis_section(self, analysis_key, results, config):
         """Render analysis section with better error handling"""
@@ -1229,9 +1453,47 @@ class EnhancedSPTReportGenerator:
             st.error(f"Error rendering analysis section: {e}")
 
     def _plot_confinement(self, result):
-        """Placeholder for confinement visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        """Visualization for confinement analysis using provided helper when possible."""
+        try:
+            from visualization import plot_confinement_analysis, _empty_fig
+            # Map our analysis result to the expected schema for the plotter
+            if not result:
+                return _empty_fig("No confinement results available")
+
+            if 'success' not in result:
+                result['success'] = True
+
+            # If keys already match, plot directly
+            if {'n_total_tracks', 'n_confined_tracks', 'track_results'}.issubset(result.keys()):
+                return plot_confinement_analysis(result)
+
+            data_df = result.get('data', pd.DataFrame())
+            tracks_df = result.get('tracks_df')
+            # Ensure a track_id column exists for plotting
+            if not data_df.empty and 'track_id' not in data_df.columns:
+                # Try to find the id column and rename
+                for c in ("track_id", "trajectory_id", "particle", "id", "track"):
+                    if c in data_df.columns:
+                        if c != 'track_id':
+                            data_df = data_df.rename(columns={c: 'track_id'})
+                        break
+
+            if not data_df.empty and 'confinement_radius' not in data_df.columns and 'max_span' in data_df.columns:
+                # Approximate radius as half of max span
+                data_df = data_df.copy()
+                data_df['confinement_radius'] = data_df['max_span'] / 2.0
+
+            mapped = {
+                'success': True,
+                'n_total_tracks': int(data_df['track_id'].nunique()) if not data_df.empty and 'track_id' in data_df.columns else 0,
+                'n_confined_tracks': int(data_df['localized_flag'].sum()) if not data_df.empty and 'localized_flag' in data_df.columns else 0,
+                'track_results': data_df,
+                'tracks_df': tracks_df,
+            }
+            return plot_confinement_analysis(mapped)
+        except Exception:
+            from visualization import _empty_fig
+            return _empty_fig("Confinement visualization unavailable")
 
     def _analyze_confinement(self, tracks_df, current_units):
         """
@@ -1252,20 +1514,25 @@ class EnhancedSPTReportGenerator:
         """
         import pandas as pd, numpy as np
 
-        # Locate a trajectory dataframe among common attribute names
+        # Prefer the provided tracks_df; fall back to common attributes
         track_df = None
-        for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
-            if hasattr(self, attr):
-                cand = getattr(self, attr)
-                if cand is not None and len(cand) > 0:
-                    track_df = cand
-                    break
+        if isinstance(tracks_df, pd.DataFrame) and not tracks_df.empty:
+            track_df = tracks_df
+        else:
+            for attr in ("track_df", "tracks", "filtered_tracks", "trajectory_df"):
+                if hasattr(self, attr):
+                    cand = getattr(self, attr)
+                    if isinstance(cand, pd.DataFrame) and not cand.empty:
+                        track_df = cand
+                        break
 
         if track_df is None or len(track_df) == 0:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "No trajectory data available for confinement analysis.",
                 "figures": [],
+                'tracks_df': tracks_df if isinstance(tracks_df, pd.DataFrame) else None,
             }
 
         # Identify trajectory id column
@@ -1276,9 +1543,11 @@ class EnhancedSPTReportGenerator:
                 break
         if id_col is None:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "Could not determine trajectory id column; expected one of track_id / trajectory_id / particle / id / track.",
                 "figures": [],
+                'tracks_df': track_df,
             }
 
         # Require coordinate columns
@@ -1286,9 +1555,11 @@ class EnhancedSPTReportGenerator:
         y_col = "y" if "y" in track_df.columns else None
         if x_col is None or y_col is None:
             return {
+                'success': False,
                 "data": pd.DataFrame(),
                 "summary": "Missing coordinate columns (x,y) required for confinement analysis.",
                 "figures": [],
+                'tracks_df': track_df,
             }
 
         metrics = []
@@ -1333,6 +1604,9 @@ class EnhancedSPTReportGenerator:
             })
 
         df_metrics = pd.DataFrame(metrics)
+        # Ensure a standard track_id column exists for downstream consumers
+        if id_col != 'track_id' and id_col in df_metrics.columns:
+            df_metrics = df_metrics.rename(columns={id_col: 'track_id'})
         confined_pct = df_metrics["localized_flag"].mean() * 100 if len(df_metrics) else 0.0
         summary = (
             f"Confinement analysis computed for {len(df_metrics)} trajectories. "
@@ -1353,7 +1627,15 @@ class EnhancedSPTReportGenerator:
             # Silently ignore visualization issues to keep analysis robust
             pass
 
-        return {"data": df_metrics, "summary": summary, "figures": figures}
+        return {
+            'success': True,
+            "data": df_metrics,
+            "summary": summary,
+            "figures": figures,
+            'n_total_tracks': int(df_metrics['track_id'].nunique()) if not df_metrics.empty else 0,
+            'n_confined_tracks': int(df_metrics['localized_flag'].sum()) if not df_metrics.empty else 0,
+            'tracks_df': track_df,
+        }
 
 # Streamlit app integration
 def show_enhanced_report_generator(track_data=None, analysis_results=None, 
@@ -1392,9 +1674,12 @@ def show_enhanced_report_generator(track_data=None, analysis_results=None,
                 # We need to set it in session state
                 st.session_state['tracks_df'] = track_data
         elif STATE_MANAGER_AVAILABLE:
-            state_manager = StateManager()
-            if not state_manager.has_data():
-                state_manager.set_tracks(track_data)
+            sm = get_state_manager()
+            try:
+                if not sm.has_data():
+                    sm.set_tracks(track_data)
+            except Exception:
+                st.session_state['tracks_df'] = track_data
     
     # Display the interface
     generator.display_enhanced_analysis_interface()

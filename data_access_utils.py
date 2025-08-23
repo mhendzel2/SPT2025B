@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, Tuple
 
 # Try to import state manager
 try:
-    from state_manager import StateManager
+    from state_manager import StateManager, get_state_manager
     STATE_MANAGER_AVAILABLE = True
 except ImportError:
     STATE_MANAGER_AVAILABLE = False
@@ -27,17 +27,18 @@ def get_track_data() -> Tuple[Optional[pd.DataFrame], bool]:
     # Method 1: Try state manager first
     if STATE_MANAGER_AVAILABLE:
         try:
-            state_manager = StateManager()
-            if state_manager.has_data():
-                return state_manager.get_tracks(), True
+            sm = get_state_manager() if 'get_state_manager' in globals() else StateManager()
+            if sm.has_data():
+                return sm.get_tracks(), True
         except Exception:
             pass
     
-    # Method 2: Check primary location
-    if 'tracks_df' in st.session_state:
-        df = st.session_state.tracks_df
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            return df, True
+    # Method 2: Check primary locations
+    for primary_key in ('tracks_df', 'tracks_data'):
+        if primary_key in st.session_state:
+            df = st.session_state[primary_key]
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                return df, True
     
     # Method 3: Check legacy locations
     for key in ['raw_tracks', 'raw_tracks_df', 'track_data']:
@@ -61,8 +62,8 @@ def get_analysis_results() -> Dict[str, Any]:
     """
     if STATE_MANAGER_AVAILABLE:
         try:
-            state_manager = StateManager()
-            return state_manager.get_analysis_results()
+            sm = get_state_manager() if 'get_state_manager' in globals() else StateManager()
+            return sm.get_analysis_results()
         except Exception:
             pass
     
@@ -80,10 +81,10 @@ def get_units() -> Dict[str, float]:
     """
     if STATE_MANAGER_AVAILABLE:
         try:
-            state_manager = StateManager()
+            sm = get_state_manager() if 'get_state_manager' in globals() else StateManager()
             return {
-                'pixel_size': state_manager.get_pixel_size(),
-                'frame_interval': state_manager.get_frame_interval()
+                'pixel_size': sm.get_pixel_size(),
+                'frame_interval': sm.get_frame_interval()
             }
         except Exception:
             pass
@@ -119,20 +120,24 @@ def check_data_availability(show_error: bool = True) -> bool:
             st.write("**Session state keys:**", list(st.session_state.keys()))
             
             # Check each possible location
+            def has_df(k):
+                v = st.session_state.get(k)
+                return isinstance(v, pd.DataFrame) and not v.empty
             debug_info = {
-                'tracks_df': 'tracks_df' in st.session_state,
-                'raw_tracks': 'raw_tracks' in st.session_state,
-                'raw_tracks_df': 'raw_tracks_df' in st.session_state,
-                'track_data': 'track_data' in st.session_state
+                'tracks_df': has_df('tracks_df'),
+                'tracks_data': has_df('tracks_data'),
+                'raw_tracks': has_df('raw_tracks'),
+                'raw_tracks_df': has_df('raw_tracks_df'),
+                'track_data': has_df('track_data'),
             }
             st.write("**Data locations:**", debug_info)
             
             # Show data summary if state manager available
             if STATE_MANAGER_AVAILABLE:
                 try:
-                    state_manager = StateManager()
-                    st.write("**State manager summary:**", state_manager.get_data_summary())
-                    st.write("**Debug state:**", state_manager.debug_data_state())
+                    sm = get_state_manager() if 'get_state_manager' in globals() else StateManager()
+                    st.write("**State manager summary:**", sm.get_data_summary())
+                    st.write("**Debug state:**", sm.debug_data_state())
                 except Exception as e:
                     st.write(f"State manager error: {e}")
     

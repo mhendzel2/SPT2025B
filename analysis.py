@@ -19,9 +19,12 @@ import scipy.optimize as optimize
 from scipy.stats import norm, linregress, pearsonr
 from scipy import spatial
 from scipy.spatial import distance
-from sklearn.cluster import DBSCAN, KMeans, OPTICS
-from sklearn.mixture import GaussianMixture
-from sklearn.neighbors import KDTree, NearestNeighbors
+try:
+    from sklearn.cluster import DBSCAN, KMeans, OPTICS
+    from sklearn.mixture import GaussianMixture
+    from sklearn.neighbors import KDTree, NearestNeighbors
+except Exception:  # Optional dependencies
+    DBSCAN = KMeans = OPTICS = GaussianMixture = KDTree = NearestNeighbors = None
 from scipy.cluster.hierarchy import fcluster, linkage
 
 
@@ -2950,21 +2953,21 @@ def analyze_polymer_physics(tracks_df: pd.DataFrame, pixel_size: float = 1.0, fr
     import numpy as np
     from scipy.stats import linregress
 
-    # Convert pixel coordinates to µm if needed
+    # Convert pixel coordinates to µm if needed (operate on a copy)
     tracks_df_um = tracks_df.copy()
-    if 'x' in tracks_df_um.columns and pixel_size != 1.0:
+    if 'x' in tracks_df_um.columns and 'y' in tracks_df_um.columns and pixel_size != 1.0:
         tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
         tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
 
-    # First, calculate MSD data which is needed for polymer analysis
-    msd_results = calculate_msd(tracks_df_um, pixel_size=1.0, frame_interval=frame_interval)  # Use 1.0 since we already converted
+    # Calculate MSD data which is needed for polymer analysis
+    msd_df = calculate_msd(tracks_df_um, pixel_size=1.0, frame_interval=frame_interval)
+    if msd_df is None or (hasattr(msd_df, 'empty') and msd_df.empty):
+        return {"success": False, "error": "Failed to calculate MSD data required for polymer physics analysis"}
 
-    if not msd_results or 'msd_data' not in msd_results:
-        return {"error": "Failed to calculate MSD data required for polymer physics analysis"}
-
-    # Extract MSD data
-    msd_data = msd_results['msd_data']
-    lag_times = msd_results['lag_times']
+    # Compute ensemble MSD vs lag_time
+    grouped = msd_df.groupby('lag_time')['msd'].mean().reset_index()
+    lag_times = grouped['lag_time'].values
+    msd_data = grouped['msd'].values
 
     # Calculate Kuhn length (persistence length) and other polymer properties
     # For particle tracking in a polymer network, we can estimate these from MSD behavior
@@ -2972,7 +2975,8 @@ def analyze_polymer_physics(tracks_df: pd.DataFrame, pixel_size: float = 1.0, fr
         'msd_data': msd_data,
         'lag_times': lag_times,
         'pixel_size': pixel_size,
-        'frame_interval': frame_interval
+    'frame_interval': frame_interval,
+    'success': True
     }
 
     # Calculate scaling exponent (alpha) for MSD ~ t^alpha
@@ -3017,7 +3021,9 @@ def analyze_polymer_physics(tracks_df: pd.DataFrame, pixel_size: float = 1.0, fr
             window_size = min(5, len(log_msd) // 3)
 
             for i in range(len(log_msd) - window_size):
-                window_slope, _, _, _, _ = linregress(log_times[i:i+window_size], log_msd[i:i+window_size])
+                window_slope, _, _, _, _ = linregress(
+                    log_times[i:i+window_size], log_msd[i:i+window_size]
+                )
                 local_slopes.append(window_slope)
 
             # Find first significant deviation from initial slope
