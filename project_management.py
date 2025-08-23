@@ -77,6 +77,9 @@ class Condition:
                 if 'data' in f and f['data'] is not None:
                     df = pd.read_csv(io.BytesIO(f['data']))
                     pooled.append(df)
+                elif 'data_path' in f and f['data_path'] and os.path.exists(f['data_path']):
+                    df = pd.read_csv(f['data_path'])
+                    pooled.append(df)
             except Exception:
                 continue
         return pd.concat(pooled, ignore_index=True) if pooled else pd.DataFrame()

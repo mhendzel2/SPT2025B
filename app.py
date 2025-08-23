@@ -1508,6 +1508,107 @@ elif st.session_state.active_page == "Home":
             st.session_state.active_page = "Comparative Analysis"
             st.rerun()
             
+# Project Management Page
+elif st.session_state.active_page == "Project Management":
+    st.title("Project Management: Group cells into experimental conditions")
+    pmgr = pm.ProjectManager()
+    if "pm_current" not in st.session_state:
+        st.session_state.pm_current = None  # holds pm.Project
+    # Project selector/creator
+    with st.expander("Project Selection", expanded=True):
+        existing = pmgr.list_projects()
+        options = [f"{p['name']} ({p['id'][:8]})" for p in existing]
+        sel = st.selectbox("Select a project", options + ["<New Project>"])
+        if sel == "<New Project>":
+            c1, c2 = st.columns([2,1])
+            with c1:
+                new_name = st.text_input("Project name", value="My Experiment")
+            with c2:
+                if st.button("Create Project", use_container_width=True):
+                    proj = pmgr.create_project(new_name)
+                    st.session_state.pm_current = proj
+                    st.success("Project created.")
+                    st.rerun()
+        else:
+            idx = options.index(sel)
+            meta = existing[idx]
+            st.session_state.pm_current = pmgr.get_project(meta['id'])
+
+    proj = st.session_state.pm_current
+    if proj is None:
+        st.info("Create or select a project to manage conditions and files.")
+    else:
+        st.subheader(f"Project: {proj.name}")
+        # Add condition
+        with st.expander("Add Condition", expanded=True):
+            cname = st.text_input("Condition name", key="pm_new_cond_name")
+            cdesc = st.text_input("Description", key="pm_new_cond_desc")
+            if st.button("Add Condition") and cname.strip():
+                pmgr.add_condition(proj, cname.strip(), cdesc.strip())
+                pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                st.success("Condition added.")
+                st.rerun()
+
+        # List conditions with file upload per condition
+        for cond in list(proj.conditions):
+            with st.expander(f"Condition: {cond.name} ({len(cond.files)} files)", expanded=False):
+                uploaded = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_{cond.id}")
+                if uploaded:
+                    for uf in uploaded:
+                        try:
+                            import pandas as _pd
+                            df = _pd.read_csv(uf)
+                            pmgr.add_file_to_condition(proj, cond.id, uf.name, df)
+                        except Exception as e:
+                            st.warning(f"Failed to add {uf.name}: {e}")
+                    pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                    st.success("Files added.")
+
+                # Show files and remove option
+                if cond.files:
+                    for f in list(cond.files):
+                        fname = f.get('name') or f.get('file_name') or f.get('id')
+                        cols = st.columns([6,2,2])
+                        cols[0].write(fname)
+                        if cols[1].button("Preview", key=f"pv_{cond.id}_{f.get('id')}"):
+                            try:
+                                import pandas as _pd, io as _io, os as _os
+                                if f.get('data'):
+                                    df = _pd.read_csv(_io.BytesIO(f['data']))
+                                elif f.get('data_path') and _os.path.exists(f['data_path']):
+                                    df = _pd.read_csv(f['data_path'])
+                                else:
+                                    df = None
+                                if df is not None:
+                                    st.dataframe(df.head())
+                                else:
+                                    st.info("No data available for preview.")
+                            except Exception as e:
+                                st.warning(f"Preview failed: {e}")
+                        if cols[2].button("Remove", key=f"rm_{cond.id}_{f.get('id')}"):
+                            pmgr.remove_file_from_project(proj, cond.id, f.get('id'))
+                            pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                            st.experimental_rerun()
+
+                # Pool and preview
+                if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
+                    pooled = cond.pool_tracks()
+                    if pooled is not None and not pooled.empty:
+                        st.session_state.tracks_data = pooled
+                        try:
+                            st.session_state.track_statistics = calculate_track_statistics(pooled)
+                        except Exception:
+                            pass
+                        st.success(f"Pooled {len(pooled)} rows into current dataset.")
+                        st.dataframe(pooled.head())
+                    else:
+                        st.info("No data available to pool for this condition.")
+
+        # Save project explicitly
+        if st.button("Save Project"):
+            pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+            st.success("Project saved.")
+
 # Image Processing Page
 elif st.session_state.active_page == "Image Processing":
     st.title("Image Processing & Nuclear Density Analysis")
