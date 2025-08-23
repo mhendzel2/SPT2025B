@@ -67,7 +67,7 @@ from image_processing_utils import (
     normalize_image_for_display, create_timepoint_preview, 
     get_image_statistics
 )
-from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients
+from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients, plot_hmm_state_transition_diagram
 from segmentation import (
     segment_image_channel_otsu, 
     segment_image_channel_simple_threshold,
@@ -7063,6 +7063,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                     st.write(model.covars_)
                     st.write("Transition Matrix:")
                     st.write(model.transmat_)
+
+                    st.subheader("State Transition Diagram")
+                    try:
+                        fig = plot_hmm_state_transition_diagram(model)
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Could not generate state transition diagram: {e}")
 
                     st.subheader("State Predictions")
                     # Add state predictions to the tracks dataframe for visualization
