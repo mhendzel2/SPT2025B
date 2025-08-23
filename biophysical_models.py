@@ -6,6 +6,7 @@ Specialized for nucleosome diffusion in chromatin and polymer physics modeling.
 import streamlit as st
 import pandas as pd
 import numpy as np
+from scipy.optimize import curve_fit
 from typing import Any, Dict, List, Tuple, Optional
 try:
     import plotly.graph_objects as go
@@ -1291,3 +1292,92 @@ def run_hmm_segmentation(tracks_df: pd.DataFrame, config: Optional[Dict[str, Any
     cfg = HMMConfig(**{k: v for k, v in cfg_kwargs.items() if k in HMMConfig().__dict__})
     model = BayesHMMDiffusion(tracks_df, cfg)
     return model.segment_all()
+
+
+def fit_ornstein_uhlenbeck_model(
+    track_df: pd.DataFrame,
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0
+) -> Dict[str, float]:
+    """
+    Fits the Ornstein-Uhlenbeck model to a single track's velocity autocorrelation function (VACF).
+
+    The OU process models a particle in a harmonic potential. This function calculates
+    the VACF for a single trajectory, fits it to an exponential decay, and extracts
+    key physical parameters.
+
+    Parameters
+    ----------
+    track_df : pd.DataFrame
+        DataFrame for a single track, containing 'frame', 'x', and 'y' columns.
+        It is assumed that this DataFrame contains data for only one track_id.
+    pixel_size : float, optional
+        The size of a pixel in physical units (e.g., micrometers), by default 1.0.
+    frame_interval : float
+        The time interval between consecutive frames in seconds.
+
+    Returns
+    -------
+    dict[str, float]
+        A dictionary containing the fitted OU parameters:
+        - 'relaxation_time' (tau): The characteristic time for velocity decorrelation.
+        - 'kt_m' (<v^2>): The variance of the velocity distribution, proportional to temperature.
+        - 'gamma_m' (gamma/m): The friction coefficient per unit mass.
+        - 'k_m' (k/m): The trap stiffness per unit mass.
+        Returns an empty dictionary if the fit is unsuccessful.
+    """
+    if track_df.empty or len(track_df) < 4:
+        return {}
+
+    # --- 1. Calculate VACF for the single track ---
+    track = track_df.sort_values('frame').copy()
+    x = track['x'].values * pixel_size
+    y = track['y'].values * pixel_size
+    t = track['frame'].values * frame_interval
+
+    # Calculate velocities, handling potential non-uniform frame intervals
+    dt = np.diff(t)
+    if np.any(dt <= 0):
+        return {}
+
+    vx = np.diff(x) / dt
+    vy = np.diff(y) / dt
+
+    if len(vx) < 2:
+        return {}
+
+    vacf_values = []
+    max_lag = len(vx) // 2
+    lags = np.arange(max_lag) * frame_interval
+
+    for lag_idx in range(max_lag):
+        if lag_idx == 0:
+            vacf_values.append(np.mean(vx*vx + vy*vy))
+        else:
+            v_t = vx[:-lag_idx]*vx[lag_idx:] + vy[:-lag_idx]*vy[lag_idx:]
+            vacf_values.append(np.mean(v_t))
+
+    vacf = np.array(vacf_values)
+
+    # --- 2. Fit VACF to an exponential decay ---
+    def _exponential_decay(t, tau, A):
+        return A * np.exp(-t / tau)
+
+    try:
+        p0 = (1.0, vacf[0])
+        popt, _ = curve_fit(_exponential_decay, lags, vacf, p0=p0)
+        tau, A = popt
+
+        # --- 3. Extract physical parameters ---
+        kt_m = A
+        gamma_m = 1 / tau
+        k_m = 1 / (tau**2)
+
+        return {
+            'relaxation_time': tau,
+            'kt_m': kt_m,
+            'gamma_m': gamma_m,
+            'k_m': k_m
+        }
+    except (RuntimeError, ValueError):
+        return {}

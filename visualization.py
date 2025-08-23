@@ -662,6 +662,216 @@ def plot_advanced_metric_diagnostics(
     return fig
 
 
+def plot_parameter_correlation_heatmap(
+    track_statistics_df: pd.DataFrame
+) -> go.Figure:
+    """Plots the Pearson correlation matrix for track statistics."""
+    if track_statistics_df.empty:
+        return _empty_fig("No track statistics data available for correlation heatmap.")
+
+    # Select only numeric columns for correlation
+    numeric_df = track_statistics_df.select_dtypes(include=np.number)
+
+    # Drop columns that are not useful for correlation (like IDs or frame numbers)
+    cols_to_drop = [col for col in numeric_df.columns if 'id' in col.lower() or 'frame' in col.lower()]
+    numeric_df = numeric_df.drop(columns=cols_to_drop, errors='ignore')
+
+    if len(numeric_df.columns) < 2:
+        return _empty_fig("Not enough numeric parameters for correlation heatmap.")
+
+    # Calculate Pearson correlation matrix
+    corr_matrix = numeric_df.corr(method='pearson')
+
+    # Create the heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_matrix.values,
+        x=corr_matrix.columns,
+        y=corr_matrix.columns,
+        colorscale='RdBu',
+        zmin=-1,
+        zmax=1,
+        colorbar=dict(title='Pearson<br>Correlation')
+    ))
+
+    fig.update_xaxes(side="bottom")
+
+    fig.update_layout(
+        title="Parameter Correlation Heatmap",
+        xaxis_title="Parameters",
+        yaxis_title="Parameters",
+        template="plotly_white",
+        height=max(400, len(corr_matrix.columns) * 30),
+        width=max(500, len(corr_matrix.columns) * 35),
+        xaxis_showgrid=False,
+        yaxis_showgrid=False,
+        yaxis_autorange='reversed', # To have the diagonal from top-left to bottom-right
+        xaxis_tickangle=-45
+    )
+
+    # Add annotations for the correlation values
+    annotations = []
+    for i, row in enumerate(corr_matrix.values):
+        for j, value in enumerate(row):
+            annotations.append(
+                go.layout.Annotation(
+                    text=f"{value:.2f}",
+                    x=corr_matrix.columns[j],
+                    y=corr_matrix.columns[i],
+                    xref="x1",
+                    yref="y1",
+                    showarrow=False,
+                    font=dict(
+                        color="white" if abs(value) > 0.5 else "black",
+                        size=10
+                    )
+                )
+            )
+    fig.update_layout(annotations=annotations)
+
+    return fig
+
+
+def plot_turning_angle_distribution(
+    turning_angles_df: pd.DataFrame,
+    nbins: int = 18
+) -> go.Figure:
+    """
+    Creates a polar histogram of turning angles.
+
+    Parameters
+    ----------
+    turning_angles_df : pd.DataFrame
+        A DataFrame with a column 'angle_rad' containing turning angles in radians.
+    nbins : int, optional
+        The number of bins for the histogram, by default 18 (20-degree bins).
+
+    Returns
+    -------
+    go.Figure
+        A Plotly figure object containing the polar histogram.
+    """
+    if turning_angles_df.empty or 'angle_rad' not in turning_angles_df.columns:
+        return _empty_fig("No turning angle data available.")
+
+    angles_deg = np.degrees(turning_angles_df['angle_rad'].dropna())
+
+    if angles_deg.empty:
+        return _empty_fig("No valid turning angles to plot.")
+
+    # Create bins from -180 to 180 degrees
+    bins = np.linspace(-180, 180, nbins + 1)
+    counts, bin_edges = np.histogram(angles_deg, bins=bins)
+
+    # Use the center of each bin for plotting
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Barpolar(
+        r=counts,
+        theta=bin_centers,
+        width=(360 / nbins) * 0.9, # Bar width
+        marker_color='skyblue',
+        marker_line_color='black',
+        marker_line_width=1,
+        opacity=0.8,
+        name='Turning Angles'
+    ))
+
+    fig.update_layout(
+        title="Turning Angle Distribution",
+        template="plotly_white",
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                showticklabels=True,
+                ticksuffix=' counts'
+            ),
+            angularaxis=dict(
+                tickmode='array',
+                tickvals=[0, 45, 90, 135, 180, -135, -90, -45],
+                ticktext=['0°', '45°', '90°', '135°', '180°', '-135°', '-90°', '-45°'],
+                direction="clockwise"
+            )
+        )
+    )
+
+    return fig
+
+
+def plot_kymograph(
+    tracks_df: pd.DataFrame,
+    axis_start: Tuple[float, float],
+    axis_end: Tuple[float, float],
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0
+) -> go.Figure:
+    """Generates a kymograph of particle motion projected onto a defined axis."""
+    if tracks_df.empty:
+        return _empty_fig("No track data for kymograph.")
+
+    # Convert to physical units
+    df = tracks_df.copy()
+    df['x_um'] = df['x'] * pixel_size
+    df['y_um'] = df['y'] * pixel_size
+
+    # Axis vector in physical units
+    p1 = np.array(axis_start) * pixel_size
+    p2 = np.array(axis_end) * pixel_size
+    axis_vector = p2 - p1
+    axis_length = np.linalg.norm(axis_vector)
+    if axis_length == 0:
+        return _empty_fig("Axis for kymograph cannot have zero length.")
+    unit_axis_vector = axis_vector / axis_length
+
+    # Project all points onto the axis
+    points = df[['x_um', 'y_um']].values
+    vectors_from_start = points - p1
+    projections = np.dot(vectors_from_start, unit_axis_vector)
+
+    df['projection'] = projections
+
+    # Create the kymograph image
+    min_frame = int(df['frame'].min())
+    max_frame = int(df['frame'].max())
+    n_frames = max_frame - min_frame + 1
+
+    n_bins = int(axis_length / pixel_size)
+    if n_bins == 0:
+        n_bins = 100
+
+    kymograph_image = np.zeros((n_frames, n_bins))
+
+    projection_bins = np.linspace(0, axis_length, n_bins + 1)
+
+    df['frame_idx'] = (df['frame'] - min_frame).astype(int)
+    df['proj_bin'] = np.digitize(df['projection'], projection_bins) - 1
+
+    for _, row in df.iterrows():
+        frame_idx = int(row['frame_idx'])
+        proj_bin = int(row['proj_bin'])
+        if 0 <= frame_idx < n_frames and 0 <= proj_bin < n_bins:
+            kymograph_image[frame_idx, proj_bin] += 1
+
+    # Create the figure
+    fig = px.imshow(
+        kymograph_image,
+        labels=dict(x="Position along axis (µm)", y="Time (s)", color="Particle Count"),
+        x=np.linspace(0, axis_length, n_bins),
+        y=np.linspace(min_frame * frame_interval, max_frame * frame_interval, n_frames),
+        origin='lower'
+    )
+
+    fig.update_layout(
+        title="Kymograph",
+        xaxis_title=f"Position along axis ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        yaxis_title=f"Time (s)",
+        template="plotly_white"
+    )
+
+    return fig
+
+
 def generate_kymograph(
     tracks_df: pd.DataFrame,
     axis_start: Tuple[float, float],
@@ -824,32 +1034,9 @@ def plot_velocity_field(
     grid_size: int = 20,
     min_vectors_per_bin: int = 3,
     pixel_size: float = 1.0,
-    frame_interval: float = 1.0,
-    title: str = "Velocity Vector Field"
+    frame_interval: float = 1.0
 ) -> go.Figure:
-    """
-    Create a vector field plot of average particle velocities.
-
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
-    grid_size : int, optional
-        The number of bins for the grid in each dimension, by default 20.
-    min_vectors_per_bin : int, optional
-        Minimum number of velocity vectors in a bin to display an arrow, by default 3.
-    pixel_size : float, optional
-        Pixel size in micrometers, by default 1.0.
-    frame_interval : float, optional
-        Time between frames in seconds, by default 1.0.
-    title : str, optional
-        The plot title, by default "Velocity Vector Field".
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-        A Plotly figure object containing the quiver plot.
-    """
+    """Creates a quiver plot of the average velocity field from track data."""
     if tracks_df.empty or len(tracks_df) < 2:
         return _empty_fig("Not enough track data for velocity field.")
 
@@ -930,7 +1117,7 @@ def plot_velocity_field(
                            line_width=1)
 
     fig.update_layout(
-        title=title,
+        title="Velocity Vector Field",
         xaxis_title=f"x ({'µm' if pixel_size != 1.0 else 'pixels'})",
         yaxis_title=f"y ({'µm' if pixel_size != 1.0 else 'pixels'})",
         template="plotly_white"

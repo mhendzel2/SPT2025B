@@ -358,3 +358,185 @@ def fit_fbm_model(track_df: pd.DataFrame, pixel_size: float = 1.0, frame_interva
         results['error'] = str(e)
 
     return results
+
+
+def analyze_turning_angles(
+    tracks_df: pd.DataFrame,
+    min_track_length: int = 3
+) -> pd.DataFrame:
+    """
+    Calculates the turning angle for each step in every track.
+
+    The turning angle is the angle between two consecutive displacement vectors
+    in a trajectory. It ranges from -pi to +pi.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
+    min_track_length : int, optional
+        Minimum number of points in a track to be included, by default 3.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with a single column 'angle_rad' containing all calculated
+        turning angles in radians.
+    """
+    if not {'track_id', 'frame', 'x', 'y'}.issubset(tracks_df.columns):
+        raise ValueError("Input DataFrame must contain 'track_id', 'frame', 'x', and 'y' columns.")
+
+    df = tracks_df[['track_id', 'frame', 'x', 'y']].dropna().copy()
+    df = df.sort_values(['track_id', 'frame'])
+
+    # Filter for tracks with at least min_track_length points
+    df = df.groupby('track_id').filter(lambda g: len(g) >= min_track_length)
+
+    if df.empty:
+        return pd.DataFrame({'angle_rad': []})
+
+    angles = []
+    for _, g in df.groupby('track_id'):
+        x = g['x'].values
+        y = g['y'].values
+
+        if len(x) < 3: continue
+
+        # Calculate displacement vectors
+        dx = np.diff(x)
+        dy = np.diff(y)
+
+        # Create vectors for angle calculation
+        v1x, v1y = dx[:-1], dy[:-1]
+        v2x, v2y = dx[1:], dy[1:]
+
+        # Calculate dot product and magnitudes
+        dot_product = v1x * v2x + v1y * v2y
+        mag_v1 = np.sqrt(v1x**2 + v1y**2)
+        mag_v2 = np.sqrt(v2x**2 + v2y**2)
+
+        # Avoid division by zero
+        denominator = mag_v1 * mag_v2
+
+        # Filter out zero-magnitude vectors
+        valid_indices = denominator > 1e-9
+        if not np.any(valid_indices):
+            continue
+
+        dot_product = dot_product[valid_indices]
+        denominator = denominator[valid_indices]
+        v1x = v1x[valid_indices]
+        v1y = v1y[valid_indices]
+        v2x = v2x[valid_indices]
+        v2y = v2y[valid_indices]
+
+        # Calculate cosine of the angle
+        cos_angle = np.clip(dot_product / denominator, -1.0, 1.0)
+
+        # Get angle in [0, pi]
+        angle = np.arccos(cos_angle)
+
+        # Determine the sign of the angle using the 2D cross-product
+        cross_product_sign = np.sign(v1x * v2y - v1y * v2x)
+
+        # Apply the sign to get the angle in [-pi, pi]
+        signed_angle = angle * cross_product_sign
+
+        angles.append(signed_angle)
+
+    if not angles:
+        return pd.DataFrame({'angle_rad': []})
+
+    return pd.DataFrame({'angle_rad': np.concatenate(angles)})
+
+
+def calculate_ergodicity_breaking(
+    tamsd_df: pd.DataFrame,
+    eamsd_df: pd.DataFrame,
+    n_bootstrap: int = 0
+) -> pd.DataFrame:
+    """
+    Calculates the Ergodicity Breaking (EB) parameter over lag times.
+
+    This function compares the time-averaged MSD (TAMSD) for individual
+    trajectories with the ensemble-averaged MSD (EAMSD).
+
+    Parameters
+    ----------
+    tamsd_df : pd.DataFrame
+        A DataFrame containing time-averaged MSDs for each track.
+        Must contain 'lag', 'tau_s', and 'tamsd' columns.
+    eamsd_df : pd.DataFrame
+        A DataFrame containing the ensemble-averaged MSD.
+        Must contain 'lag', 'tau_s', and 'eamsd' columns.
+    n_bootstrap : int, optional
+        Number of bootstrap samples for confidence interval estimation.
+        If 0, no confidence intervals are calculated. By default 0.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with ergodicity breaking metrics for each lag time,
+        including 'EB_ratio' and 'EB_parameter'.
+    """
+    required_tamsd = {'lag', 'tau_s', 'tamsd'}
+    required_eamsd = {'lag', 'tau_s', 'eamsd'}
+
+    if not required_tamsd.issubset(tamsd_df.columns):
+        raise ValueError(f"tamsd_df is missing required columns: {required_tamsd - set(tamsd_df.columns)}")
+    if not required_eamsd.issubset(eamsd_df.columns):
+        raise ValueError(f"eamsd_df is missing required columns: {required_eamsd - set(eamsd_df.columns)}")
+
+    eamsd_lookup = eamsd_df.set_index('lag')
+
+    output_rows = []
+
+    common_lags = sorted(list(set(tamsd_df['lag'].unique()) & set(eamsd_lookup.index)))
+
+    rng = np.random.default_rng()
+
+    for lag in common_lags:
+        tau_s = eamsd_lookup.loc[lag, 'tau_s']
+        eamsd = eamsd_lookup.loc[lag, 'eamsd']
+
+        tamsd_values = tamsd_df[tamsd_df['lag'] == lag]['tamsd'].values
+
+        if tamsd_values.size == 0 or not np.isfinite(eamsd):
+            continue
+
+        mean_tamsd = np.mean(tamsd_values)
+
+        eb_ratio = mean_tamsd / (eamsd + 1e-30)
+
+        normalized_tamsd = tamsd_values / (mean_tamsd + 1e-30)
+        eb_parameter = np.mean((normalized_tamsd - 1.0)**2)
+
+        row = {
+            'lag': lag,
+            'tau_s': tau_s,
+            'EB_ratio': eb_ratio,
+            'EB_parameter': eb_parameter
+        }
+
+        if n_bootstrap > 0 and tamsd_values.size > 5:
+            eb_r_samples, eb_p_samples = [], []
+            for _ in range(n_bootstrap):
+                bootstrap_sample = rng.choice(tamsd_values, size=tamsd_values.size, replace=True)
+
+                m_bs = np.mean(bootstrap_sample)
+                eb_r_samples.append(m_bs / (eamsd + 1e-30))
+
+                norm_bs = bootstrap_sample / (m_bs + 1e-30)
+                eb_p_samples.append(np.mean((norm_bs - 1.0)**2))
+
+            lo_r, hi_r = np.percentile(eb_r_samples, [2.5, 97.5])
+            lo_p, hi_p = np.percentile(eb_p_samples, [2.5, 97.5])
+
+            row.update({
+                'EB_ratio_CI_low': lo_r, 'EB_ratio_CI_high': hi_r,
+                'EB_param_CI_low': lo_p, 'EB_param_CI_high': hi_p
+            })
+
+        output_rows.append(row)
+
+    return pd.DataFrame(output_rows)
