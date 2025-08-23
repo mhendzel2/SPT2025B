@@ -9,6 +9,7 @@ import numpy as np
 import io
 import os
 import json
+import re
 from typing import List, Dict, Tuple, Any, Optional, Union
 from PIL import Image
 from utils import format_track_data, validate_tracks_dataframe
@@ -249,6 +250,44 @@ def _remove_redundant_header_rows(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
+def _remove_units_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove unit-annotation rows that sometimes follow header rows in Excel/CSV exports.
+    Heuristics:
+      - Count string cells in a row; count cells containing unit-like tokens
+        (e.g., 'μm', 'um', 'micron', 'nm', 'pixel', 'sec', 'ms', 'quality').
+      - Drop the row if there are at least 2 unit-like hits AND they comprise >= 50% of string cells.
+    """
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    unit_patterns = [
+        r"\bμm\b", r"\bum\b", r"micron", r"\bnm\b", r"pixel", r"\bsec\b", r"\bms\b",
+        r"\bseconds?\b", r"\bmicrons?\b", r"quality", r"\bframes?\b", r"\bHz\b",
+        r"\[[^\]]*\]",  # [um], [nm], etc.
+    ]
+    unit_regex = re.compile("|".join(unit_patterns), re.IGNORECASE)
+
+    rows_to_drop = []
+    for idx, row in df.iterrows():
+        string_cells = 0
+        unit_hits = 0
+        for val in row.values:
+            if isinstance(val, str):
+                string_cells += 1
+                if unit_regex.search(val.strip()):
+                    unit_hits += 1
+        if string_cells > 0 and unit_hits >= 2 and unit_hits / string_cells >= 0.5:
+            rows_to_drop.append(idx)
+
+    if rows_to_drop:
+        df = df.drop(rows_to_drop).reset_index(drop=True)
+        try:
+            print(f"Removed {len(rows_to_drop)} unit annotation row(s): indices {rows_to_drop}")
+        except Exception:
+            pass
+    return df
+
 def load_tracks_file(file) -> pd.DataFrame:
     """
     Load track data from various file formats.
@@ -276,6 +315,10 @@ def load_tracks_file(file) -> pd.DataFrame:
                 return pd.DataFrame()
             
             st.info(f"Loaded Excel file with {len(df)} rows and columns: {list(df.columns)}")
+            
+            # Clean typical artifacts: repeated header rows and units rows inside the data
+            df = _remove_redundant_header_rows(df)
+            df = _remove_units_rows(df)
             
             # Auto-detect column mapping for Excel files with enhanced detection
             column_map = {}
@@ -359,6 +402,17 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             # Apply column mapping
             tracks_df = df.rename(columns=column_map)
+
+            # If renaming created duplicate standardized names (e.g., two columns mapped to 'x'),
+            # keep the first occurrence to ensure 1-D selections below.
+            if tracks_df.columns.duplicated().any():
+                try:
+                    dup_names = [c for c, d in zip(tracks_df.columns, tracks_df.columns.duplicated()) if d]
+                    if dup_names:
+                        st.warning(f"Detected duplicate mapped columns after renaming: {sorted(set(dup_names))}. Keeping the first occurrence of each.")
+                except Exception:
+                    pass
+                tracks_df = tracks_df.loc[:, ~tracks_df.columns.duplicated(keep='first')]
             
             # Check if we have required columns
             missing_cols = [col for col in required_cols if col not in tracks_df.columns]
@@ -376,7 +430,12 @@ def load_tracks_file(file) -> pd.DataFrame:
             # Convert to numeric where appropriate
             for col in ['track_id', 'frame', 'x', 'y', 'z']:
                 if col in tracks_df.columns:
-                    tracks_df[col] = pd.to_numeric(tracks_df[col], errors='coerce')
+                    # Guard against duplicate columns resulting in a DataFrame selection
+                    col_obj = tracks_df[col]
+                    if isinstance(col_obj, pd.DataFrame):
+                        # Pick the first occurrence
+                        col_obj = col_obj.iloc[:, 0]
+                    tracks_df[col] = pd.to_numeric(col_obj, errors='coerce')
             
             # Remove rows with NaN values in essential columns
             tracks_df = tracks_df.dropna(subset=['track_id', 'frame', 'x', 'y'])
