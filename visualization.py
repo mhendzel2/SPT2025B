@@ -260,12 +260,50 @@ def plot_tracks(
     """
     import plotly.graph_objects as go
     import numpy as np
-    
+
+    # Basic validation and light normalization to prevent KeyErrors
+    if tracks_df is None or len(tracks_df) == 0:
+        return _empty_fig("No track data available.")
+
+    # Try to normalize common column aliases without importing app utilities
+    if isinstance(tracks_df, pd.DataFrame):
+        df = tracks_df.copy()
+        col_map = {}
+        # Track ID aliases
+        for cand in ("track_id", "TrackID", "TRACK_ID", "Track_ID", "trajectory", "particle", "id"):
+            if cand in df.columns:
+                col_map[cand] = "track_id"
+                break
+        # Coordinates
+        for cx in ("x", "X", "Pos_X", "Position_X", "POSITION_X"):
+            if cx in df.columns:
+                col_map[cx] = "x"
+                break
+        for cy in ("y", "Y", "Pos_Y", "Position_Y", "POSITION_Y"):
+            if cy in df.columns:
+                col_map[cy] = "y"
+                break
+        # Optional frame
+        for cf in ("frame", "Frame", "FRAME", "time", "Time", "t", "timepoint"):
+            if cf in df.columns:
+                col_map[cf] = "frame"
+                break
+        if col_map:
+            df = df.rename(columns=col_map)
+    else:
+        return _empty_fig("Track data must be a DataFrame.")
+
+    # Ensure required columns
+    required = ["track_id", "x", "y"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return _empty_fig(f"Missing required columns: {', '.join(missing)}")
+
     # Create a figure
     fig = go.Figure()
-    
+
     # Get unique track IDs and limit to max_tracks
-    unique_tracks = tracks_df['track_id'].unique()
+    unique_tracks = df['track_id'].unique()
     if max_tracks > 0 and len(unique_tracks) > max_tracks:
         unique_tracks = np.random.choice(unique_tracks, max_tracks, replace=False)
     
@@ -273,11 +311,11 @@ def plot_tracks(
     import plotly.express as px
     
     # Setup color mapping based on color_by parameter
-    if color_by and color_by in tracks_df.columns and color_by != 'track_id':
+    if color_by and color_by in df.columns and color_by != 'track_id':
         # Get the values to use for coloring
         color_values = {}
         for tid in unique_tracks:
-            track_data = tracks_df[tracks_df['track_id'] == tid]
+            track_data = df[df['track_id'] == tid]
             # Use mean value of the column for each track
             if not track_data.empty and not track_data[color_by].isna().all():
                 color_values[tid] = track_data[color_by].mean()
@@ -315,19 +353,21 @@ def plot_tracks(
             colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
     else:
         # Default coloring by track_id
-        colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
+    colors = px.colors.sample_colorscale(colormap, np.linspace(0, 1, len(unique_tracks)))
     
     # Determine min and max frame for time-coded colors if needed
-    if plot_type == 'time_coded' and 'frame' in tracks_df.columns:
-        min_frame = tracks_df['frame'].min()
-        max_frame = tracks_df['frame'].max()
+    if plot_type == 'time_coded' and 'frame' in df.columns:
+        min_frame = df['frame'].min()
+        max_frame = df['frame'].max()
         time_colorscale = px.colors.sequential.Viridis
     
     for i, track_id in enumerate(unique_tracks):
         # Get data for this track
-        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+        track_data = df[df['track_id'] == track_id]
+        if 'frame' in track_data.columns:
+            track_data = track_data.sort_values('frame')
         
-        if plot_type == 'time_coded' and 'frame' in track_data.columns:
+    if plot_type == 'time_coded' and 'frame' in track_data.columns:
             # For time-coded tracks, use a scatter plot with color gradient
             color_vals = (track_data['frame'] - min_frame) / (max_frame - min_frame) if max_frame > min_frame else 0.5
             
@@ -344,7 +384,7 @@ def plot_tracks(
                     colorbar=dict(title="Frame") if i==0 else None
                 ),
                 name=f"Track {track_id}",
-                hovertemplate="Track: %{meta}<br>x: %{x}<br>y: %{y}<br>Frame: %{marker.color}" if 'frame' in track_data.columns else None,
+                hovertemplate="Track: %{meta}<br>x: %{x}<br>y: %{y}<br>Frame: %{marker.color}",
                 meta=track_id
             ))
         else:
