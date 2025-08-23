@@ -67,7 +67,7 @@ from image_processing_utils import (
     normalize_image_for_display, create_timepoint_preview, 
     get_image_statistics
 )
-from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients
+from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients, plot_dwell_events_on_tracks, plot_gel_structure
 from segmentation import (
     segment_image_channel_otsu, 
     segment_image_channel_simple_threshold,
@@ -691,7 +691,7 @@ nav_option = st.sidebar.radio(
     "Navigation",
     [
         "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
-        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
+        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation", "Interactive Dashboard"
     ]
 )
 
@@ -5369,10 +5369,17 @@ elif st.session_state.active_page == "Analysis":
                 
                 # Dwell events
                 st.subheader("Dwell Events")
-                if 'dwell_events' in results:
+                if 'dwell_events' in results and not results['dwell_events'].empty:
                     st.dataframe(results['dwell_events'])
-                    
+
                     # Display dwell time visualizations
+                    with st.spinner("Generating Dwell Event Visualization..."):
+                        dwell_plot_fig = plot_dwell_events_on_tracks(
+                            st.session_state.tracks_data,
+                            results['dwell_events']
+                        )
+                        st.plotly_chart(dwell_plot_fig, use_container_width=True)
+
                     if 'dwell_times' in results:
                         def plot_dwell_time_analysis(results):
                             import plotly.express as px
@@ -5394,6 +5401,8 @@ elif st.session_state.active_page == "Analysis":
                                 return px.scatter(title="No dwell time data available")
                         dwell_fig = plot_dwell_time_analysis(results)
                         st.plotly_chart(dwell_fig, use_container_width=True)
+                else:
+                    st.info("No dwell events detected with the current parameters.")
                     
                     if 'region_stats' in results:
                         st.subheader("Region Statistics")
@@ -5891,6 +5900,16 @@ elif st.session_state.active_page == "Analysis":
                         st.subheader("Structural Statistics")
                         for key, value in results['ensemble_results'].items():
                             st.text(f"{key}: {value}")
+
+                    # Add the new visualization
+                    if 'confined_regions' in results and not results['confined_regions'].empty:
+                        st.subheader("Gel Structure Visualization")
+                        with st.spinner("Generating Gel Structure Plot..."):
+                            gel_fig = plot_gel_structure(
+                                st.session_state.tracks_data,
+                                results['confined_regions']
+                            )
+                            st.plotly_chart(gel_fig, use_container_width=True)
                     
                     # Mesh properties
                     st.subheader("Mesh Properties")
@@ -7020,9 +7039,12 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Biophysical Models", 
             "Changepoint Detection", 
             "Correlative Analysis",
+            "Higher-Order Correlation",
             "Microrheology",
             "Ornstein-Uhlenbeck",
-            "HMM Analysis"
+            "HMM Analysis",
+            "ML Trajectory Classifier",
+            "Topological Data Analysis"
         ])
         
         # HMM Analysis tab
@@ -7093,6 +7115,103 @@ elif st.session_state.active_page == "Advanced Analysis":
                         if i >= 5:
                             break
                         st.write(f"Track {track_id}: {states}")
+
+            with adv_tabs[7]:
+                st.header("ML Trajectory Classifier")
+
+                try:
+                    from ml_trajectory_classifier import train_classifier, classify_trajectories
+                    from synthetic_track_generator import generate_brownian_motion, generate_confined_motion, generate_directed_motion
+                    ML_AVAILABLE = True
+                except ImportError:
+                    ML_AVAILABLE = False
+
+                if ML_AVAILABLE:
+                    st.subheader("Train a New Classifier")
+                    if st.button("Train LSTM Model on Synthetic Data"):
+                        with st.spinner("Generating synthetic data and training model..."):
+                            # Generate synthetic data
+                            brownian_tracks = generate_brownian_motion(n_tracks=100)
+                            confined_tracks = generate_confined_motion(n_tracks=100)
+                            directed_tracks = generate_directed_motion(n_tracks=100)
+
+                            all_tracks_df = pd.concat([brownian_tracks, confined_tracks, directed_tracks], ignore_index=True)
+
+                            # Prepare data for LSTM
+                            tracks_list = [g[['x', 'y']].values for _, g in all_tracks_df.groupby('track_id')]
+                            labels_list = [g['label'].iloc[0] for _, g in all_tracks_df.groupby('track_id')]
+
+                            model, history, label_encoder = train_classifier(tracks_list, labels_list)
+
+                            st.session_state.ml_model = model
+                            st.session_state.ml_label_encoder = label_encoder
+
+                            st.success("Model trained successfully!")
+
+                            # Display training history
+                            st.write("Training History:")
+                            st.line_chart(pd.DataFrame(history.history))
+
+                    if 'ml_model' in st.session_state:
+                        st.subheader("Classify Your Trajectories")
+                        uploaded_file_ml = st.file_uploader("Upload your track data for classification", type=['csv', 'xlsx', 'xls'], key="ml_upload")
+
+                        if uploaded_file_ml is not None:
+                            try:
+                                user_tracks_df = data_loader.load_tracks_file(uploaded_file_ml)
+
+                                user_tracks_list = [g[['x', 'y']].values for _, g in user_tracks_df.groupby('track_id')]
+
+                                predicted_labels = classify_trajectories(st.session_state.ml_model, user_tracks_list, st.session_state.ml_label_encoder)
+
+                                # Add predictions to the dataframe
+                                user_tracks_df['predicted_motion_type'] = user_tracks_df['track_id'].map(dict(zip(user_tracks_df['track_id'].unique(), predicted_labels)))
+
+                                st.write("Classification Results:")
+                                st.dataframe(user_tracks_df)
+
+                                # Display summary
+                                st.write("Classification Summary:")
+                                st.bar_chart(user_tracks_df['predicted_motion_type'].value_counts())
+
+                            except Exception as e:
+                                st.error(f"Error classifying tracks: {e}")
+                else:
+                    st.error("Machine learning modules are not available. Please install TensorFlow and scikit-learn.")
+
+            with adv_tabs[8]:
+                st.header("Topological Data Analysis (TDA)")
+
+                try:
+                    from tda_analysis import perform_tda
+                    from visualization import plot_persistence_diagram
+                    TDA_AVAILABLE_UI = True
+                except ImportError:
+                    TDA_AVAILABLE_UI = False
+
+                if TDA_AVAILABLE_UI:
+                    st.subheader("TDA Parameters")
+                    max_edge_length = st.slider("Max Edge Length", 1.0, 50.0, 10.0, 0.5, help="Maximum edge length for the Vietoris-Rips complex.")
+
+                    if st.button("Run TDA"):
+                        with st.spinner("Running TDA..."):
+                            # Use all points from all tracks as the point cloud
+                            points = st.session_state.tracks_data[['x', 'y']].values
+
+                            tda_results = perform_tda(points, max_edge_length=max_edge_length)
+                            st.session_state.analysis_results['tda'] = tda_results
+                            st.success("TDA completed.")
+
+                    if 'tda' in st.session_state.analysis_results:
+                        tda_results = st.session_state.analysis_results['tda']
+                        if tda_results['success']:
+                            st.write("Persistence Diagram:")
+                            fig = plot_persistence_diagram(tda_results)
+                            st.plotly_chart(fig)
+                        else:
+                            st.error(f"TDA failed: {tda_results['error']}")
+                else:
+                    st.error("TDA modules are not available. Please install giotto-tda.")
 
 
         # Biophysical Models tab
@@ -7222,6 +7341,83 @@ elif st.session_state.active_page == "Advanced Analysis":
         
         # Microrheology Analysis tab
         with adv_tabs[3]:
+            st.header("Higher-Order Correlation Analysis")
+
+            try:
+                from correlative_analysis import CorrelativeAnalyzer
+                from visualization import plot_pca_results
+                CORR_ANALYSIS_AVAILABLE = True
+            except ImportError:
+                CORR_ANALYSIS_AVAILABLE = False
+
+            if CORR_ANALYSIS_AVAILABLE:
+                if 'correlative_analyzer' not in st.session_state:
+                    st.session_state.correlative_analyzer = CorrelativeAnalyzer()
+
+                analyzer = st.session_state.correlative_analyzer
+
+                # PCA Section
+                st.subheader("Principal Component Analysis (PCA)")
+
+                if 'track_statistics' in st.session_state and st.session_state.track_statistics is not None:
+                    param_df_for_pca = analyzer.multi_parameter_correlation_matrix(st.session_state.tracks_data)['track_parameters']
+                    all_params = [col for col in param_df_for_pca.columns if pd.api.types.is_numeric_dtype(param_df_for_pca[col]) and col != 'track_id']
+
+                    selected_params_pca = st.multiselect("Select parameters for PCA", all_params, default=all_params[:min(5, len(all_params))])
+                    n_components_pca = st.slider("Number of Components", 2, 10, 2, 1)
+
+                    if st.button("Run PCA"):
+                        with st.spinner("Running PCA..."):
+                            pca_results = analyzer.perform_pca(param_df_for_pca[selected_params_pca + ['track_id']], n_components=n_components_pca)
+                            st.session_state.analysis_results['pca'] = pca_results
+                            st.success("PCA completed.")
+
+                if 'pca' in st.session_state.analysis_results:
+                    pca_results = st.session_state.analysis_results['pca']
+                    if pca_results['success']:
+                        st.write("Explained Variance Ratio:", pca_results['explained_variance_ratio'])
+
+                        pca_plots = plot_pca_results(pca_results)
+                        if 'scree_plot' in pca_plots:
+                            st.plotly_chart(pca_plots['scree_plot'])
+                        if 'biplot' in pca_plots:
+                            st.plotly_chart(pca_plots['biplot'])
+                    else:
+                        st.error(f"PCA failed: {pca_results['error']}")
+
+                st.divider()
+
+                # Partial Correlation Section
+                st.subheader("Partial Correlation")
+
+                if 'track_statistics' in st.session_state and st.session_state.track_statistics is not None:
+                    param_df_for_partial = analyzer.multi_parameter_correlation_matrix(st.session_state.tracks_data)['track_parameters']
+                    all_params_partial = [col for col in param_df_for_partial.columns if pd.api.types.is_numeric_dtype(param_df_for_partial[col]) and col != 'track_id']
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        x_var = st.selectbox("X variable", all_params_partial, index=0)
+                        y_var = st.selectbox("Y variable", all_params_partial, index=1)
+                    with col2:
+                        covars = st.multiselect("Control variables (covariates)", all_params_partial, default=all_params_partial[2:min(4, len(all_params_partial))])
+
+                    if st.button("Calculate Partial Correlation"):
+                        with st.spinner("Calculating partial correlation..."):
+                            partial_corr_results = analyzer.calculate_partial_correlation(param_df_for_partial, x=x_var, y=y_var, covar=covars)
+                            st.session_state.analysis_results['partial_correlation'] = partial_corr_results
+                            st.success("Partial correlation calculated.")
+
+                if 'partial_correlation' in st.session_state.analysis_results:
+                    partial_corr_results = st.session_state.analysis_results['partial_correlation']
+                    if partial_corr_results['success']:
+                        st.write("Partial Correlation Results:")
+                        st.json(partial_corr_results['results'])
+                    else:
+                        st.error(f"Partial correlation failed: {partial_corr_results['error']}")
+            else:
+                st.error("Correlative analysis module not found.")
+
+        with adv_tabs[4]:
             st.header("Microrheology Analysis")
             st.write("Calculate G' (storage modulus), G\" (loss modulus), and effective viscosity from particle tracking data.")
             
@@ -8056,6 +8252,10 @@ elif st.session_state.active_page == "Report Generation":
         show_enhanced_report_generator()
     else:
         st.error("Report generator module not available.")
+
+elif st.session_state.active_page == "Interactive Dashboard":
+    from interactive_dashboard import show
+    show()
 
 # Footer
 st.markdown("---")

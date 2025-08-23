@@ -58,6 +58,163 @@ def _empty_fig(msg: str) -> go.Figure:
     return fig
 
 
+def plot_dwell_events_on_tracks(
+    tracks_df: pd.DataFrame,
+    dwell_events_df: pd.DataFrame,
+    title: str = "Tracks with Dwell Events",
+    track_color: str = 'lightgrey',
+    dwell_color: str = 'red',
+    track_width: int = 1,
+    dwell_width: int = 3
+) -> go.Figure:
+    """
+    Create an interactive plot of tracks with dwell events highlighted.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with 'track_id', 'frame', 'x', 'y'.
+    dwell_events_df : pd.DataFrame
+        DataFrame containing dwell event data from `analyze_dwell_time`.
+    title : str, optional
+        The plot title, by default "Tracks with Dwell Events".
+    track_color : str, optional
+        Color for the main track lines, by default 'lightgrey'.
+    dwell_color : str, optional
+        Color for the highlighted dwell segments, by default 'red'.
+    track_width : int, optional
+        Width of the main track lines, by default 1.
+    dwell_width : int, optional
+        Width of the dwell segment lines, by default 3.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        An interactive plot of tracks with highlighted dwell events.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data available.")
+
+    fig = go.Figure()
+
+    # Plot all tracks in a neutral color
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        fig.add_trace(go.Scatter(
+            x=track_data['x'],
+            y=track_data['y'],
+            mode='lines',
+            line=dict(color=track_color, width=track_width),
+            name=f'Track {track_id}',
+            showlegend=False
+        ))
+
+    # Highlight dwell events
+    if not dwell_events_df.empty:
+        for _, event in dwell_events_df.iterrows():
+            track_id = event['track_id']
+            start_frame = event['start_frame']
+            end_frame = event['end_frame']
+
+            # Get the segment of the track corresponding to the dwell event
+            dwell_segment = tracks_df[
+                (tracks_df['track_id'] == track_id) &
+                (tracks_df['frame'] >= start_frame) &
+                (tracks_df['frame'] <= end_frame)
+            ]
+
+            if not dwell_segment.empty:
+                fig.add_trace(go.Scatter(
+                    x=dwell_segment['x'],
+                    y=dwell_segment['y'],
+                    mode='lines',
+                    line=dict(color=dwell_color, width=dwell_width),
+                    name=f'Dwell Event {event.name}',
+                    showlegend=False
+                ))
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="x (pixels)",
+        yaxis_title="y (pixels)",
+        template="plotly_white"
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+
+    return fig
+
+
+def plot_gel_structure(
+    tracks_df: pd.DataFrame,
+    confined_regions_df: pd.DataFrame,
+    title: str = "Gel Structure Analysis",
+    track_color: str = 'lightgrey',
+    pore_color: str = 'rgba(255, 0, 0, 0.5)'
+) -> go.Figure:
+    """
+    Create a plot of tracks with detected confined regions (pores) overlaid.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with 'track_id', 'x', 'y'.
+    confined_regions_df : pd.DataFrame
+        DataFrame with confined regions data from `analyze_gel_structure`.
+        Must contain 'center_x', 'center_y', and 'radius'.
+    title : str, optional
+        The plot title, by default "Gel Structure Analysis".
+    track_color : str, optional
+        Color for the track lines, by default 'lightgrey'.
+    pore_color : str, optional
+        Fill color for the confined region circles, by default 'rgba(255, 0, 0, 0.5)'.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        An interactive plot showing tracks and gel pores.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data available.")
+
+    fig = go.Figure()
+
+    # Plot all tracks
+    for _, track_data in tracks_df.groupby('track_id'):
+        fig.add_trace(go.Scatter(
+            x=track_data['x'],
+            y=track_data['y'],
+            mode='lines',
+            line=dict(color=track_color, width=1),
+            showlegend=False
+        ))
+
+    # Plot confined regions as circles
+    if not confined_regions_df.empty:
+        for _, region in confined_regions_df.iterrows():
+            x0 = region['center_x'] - region['radius']
+            y0 = region['center_y'] - region['radius']
+            x1 = region['center_x'] + region['radius']
+            y1 = region['center_y'] + region['radius']
+            fig.add_shape(
+                type="circle",
+                xref="x", yref="y",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                fillcolor=pore_color,
+                line_color=pore_color
+            )
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="x (pixels)",
+        yaxis_title="y (pixels)",
+        template="plotly_white"
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+
+    return fig
+
+
 def _qual_colour(i: int) -> str:
     """Deterministic qualitative colour cycling."""
     return QualColours[i % len(QualColours)]
@@ -414,6 +571,193 @@ def plot_tracks_on_mask(
     return fig
 
 
+def plot_advanced_metric_diagnostics(
+    ergodicity_df: pd.DataFrame,
+    ngp_df: pd.DataFrame,
+    van_hove_short_lag: Dict[str, np.ndarray],
+    van_hove_long_lag: Dict[str, np.ndarray],
+    short_lag_time: float,
+    long_lag_time: float
+) -> go.Figure:
+    """
+    Create a composite plot for advanced diagnostic metrics.
+
+    Parameters
+    ----------
+    ergodicity_df : pd.DataFrame
+        DataFrame with ergodicity analysis results.
+    ngp_df : pd.DataFrame
+        DataFrame with Non-Gaussian Parameter results.
+    van_hove_short_lag : Dict[str, np.ndarray]
+        Van Hove correlation data for a short lag time.
+    van_hove_long_lag : Dict[str, np.ndarray]
+        Van Hove correlation data for a long lag time.
+    short_lag_time : float
+        The short lag time value in seconds.
+    long_lag_time : float
+        The long lag time value in seconds.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A figure with subplots for ergodicity, NGP, and Van Hove analysis.
+    """
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=("Ergodicity Analysis", "Non-Gaussian Parameter (2D)", "Van Hove Correlation"),
+        shared_xaxes=False,
+        vertical_spacing=0.15
+    )
+
+    # Subplot 1: Ergodicity
+    if not ergodicity_df.empty:
+        fig.add_trace(go.Scatter(
+            x=ergodicity_df['tau_s'], y=ergodicity_df['EB_ratio'],
+            name='EB Ratio',
+            mode='lines+markers',
+            line=dict(color=QualColours[0])
+        ), row=1, col=1)
+        # Secondary y-axis for EB parameter can be added if needed
+
+    # Subplot 2: NGP
+    if not ngp_df.empty:
+        fig.add_trace(go.Scatter(
+            x=ngp_df['tau_s'], y=ngp_df['NGP_2D'],
+            name='NGP (2D)',
+            mode='lines+markers',
+            line=dict(color=QualColours[1])
+        ), row=2, col=1)
+
+    # Subplot 3: Van Hove
+    if van_hove_short_lag and van_hove_short_lag['r_centers'].size > 0:
+        fig.add_trace(go.Scatter(
+            x=van_hove_short_lag['r_centers'], y=van_hove_short_lag['r_density'],
+            name=f'Van Hove (t={short_lag_time:.2f}s)',
+            mode='lines',
+            line=dict(color=QualColours[2])
+        ), row=3, col=1)
+
+    if van_hove_long_lag and van_hove_long_lag['r_centers'].size > 0:
+        fig.add_trace(go.Scatter(
+            x=van_hove_long_lag['r_centers'], y=van_hove_long_lag['r_density'],
+            name=f'Van Hove (t={long_lag_time:.2f}s)',
+            mode='lines',
+            line=dict(color=QualColours[3])
+        ), row=3, col=1)
+
+    # Update axes titles
+    fig.update_xaxes(title_text="Lag Time (s)", row=1, col=1)
+    fig.update_yaxes(title_text="EB Ratio", row=1, col=1)
+    fig.update_xaxes(title_text="Lag Time (s)", row=2, col=1)
+    fig.update_yaxes(title_text="NGP", row=2, col=1)
+    fig.update_xaxes(title_text="Displacement (µm)", row=3, col=1)
+    fig.update_yaxes(title_text="Probability Density", row=3, col=1)
+
+    fig.update_layout(
+        height=900,
+        title_text="Advanced Metric Diagnostics",
+        template="plotly_white"
+    )
+
+    return fig
+
+
+def generate_kymograph(
+    tracks_df: pd.DataFrame,
+    axis_start: Tuple[float, float],
+    axis_end: Tuple[float, float],
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0,
+    title: str = "Kymograph"
+) -> go.Figure:
+    """
+    Generate a kymograph from particle tracks along a user-defined axis.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
+    axis_start : Tuple[float, float]
+        The (x, y) coordinates of the start of the axis in pixels.
+    axis_end : Tuple[float, float]
+        The (x, y) coordinates of the end of the axis in pixels.
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 1.0.
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0.
+    title : str, optional
+        The plot title, by default "Kymograph".
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the kymograph.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data for kymograph.")
+
+    # Convert to physical units
+    df = tracks_df.copy()
+    df['x_um'] = df['x'] * pixel_size
+    df['y_um'] = df['y'] * pixel_size
+
+    # Axis vector in physical units
+    p1 = np.array(axis_start) * pixel_size
+    p2 = np.array(axis_end) * pixel_size
+    axis_vector = p2 - p1
+    axis_length = np.linalg.norm(axis_vector)
+    if axis_length == 0:
+        return _empty_fig("Axis for kymograph cannot have zero length.")
+    unit_axis_vector = axis_vector / axis_length
+
+    # Project all points onto the axis
+    points = df[['x_um', 'y_um']].values
+    vectors_from_start = points - p1
+    projections = np.dot(vectors_from_start, unit_axis_vector)
+
+    df['projection'] = projections
+
+    # Create the kymograph image
+    min_frame = int(df['frame'].min())
+    max_frame = int(df['frame'].max())
+    n_frames = max_frame - min_frame + 1
+
+    n_bins = int(axis_length / pixel_size)
+    if n_bins == 0:
+        n_bins = 100
+
+    kymograph_image = np.zeros((n_frames, n_bins))
+
+    projection_bins = np.linspace(0, axis_length, n_bins + 1)
+
+    df['frame_idx'] = (df['frame'] - min_frame).astype(int)
+    df['proj_bin'] = np.digitize(df['projection'], projection_bins) - 1
+
+    for _, row in df.iterrows():
+        frame_idx = int(row['frame_idx'])
+        proj_bin = int(row['proj_bin'])
+        if 0 <= frame_idx < n_frames and 0 <= proj_bin < n_bins:
+            kymograph_image[frame_idx, proj_bin] += 1
+
+    # Create the figure
+    fig = px.imshow(
+        kymograph_image,
+        labels=dict(x="Position along axis (µm)", y="Time (s)", color="Particle Count"),
+        x=np.linspace(0, axis_length, n_bins),
+        y=np.linspace(min_frame * frame_interval, max_frame * frame_interval, n_frames),
+        origin='lower'
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=f"Position along axis ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        yaxis_title=f"Time (s)",
+        template="plotly_white"
+    )
+
+    return fig
+
+
 def plot_hmm_state_diagram(model) -> MplFigure:
     """
     Create a state-transition diagram for a fitted HMM model.
@@ -471,6 +815,126 @@ def plot_hmm_state_diagram(model) -> MplFigure:
 
     ax.set_title("HMM State-Transition Diagram")
     plt.axis('off')
+
+    return fig
+
+
+def plot_velocity_field(
+    tracks_df: pd.DataFrame,
+    grid_size: int = 20,
+    min_vectors_per_bin: int = 3,
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0,
+    title: str = "Velocity Vector Field"
+) -> go.Figure:
+    """
+    Create a vector field plot of average particle velocities.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame with track data including 'track_id', 'frame', 'x', 'y'.
+    grid_size : int, optional
+        The number of bins for the grid in each dimension, by default 20.
+    min_vectors_per_bin : int, optional
+        Minimum number of velocity vectors in a bin to display an arrow, by default 3.
+    pixel_size : float, optional
+        Pixel size in micrometers, by default 1.0.
+    frame_interval : float, optional
+        Time between frames in seconds, by default 1.0.
+    title : str, optional
+        The plot title, by default "Velocity Vector Field".
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the quiver plot.
+    """
+    if tracks_df.empty or len(tracks_df) < 2:
+        return _empty_fig("Not enough track data for velocity field.")
+
+    # Calculate velocities
+    tracks_df = tracks_df.sort_values(['track_id', 'frame'])
+    tracks_df['x_um'] = tracks_df['x'] * pixel_size
+    tracks_df['y_um'] = tracks_df['y'] * pixel_size
+
+    velocities = []
+    for track_id, track in tracks_df.groupby('track_id'):
+        if len(track) > 1:
+            dx = np.diff(track['x_um'].values)
+            dy = np.diff(track['y_um'].values)
+            dt = np.diff(track['frame'].values) * frame_interval
+
+            # Avoid division by zero for frames that are not consecutive
+            vx = np.divide(dx, dt, out=np.zeros_like(dx), where=dt!=0)
+            vy = np.divide(dy, dt, out=np.zeros_like(dy), where=dt!=0)
+
+            # Position is the start of the displacement vector
+            positions_x = track['x_um'].values[:-1]
+            positions_y = track['y_um'].values[:-1]
+
+            velocities.append(pd.DataFrame({
+                'x': positions_x,
+                'y': positions_y,
+                'vx': vx,
+                'vy': vy
+            }))
+
+    if not velocities:
+        return _empty_fig("Could not calculate any velocity vectors.")
+
+    all_velocities = pd.concat(velocities)
+
+    # Define grid
+    x_min, x_max = all_velocities['x'].min(), all_velocities['x'].max()
+    y_min, y_max = all_velocities['y'].min(), all_velocities['y'].max()
+
+    x_bins = np.linspace(x_min, x_max, grid_size + 1)
+    y_bins = np.linspace(y_min, y_max, grid_size + 1)
+
+    # Digitize positions to assign to bins
+    all_velocities['x_bin'] = np.digitize(all_velocities['x'], x_bins) - 1
+    all_velocities['y_bin'] = np.digitize(all_velocities['y'], y_bins) - 1
+
+    # Group by bin and calculate mean velocity
+    grouped = all_velocities.groupby(['x_bin', 'y_bin'])
+
+    x_coords, y_coords, u_vectors, v_vectors = [], [], [], []
+
+    for name, group in grouped:
+        x_bin, y_bin = name
+        if 0 <= x_bin < grid_size and 0 <= y_bin < grid_size:
+            if len(group) >= min_vectors_per_bin:
+                mean_vx = group['vx'].mean()
+                mean_vy = group['vy'].mean()
+
+                # Use center of bin for arrow position
+                x_center = (x_bins[x_bin] + x_bins[x_bin + 1]) / 2
+                y_center = (y_bins[y_bin] + y_bins[y_bin + 1]) / 2
+
+                x_coords.append(x_center)
+                y_coords.append(y_center)
+                u_vectors.append(mean_vx)
+                v_vectors.append(mean_vy)
+
+    if not x_coords:
+        return _empty_fig("No grid cells with enough vectors to plot.")
+
+    # Create quiver plot
+    from plotly import figure_factory as ff
+
+    fig = ff.create_quiver(x_coords, y_coords, u_vectors, v_vectors,
+                           scale=None,  # auto-scale
+                           arrow_scale=0.3,
+                           name='Velocity Vectors',
+                           line_width=1)
+
+    fig.update_layout(
+        title=title,
+        xaxis_title=f"x ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        yaxis_title=f"y ({'µm' if pixel_size != 1.0 else 'pixels'})",
+        template="plotly_white"
+    )
 
     return fig
 
@@ -1811,3 +2275,144 @@ def plot_polymer_physics_results(polymer_data):
         
     except Exception:
         return _empty_fig("Failed to render polymer physics plot")
+
+
+def plot_pca_results(pca_results: Dict[str, Any]) -> Dict[str, go.Figure]:
+    """
+    Create visualizations for PCA results.
+
+    Parameters
+    ----------
+    pca_results : dict
+        The results from the perform_pca function.
+
+    Returns
+    -------
+    dict
+        A dictionary of Plotly figures for the scree plot and biplot.
+    """
+    if not pca_results.get('success', False):
+        return {"empty": _empty_fig("PCA analysis failed or no data.")}
+
+    figs = {}
+
+    # 1. Scree Plot
+    explained_variance = pca_results['explained_variance_ratio']
+    n_components = len(explained_variance)
+
+    scree_fig = go.Figure()
+    scree_fig.add_trace(go.Bar(
+        x=[f'PC{i+1}' for i in range(n_components)],
+        y=explained_variance,
+        name='Explained Variance'
+    ))
+    scree_fig.add_trace(go.Scatter(
+        x=[f'PC{i+1}' for i in range(n_components)],
+        y=np.cumsum(explained_variance),
+        name='Cumulative Variance'
+    ))
+    scree_fig.update_layout(
+        title="PCA Scree Plot",
+        xaxis_title="Principal Component",
+        yaxis_title="Explained Variance Ratio",
+        template="plotly_white"
+    )
+    figs['scree_plot'] = scree_fig
+
+    # 2. Biplot (Loadings Plot)
+    components = pca_results['components']
+    labels = pca_results['feature_names']
+
+    if n_components >= 2:
+        biplot_fig = go.Figure()
+        for i, feature in enumerate(labels):
+            biplot_fig.add_shape(
+                type='line',
+                x0=0, y0=0,
+                x1=components[0, i],
+                y1=components[1, i]
+            )
+            biplot_fig.add_annotation(
+                x=components[0, i],
+                y=components[1, i],
+                ax=0, ay=0,
+                xanchor="center",
+                yanchor="bottom",
+                text=feature
+            )
+
+        # Add a circle for reference
+        biplot_fig.add_shape(type="circle",
+                           xref="x", yref="y",
+                           x0=-1, y0=-1, x1=1, y1=1,
+                           line_color="LightSeaGreen")
+
+        biplot_fig.update_layout(
+            title="PCA Biplot",
+            xaxis_title="PC1",
+            yaxis_title="PC2",
+            template="plotly_white"
+        )
+        figs['biplot'] = biplot_fig
+
+    return figs
+
+
+def plot_persistence_diagram(tda_results: Dict[str, Any]) -> go.Figure:
+    """
+    Create a persistence diagram plot from TDA results.
+
+    Parameters
+    ----------
+    tda_results : dict
+        The results from the perform_tda function.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A Plotly figure object containing the persistence diagram.
+    """
+    if not tda_results.get('success', False):
+        return _empty_fig("TDA analysis failed or no data.")
+
+    try:
+        from giotto_tda.diagrams import PersistenceDiagram
+    except ImportError:
+        return _empty_fig("giotto-tda is not available.")
+
+    diagram = tda_results['diagram']
+
+    fig = go.Figure()
+
+    homology_dims = np.unique(diagram[:, 2])
+
+    for dim in homology_dims:
+        dim_points = diagram[diagram[:, 2] == dim]
+        births = dim_points[:, 0]
+        deaths = dim_points[:, 1]
+
+        # Filter out infinite death times for plotting
+        finite_mask = np.isfinite(deaths)
+        finite_deaths = deaths[finite_mask]
+        finite_births = births[finite_mask]
+
+        fig.add_trace(go.Scatter(
+            x=finite_births,
+            y=finite_deaths,
+            mode='markers',
+            name=f'H{int(dim)}'
+        ))
+
+    # Add diagonal line
+    if diagram.size > 0:
+        max_val = np.max(diagram[np.isfinite(diagram[:, 1])]) if np.any(np.isfinite(diagram[:, 1])) else 1
+        fig.add_shape(type='line', x0=0, y0=0, x1=max_val, y1=max_val, line=dict(dash='dash'))
+
+    fig.update_layout(
+        title="Persistence Diagram",
+        xaxis_title="Birth",
+        yaxis_title="Death",
+        template="plotly_white"
+    )
+
+    return fig

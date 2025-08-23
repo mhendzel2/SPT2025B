@@ -1068,17 +1068,11 @@ class EnhancedSPTReportGenerator:
             
         st.subheader("📄 Generated Report")
         
-        # Create action/download options
-        col1, col2, col3, col4 = st.columns(4)
+        # Create download options
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Persist the interactive view across reruns so it doesn't collapse/scroll to top
-            show_key = "show_interactive_report"
-            if show_key not in st.session_state:
-                st.session_state[show_key] = False
             if st.button("📊 View Interactive Report"):
-                st.session_state[show_key] = True
-            if st.session_state[show_key]:
                 self._show_interactive_report(current_units)
         
         with col2:
@@ -1101,34 +1095,6 @@ class EnhancedSPTReportGenerator:
                     file_name=f"spt_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
-
-        with col4:
-            # On-demand HTML/PDF exports
-            exp_choice = st.selectbox("Export", ["HTML", "PDF"], key="report_export_choice")
-            if exp_choice == "HTML":
-                try:
-                    html = self._build_html_report(current_units)
-                    st.download_button(
-                        "📥 Download HTML Report",
-                        data=html.encode("utf-8"),
-                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-                        mime="text/html"
-                    )
-                except Exception as e:
-                    st.error(f"Failed to build HTML: {e}")
-            else:
-                try:
-                    pdf_bytes, note = self._build_pdf_report(current_units)
-                    st.download_button(
-                        "🧾 Download PDF Report",
-                        data=pdf_bytes,
-                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf"
-                    )
-                    if note:
-                        st.info(note)
-                except Exception as e:
-                    st.error(f"Failed to build PDF: {e}")
 
     def _show_interactive_report(self, current_units):
         """Display interactive report with visualizations."""
@@ -1262,165 +1228,7 @@ class EnhancedSPTReportGenerator:
             return output.getvalue()
         except Exception as e:
             st.error(f"Failed to generate CSV summary: {str(e)}")
-
-    def _build_html_report(self, current_units) -> str:
-        """Construct a self-contained HTML report with embedded figures."""
-        import html
-        from typing import Any
-        from visualization import fig_to_base64
-        
-        def _render_section(title: str, body_html: str) -> str:
-            return f"""
-            <section style='margin:20px 0;'>
-              <h2>{html.escape(title)}</h2>
-              {body_html}
-            </section>
-            """
-        
-        # Header
-        parts = [
-            "<!DOCTYPE html>",
-            "<html lang='en'>",
-            "<head>",
-            "<meta charset='utf-8' />",
-            "<meta name='viewport' content='width=device-width, initial-scale=1' />",
-            "<title>Single Particle Tracking Analysis Report</title>",
-            "<script src='https://cdn.plot.ly/plotly-2.26.0.min.js'></script>",
-            "<style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;} .metric{display:inline-block;margin-right:24px;}</style>",
-            "</head>",
-            "<body>",
-            "<h1>Single Particle Tracking Analysis Report</h1>",
-            f"<p>Generated at: {datetime.now().isoformat()}</p>",
-            f"<p>Pixel size: {current_units.get('pixel_size', 'n/a')} µm, Frame interval: {current_units.get('frame_interval', 'n/a')} s</p>",
-        ]
-        
-        # Summary metrics if present
-        if 'basic_statistics' in self.report_results:
-            s = self.report_results['basic_statistics']
-            metrics_html = """
-            <div>
-              <div class='metric'><strong>Total Tracks:</strong> {total}</div>
-              <div class='metric'><strong>Mean Track Length:</strong> {mtl:.1f} frames</div>
-              <div class='metric'><strong>Mean Velocity:</strong> {mv:.3f} µm/s</div>
-              <div class='metric'><strong>Total Time Points:</strong> {ttp}</div>
-            </div>
-            """.format(total=html.escape(str(s.get('total_tracks','N/A'))),
-                       mtl=float(s.get('mean_track_length', 0) or 0),
-                       mv=float(s.get('mean_velocity', 0) or 0),
-                       ttp=html.escape(str(s.get('total_timepoints','N/A'))))
-            parts.append(_render_section("Summary Statistics", metrics_html))
-        
-        # Analysis sections
-        for key, result in self.report_results.items():
-            name = self.available_analyses.get(key, {}).get('name', key)
-            if isinstance(result, dict) and result.get('error'):
-                parts.append(_render_section(name, f"<p style='color:#b00;'>Error: {html.escape(result['error'])}</p>"))
-                continue
-            body = ["<pre style='background:#f7f7f9;padding:12px;border-radius:6px;'>",
-                    html.escape(json.dumps(result, indent=2, default=str)), "</pre>"]
-            # Attach figure if available
-            if key in self.report_figures:
-                fig = self.report_figures[key]
-                try:
-                    # Plotly
-                    from plotly.graph_objs import Figure as _PFig
-                    if isinstance(fig, _PFig):
-                        body.append(fig.to_html(full_html=False, include_plotlyjs=False))
-                    else:
-                        # Matplotlib -> embed base64 png
-                        b64 = fig_to_base64(fig, fmt="png")
-                        body.append(f"<img alt='{html.escape(name)}' src='data:image/png;base64,{b64}' style='max-width:100%;height:auto;border:1px solid #ddd;border-radius:6px;' />")
-                except Exception as e:
-                    body.append(f"<p style='color:#b00;'>Figure render failed: {html.escape(str(e))}</p>")
-            parts.append(_render_section(name, "".join(body)))
-        
-        parts.append("</body></html>")
-        return "\n".join(parts)
-
-    def _build_pdf_report(self, current_units) -> tuple[bytes, str]:
-        """Construct a PDF report from available figures and key metrics.
-        Returns (pdf_bytes, note) where note may include tips about optional deps.
-        """
-        import io
-        from matplotlib.backends.backend_pdf import PdfPages
-        import matplotlib.pyplot as plt
-        note = ""
-        buf = io.BytesIO()
-        with PdfPages(buf) as pdf:
-            # Title page
-            fig = plt.figure(figsize=(8.27, 11.69))  # A4 portrait inches
-            fig.suptitle("Single Particle Tracking Analysis Report", fontsize=16)
-            ax = fig.add_subplot(111)
-            ax.axis('off')
-            lines = [
-                f"Generated: {datetime.now().isoformat()}",
-                f"Pixel size: {current_units.get('pixel_size', 'n/a')} µm",
-                f"Frame interval: {current_units.get('frame_interval', 'n/a')} s",
-                "",
-                "Sections included:"
-            ] + [f" - {self.available_analyses.get(k, {}).get('name', k)}" for k in self.report_results.keys()]
-            ax.text(0.05, 0.95, "\n".join(lines), va='top', fontsize=10)
-            pdf.savefig(fig, bbox_inches='tight')
-            plt.close(fig)
-
-            # Summary metrics page
-            if 'basic_statistics' in self.report_results:
-                fig = plt.figure(figsize=(8.27, 11.69))
-                ax = fig.add_subplot(111)
-                ax.axis('off')
-                s = self.report_results['basic_statistics']
-                txt = (
-                    f"Total tracks: {s.get('total_tracks','N/A')}\n"
-                    f"Mean track length: {s.get('mean_track_length', 0):.1f} frames\n"
-                    f"Mean velocity: {s.get('mean_velocity', 0):.3f} µm/s\n"
-                    f"Total time points: {s.get('total_timepoints','N/A')}\n"
-                )
-                ax.text(0.05, 0.95, "Summary Statistics\n\n" + txt, va='top', fontsize=11)
-                pdf.savefig(fig, bbox_inches='tight')
-                plt.close(fig)
-
-            # Figures
-            for key, fig_obj in self.report_figures.items():
-                try:
-                    from matplotlib.figure import Figure as _MF
-                    if isinstance(fig_obj, _MF):
-                        pdf.savefig(fig_obj, bbox_inches='tight')
-                        plt.close(fig_obj)
-                    else:
-                        # Try to rasterize Plotly figure via kaleido if available
-                        try:
-                            img_bytes = fig_obj.to_image(format='png', scale=2)  # requires kaleido
-                        except Exception:
-                            img_bytes = None
-                            note = (note or "") + "Plotly static export requires the 'kaleido' package. "
-                        if img_bytes:
-                            img = plt.imread(io.BytesIO(img_bytes), format='png')
-                            fig = plt.figure(figsize=(8.27, 11.69))
-                            ax = fig.add_subplot(111)
-                            ax.imshow(img)
-                            ax.axis('off')
-                            ax.set_title(self.available_analyses.get(key, {}).get('name', key))
-                            pdf.savefig(fig, bbox_inches='tight')
-                            plt.close(fig)
-                        else:
-                            # Placeholder page noting skipped figure
-                            fig = plt.figure(figsize=(8.27, 11.69))
-                            ax = fig.add_subplot(111)
-                            ax.axis('off')
-                            ax.text(0.05, 0.95, f"[Plotly figure not included: {self.available_analyses.get(key, {}).get('name', key)}]", va='top')
-                            pdf.savefig(fig, bbox_inches='tight')
-                            plt.close(fig)
-                except Exception as e:
-                    # Add an error page
-                    fig = plt.figure(figsize=(8.27, 11.69))
-                    ax = fig.add_subplot(111)
-                    ax.axis('off')
-                    ax.text(0.05, 0.95, f"Error including figure '{key}': {e}", va='top', color='red')
-                    pdf.savefig(fig, bbox_inches='tight')
-                    plt.close(fig)
-
-        buf.seek(0)
-        return buf.read(), note.strip()
+            return None
 
     def _render_analysis_section(self, analysis_key, results, config):
         """Render analysis section with better error handling"""

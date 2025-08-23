@@ -367,6 +367,89 @@ class CorrelativeAnalyzer:
             'significant_correlations': np.sum((np.abs(corr_values) > 0.5) & (p_matrix < 0.05)) // 2
         }
 
+    def perform_pca(self, param_df: pd.DataFrame,
+                    n_components: int = 2) -> Dict[str, Any]:
+        """
+        Perform Principal Component Analysis (PCA) on track parameters.
+
+        Parameters
+        ----------
+        param_df : pd.DataFrame
+            DataFrame of track-averaged parameters.
+        n_components : int, optional
+            Number of principal components to compute, by default 2.
+
+        Returns
+        -------
+        dict
+            PCA results including explained variance, components, and transformed data.
+        """
+
+        parameters = [col for col in param_df.columns if col != 'track_id' and pd.api.types.is_numeric_dtype(param_df[col])]
+
+        if param_df.empty or len(parameters) < n_components:
+            return {'success': False, 'error': 'Not enough data or parameters for PCA.'}
+
+        # Scale data
+        scaler = StandardScaler()
+        scaled_data = scaler.fit_transform(param_df[parameters])
+
+        # Perform PCA
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=n_components)
+        transformed_data = pca.fit_transform(scaled_data)
+
+        results = {
+            'success': True,
+            'pca_model': pca,
+            'explained_variance_ratio': pca.explained_variance_ratio_,
+            'components': pca.components_,
+            'transformed_data': pd.DataFrame(transformed_data, columns=[f'PC{i+1}' for i in range(n_components)]),
+            'feature_names': parameters
+        }
+        results['transformed_data']['track_id'] = param_df['track_id'].values
+
+        return results
+
+    def calculate_partial_correlation(self, param_df: pd.DataFrame,
+                                      x: str, y: str, covar: List[str]) -> Dict[str, Any]:
+        """
+        Calculate partial correlation between two variables, controlling for others.
+
+        Parameters
+        ----------
+        param_df : pd.DataFrame
+            DataFrame of track-averaged parameters.
+        x : str
+            The first variable.
+        y : str
+            The second variable.
+        covar : list of str
+            The variables to control for.
+
+        Returns
+        -------
+        dict
+            Partial correlation results.
+        """
+        try:
+            import pingouin as pg
+        except ImportError:
+            return {'success': False, 'error': 'pingouin library not installed.'}
+
+        if not all(c in param_df.columns for c in [x, y] + covar):
+            return {'success': False, 'error': 'One or more specified columns not found in track parameters.'}
+
+        # Drop rows with NaN values in the relevant columns
+        param_df_filtered = param_df[[x, y] + covar].dropna()
+
+        if len(param_df_filtered) < 3:
+            return {'success': False, 'error': 'Not enough data points for partial correlation.'}
+
+        partial_corr = pg.partial_corr(data=param_df_filtered, x=x, y=y, covar=covar)
+
+        return {'success': True, 'results': partial_corr.to_dict('records')[0]}
+
 
 class MultiChannelAnalyzer:
     """
