@@ -27,11 +27,15 @@ import zipfile
 import tempfile
 import os
 from scipy import stats
-from sklearn.cluster import KMeans, DBSCAN
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix
+try:
+    from sklearn.cluster import KMeans, DBSCAN
+    from sklearn.decomposition import PCA
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import classification_report, confusion_matrix
+    SKLEARN_AVAILABLE = True
+except Exception:
+    SKLEARN_AVAILABLE = False
 import warnings
 
 # Import all necessary analysis and visualization functions with error handling
@@ -1069,7 +1073,7 @@ class EnhancedSPTReportGenerator:
         st.subheader("📄 Generated Report")
         
         # Create download options
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
             if st.button("📊 View Interactive Report"):
@@ -1095,6 +1099,190 @@ class EnhancedSPTReportGenerator:
                     file_name=f"spt_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
+
+        # HTML export
+        with col4:
+            try:
+                html_bytes = self._export_html_report(config, current_units)
+                if html_bytes:
+                    st.download_button(
+                        "🌐 Download HTML Report",
+                        data=html_bytes,
+                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                        mime="text/html"
+                    )
+            except Exception as e:
+                st.info(f"HTML export unavailable: {e}")
+
+        # PDF export (best-effort)
+        with col5:
+            try:
+                pdf_bytes = self._export_pdf_report(current_units)
+                if pdf_bytes:
+                    st.download_button(
+                        "🧾 Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf"
+                    )
+            except Exception as e:
+                st.info(f"PDF export unavailable: {e}")
+
+    def _export_html_report(self, config, current_units) -> bytes:
+        """Assemble a standalone HTML report including figures.
+
+        Returns raw HTML bytes suitable for download.
+        """
+        from datetime import datetime as _dt
+        import html
+        try:
+            parts = []
+            parts.append("<!DOCTYPE html><html><head><meta charset='utf-8'>")
+            parts.append("<title>SPT Report</title>")
+            parts.append("<meta name='viewport' content='width=device-width, initial-scale=1'>")
+            parts.append("<style>body{font-family:Arial,Helvetica,sans-serif;margin:24px;} h1,h2{color:#333} .section{margin-bottom:32px;} .metric{margin:4px 0;} .figure{margin:16px 0;} .code{background:#f7f7f7;padding:8px;border-radius:4px;}</style>")
+            parts.append("</head><body>")
+            parts.append(f"<h1>SPT Analysis Report</h1>")
+            parts.append("<div class='section'>")
+            parts.append("<h2>Metadata</h2>")
+            parts.append("<ul>")
+            parts.append(f"<li>Generated at: {_dt.now().isoformat()}</li>")
+            parts.append(f"<li>Pixel size (µm): {current_units.get('pixel_size', 0.1)}</li>")
+            parts.append(f"<li>Frame interval (s): {current_units.get('frame_interval', 0.1)}</li>")
+            parts.append("</ul>")
+            parts.append("</div>")
+
+            # Include analysis sections
+            import plotly.io as pio
+            for key, result in self.report_results.items():
+                title = self.available_analyses.get(key, {}).get('name', key)
+                parts.append("<div class='section'>")
+                parts.append(f"<h2>{html.escape(title)}</h2>")
+
+                # Summary block
+                summary = result.get('summary')
+                if isinstance(summary, dict):
+                    parts.append("<div>")
+                    for k, v in summary.items():
+                        parts.append(f"<div class='metric'><b>{html.escape(str(k)).title()}</b>: {html.escape(str(v))}</div>")
+                    parts.append("</div>")
+                elif isinstance(summary, str):
+                    parts.append(f"<p>{html.escape(summary)}</p>")
+
+                # Embed figure if present
+                fig = self.report_figures.get(key)
+                if fig is not None:
+                    try:
+                        # Plotly figure
+                        from matplotlib.figure import Figure as _MplFigure
+                    except Exception:
+                        _MplFigure = None
+
+                    if _MplFigure is not None and isinstance(fig, _MplFigure):
+                        # Convert matplotlib fig to PNG and embed
+                        import base64 as _b64, io as _io
+                        buf = _io.BytesIO()
+                        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                        buf.seek(0)
+                        b64 = _b64.b64encode(buf.read()).decode('utf-8')
+                        parts.append(f"<div class='figure'><img src='data:image/png;base64,{b64}' style='max-width:100%'></div>")
+                    else:
+                        # Assume Plotly
+                        try:
+                            div = pio.to_html(fig, include_plotlyjs='cdn', full_html=False)
+                            parts.append(f"<div class='figure'>{div}</div>")
+                        except Exception as e:
+                            parts.append(f"<pre class='code'>Failed to render figure: {html.escape(str(e))}</pre>")
+
+                # Optional: include raw JSON for the section if requested
+                if config.get('include_raw', True):
+                    try:
+                        parts.append("<details><summary>Raw Results</summary>")
+                        parts.append(f"<pre class='code'>{html.escape(json.dumps(result, indent=2, default=str))}</pre>")
+                        parts.append("</details>")
+                    except Exception:
+                        pass
+
+                parts.append("</div>")
+
+            parts.append("</body></html>")
+            html_str = "".join(parts)
+            return html_str.encode('utf-8')
+        except Exception as e:
+            raise RuntimeError(f"HTML export failed: {e}")
+
+    def _export_pdf_report(self, current_units) -> Optional[bytes]:
+        """Create a simple PDF containing figures and key stats.
+
+        Requires reportlab; falls back to None if unavailable.
+        """
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.utils import ImageReader
+            from reportlab.pdfgen import canvas
+            import io as _io
+            import numpy as _np
+            # Prepare PDF in memory
+            buf = _io.BytesIO()
+            c = canvas.Canvas(buf, pagesize=A4)
+            width, height = A4
+            margin = 36
+            y = height - margin
+
+            # Title
+            c.setFont('Helvetica-Bold', 16)
+            c.drawString(margin, y, 'SPT Analysis Report')
+            y -= 24
+            c.setFont('Helvetica', 10)
+            c.drawString(margin, y, f"Pixel size (µm): {current_units.get('pixel_size', 0.1)}  |  Frame interval (s): {current_units.get('frame_interval', 0.1)}")
+            y -= 18
+
+            # Add figures one by one (as PNG rasterized)
+            for key in self.report_figures:
+                fig = self.report_figures[key]
+                # Rasterize to PNG bytes
+                import io as _io
+                img_buf = _io.BytesIO()
+                try:
+                    from matplotlib.figure import Figure as _MplFigure
+                except Exception:
+                    _MplFigure = None
+                if _MplFigure is not None and isinstance(fig, _MplFigure):
+                    fig.savefig(img_buf, format='png', dpi=150, bbox_inches='tight')
+                else:
+                    # Plotly: use kaleido if available
+                    try:
+                        img_bytes = fig.to_image(format='png', scale=2)
+                        img_buf.write(img_bytes)
+                    except Exception:
+                        continue
+                img_buf.seek(0)
+                img = ImageReader(img_buf)
+
+                # Compute size to fit page
+                img_w, img_h = img.getSize()
+                scale = min((width - 2*margin)/img_w, (height - 2*margin)/img_h)
+                draw_w, draw_h = img_w*scale, img_h*scale
+                if y - draw_h < margin:
+                    c.showPage()
+                    y = height - margin
+                    c.setFont('Helvetica-Bold', 12)
+                    c.drawString(margin, y, key)
+                    y -= 18
+                else:
+                    c.setFont('Helvetica-Bold', 12)
+                    c.drawString(margin, y, key)
+                    y -= 18
+                c.drawImage(img, margin, y - draw_h, width=draw_w, height=draw_h, preserveAspectRatio=True, anchor='sw')
+                y -= (draw_h + 24)
+
+            c.showPage()
+            c.save()
+            buf.seek(0)
+            return buf.read()
+        except Exception as e:
+            # reportlab not available or another error; signal to caller
+            raise RuntimeError(str(e))
 
     def _show_interactive_report(self, current_units):
         """Display interactive report with visualizations."""
