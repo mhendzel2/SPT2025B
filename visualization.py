@@ -58,6 +58,163 @@ def _empty_fig(msg: str) -> go.Figure:
     return fig
 
 
+def plot_dwell_events_on_tracks(
+    tracks_df: pd.DataFrame,
+    dwell_events_df: pd.DataFrame,
+    title: str = "Tracks with Dwell Events",
+    track_color: str = 'lightgrey',
+    dwell_color: str = 'red',
+    track_width: int = 1,
+    dwell_width: int = 3
+) -> go.Figure:
+    """
+    Create an interactive plot of tracks with dwell events highlighted.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with 'track_id', 'frame', 'x', 'y'.
+    dwell_events_df : pd.DataFrame
+        DataFrame containing dwell event data from `analyze_dwell_time`.
+    title : str, optional
+        The plot title, by default "Tracks with Dwell Events".
+    track_color : str, optional
+        Color for the main track lines, by default 'lightgrey'.
+    dwell_color : str, optional
+        Color for the highlighted dwell segments, by default 'red'.
+    track_width : int, optional
+        Width of the main track lines, by default 1.
+    dwell_width : int, optional
+        Width of the dwell segment lines, by default 3.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        An interactive plot of tracks with highlighted dwell events.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data available.")
+
+    fig = go.Figure()
+
+    # Plot all tracks in a neutral color
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        fig.add_trace(go.Scatter(
+            x=track_data['x'],
+            y=track_data['y'],
+            mode='lines',
+            line=dict(color=track_color, width=track_width),
+            name=f'Track {track_id}',
+            showlegend=False
+        ))
+
+    # Highlight dwell events
+    if not dwell_events_df.empty:
+        for _, event in dwell_events_df.iterrows():
+            track_id = event['track_id']
+            start_frame = event['start_frame']
+            end_frame = event['end_frame']
+
+            # Get the segment of the track corresponding to the dwell event
+            dwell_segment = tracks_df[
+                (tracks_df['track_id'] == track_id) &
+                (tracks_df['frame'] >= start_frame) &
+                (tracks_df['frame'] <= end_frame)
+            ]
+
+            if not dwell_segment.empty:
+                fig.add_trace(go.Scatter(
+                    x=dwell_segment['x'],
+                    y=dwell_segment['y'],
+                    mode='lines',
+                    line=dict(color=dwell_color, width=dwell_width),
+                    name=f'Dwell Event {event.name}',
+                    showlegend=False
+                ))
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="x (pixels)",
+        yaxis_title="y (pixels)",
+        template="plotly_white"
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+
+    return fig
+
+
+def plot_gel_structure(
+    tracks_df: pd.DataFrame,
+    confined_regions_df: pd.DataFrame,
+    title: str = "Gel Structure Analysis",
+    track_color: str = 'lightgrey',
+    pore_color: str = 'rgba(255, 0, 0, 0.5)'
+) -> go.Figure:
+    """
+    Create a plot of tracks with detected confined regions (pores) overlaid.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing tracking data with 'track_id', 'x', 'y'.
+    confined_regions_df : pd.DataFrame
+        DataFrame with confined regions data from `analyze_gel_structure`.
+        Must contain 'center_x', 'center_y', and 'radius'.
+    title : str, optional
+        The plot title, by default "Gel Structure Analysis".
+    track_color : str, optional
+        Color for the track lines, by default 'lightgrey'.
+    pore_color : str, optional
+        Fill color for the confined region circles, by default 'rgba(255, 0, 0, 0.5)'.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        An interactive plot showing tracks and gel pores.
+    """
+    if tracks_df.empty:
+        return _empty_fig("No track data available.")
+
+    fig = go.Figure()
+
+    # Plot all tracks
+    for _, track_data in tracks_df.groupby('track_id'):
+        fig.add_trace(go.Scatter(
+            x=track_data['x'],
+            y=track_data['y'],
+            mode='lines',
+            line=dict(color=track_color, width=1),
+            showlegend=False
+        ))
+
+    # Plot confined regions as circles
+    if not confined_regions_df.empty:
+        for _, region in confined_regions_df.iterrows():
+            x0 = region['center_x'] - region['radius']
+            y0 = region['center_y'] - region['radius']
+            x1 = region['center_x'] + region['radius']
+            y1 = region['center_y'] + region['radius']
+            fig.add_shape(
+                type="circle",
+                xref="x", yref="y",
+                x0=x0, y0=y0, x1=x1, y1=y1,
+                fillcolor=pore_color,
+                line_color=pore_color
+            )
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="x (pixels)",
+        yaxis_title="y (pixels)",
+        template="plotly_white"
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+
+    return fig
+
+
 def _qual_colour(i: int) -> str:
     """Deterministic qualitative colour cycling."""
     return QualColours[i % len(QualColours)]
@@ -409,6 +566,97 @@ def plot_tracks_on_mask(
         width=original_image.shape[1],
         xaxis=dict(range=[0, original_image.shape[1]]),
         yaxis=dict(range=[0, original_image.shape[0]], autorange="reversed") # reversed to match image coordinates
+    )
+
+    return fig
+
+
+def plot_advanced_metric_diagnostics(
+    ergodicity_df: pd.DataFrame,
+    ngp_df: pd.DataFrame,
+    van_hove_short_lag: Dict[str, np.ndarray],
+    van_hove_long_lag: Dict[str, np.ndarray],
+    short_lag_time: float,
+    long_lag_time: float
+) -> go.Figure:
+    """
+    Create a composite plot for advanced diagnostic metrics.
+
+    Parameters
+    ----------
+    ergodicity_df : pd.DataFrame
+        DataFrame with ergodicity analysis results.
+    ngp_df : pd.DataFrame
+        DataFrame with Non-Gaussian Parameter results.
+    van_hove_short_lag : Dict[str, np.ndarray]
+        Van Hove correlation data for a short lag time.
+    van_hove_long_lag : Dict[str, np.ndarray]
+        Van Hove correlation data for a long lag time.
+    short_lag_time : float
+        The short lag time value in seconds.
+    long_lag_time : float
+        The long lag time value in seconds.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A figure with subplots for ergodicity, NGP, and Van Hove analysis.
+    """
+    fig = make_subplots(
+        rows=3, cols=1,
+        subplot_titles=("Ergodicity Analysis", "Non-Gaussian Parameter (2D)", "Van Hove Correlation"),
+        shared_xaxes=False,
+        vertical_spacing=0.15
+    )
+
+    # Subplot 1: Ergodicity
+    if not ergodicity_df.empty:
+        fig.add_trace(go.Scatter(
+            x=ergodicity_df['tau_s'], y=ergodicity_df['EB_ratio'],
+            name='EB Ratio',
+            mode='lines+markers',
+            line=dict(color=QualColours[0])
+        ), row=1, col=1)
+        # Secondary y-axis for EB parameter can be added if needed
+
+    # Subplot 2: NGP
+    if not ngp_df.empty:
+        fig.add_trace(go.Scatter(
+            x=ngp_df['tau_s'], y=ngp_df['NGP_2D'],
+            name='NGP (2D)',
+            mode='lines+markers',
+            line=dict(color=QualColours[1])
+        ), row=2, col=1)
+
+    # Subplot 3: Van Hove
+    if van_hove_short_lag and van_hove_short_lag['r_centers'].size > 0:
+        fig.add_trace(go.Scatter(
+            x=van_hove_short_lag['r_centers'], y=van_hove_short_lag['r_density'],
+            name=f'Van Hove (t={short_lag_time:.2f}s)',
+            mode='lines',
+            line=dict(color=QualColours[2])
+        ), row=3, col=1)
+
+    if van_hove_long_lag and van_hove_long_lag['r_centers'].size > 0:
+        fig.add_trace(go.Scatter(
+            x=van_hove_long_lag['r_centers'], y=van_hove_long_lag['r_density'],
+            name=f'Van Hove (t={long_lag_time:.2f}s)',
+            mode='lines',
+            line=dict(color=QualColours[3])
+        ), row=3, col=1)
+
+    # Update axes titles
+    fig.update_xaxes(title_text="Lag Time (s)", row=1, col=1)
+    fig.update_yaxes(title_text="EB Ratio", row=1, col=1)
+    fig.update_xaxes(title_text="Lag Time (s)", row=2, col=1)
+    fig.update_yaxes(title_text="NGP", row=2, col=1)
+    fig.update_xaxes(title_text="Displacement (µm)", row=3, col=1)
+    fig.update_yaxes(title_text="Probability Density", row=3, col=1)
+
+    fig.update_layout(
+        height=900,
+        title_text="Advanced Metric Diagnostics",
+        template="plotly_white"
     )
 
     return fig
@@ -2025,170 +2273,8 @@ def plot_polymer_physics_results(polymer_data):
         
         return fig
         
-    feature/hmm-state-transition-diagram
-    except Exception as e:
-        st.error(f"Error creating polymer physics plot: {e}")
-        return go.Figure()
-
-def plot_hmm_state_transition_diagram(model) -> go.Figure:
-    """
-    Visualizes an HMM as a state transition diagram.
-
-    Args:
-        model: A trained hmmlearn GaussianHMM model.
-
-    Returns:
-        A Plotly Figure object showing the state transition diagram.
-    """
-    if not hasattr(model, 'transmat_'):
-        return _empty_fig("Invalid HMM model provided")
-
-    n_states = model.n_components
-    trans_matrix = model.transmat_
-
-    # Calculate stationary distribution for node sizes
-    try:
-        # Find the eigenvector corresponding to the eigenvalue 1
-        eigenvals, eigenvecs = np.linalg.eig(trans_matrix.T)
-        stationary_dist = np.real(eigenvecs[:, np.isclose(eigenvals, 1)][:, 0])
-        stationary_dist /= stationary_dist.sum()
-    except Exception:
-        # Fallback to uniform distribution if calculation fails
-        stationary_dist = np.ones(n_states) / n_states
-
-    # Calculate diffusion coefficients for node colors
-    # D = (var(dx) + var(dy)) / (2 * dt), assuming dt=1 for simplicity here
-    # Handle different covariance types
-    cov_type = getattr(model, "covariance_type", "full")
-    n_states = model.n_components
-    n_features = getattr(model, "n_features", None)
-    if n_features is None:
-        # Try to infer n_features from covars_ shape
-        if cov_type == "full":
-            n_features = model.covars_.shape[1]
-        elif cov_type == "diag":
-            n_features = model.covars_.shape[1]
-        elif cov_type == "spherical":
-            n_features = 1  # fallback, may be updated below
-        elif cov_type == "tied":
-            n_features = model.covars_.shape[-1]
-    diffusion_coeffs = []
-    if cov_type == "full":
-        # model.covars_ shape: (n_states, n_features, n_features)
-        diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
-    elif cov_type == "diag":
-        # model.covars_ shape: (n_states, n_features)
-        diffusion_coeffs = [np.sum(cov) / 2 for cov in model.covars_]
-    elif cov_type == "spherical":
-        # model.covars_ shape: (n_states,) or (n_states, 1)
-        # Each cov is a scalar variance, but for multi-dimensional data, total variance is cov * n_features
-        for cov in model.covars_:
-            diffusion_coeffs.append((cov * n_features) / 2)
-    elif cov_type == "tied":
-        # model.covars_ shape: (n_features, n_features) or (n_features,)
-        cov = model.covars_
-        if cov.ndim == 2:
-            val = np.trace(cov) / 2
-        else:
-            val = np.sum(cov) / 2
-        diffusion_coeffs = [val] * n_states
-    else:
-        # fallback: try to use trace if possible
-        try:
-            diffusion_coeffs = [np.trace(cov) / 2 for cov in model.covars_]
-        except Exception:
-            diffusion_coeffs = [0.0] * n_states
-
-    # Node positions in a circle
-    angle_step = 2 * np.pi / n_states
-    node_x = [np.cos(i * angle_step) for i in range(n_states)]
-    node_y = [np.sin(i * angle_step) for i in range(n_states)]
-
-    # Create figure
-    fig = go.Figure()
-
-    # Create edges (arrows)
-    for i in range(n_states):
-        for j in range(n_states):
-            prob = trans_matrix[i, j]
-            if prob > 0.01:  # Only draw significant transitions
-                # Arrow properties
-                if i == j: # Self-transition loop
-                    # Position loop slightly offset from node
-                    loop_angle = i * angle_step + np.pi / 2
-                    x_start = node_x[i] + 0.1 * np.cos(loop_angle - 0.3)
-                    y_start = node_y[i] + 0.1 * np.sin(loop_angle - 0.3)
-                    x_end = node_x[i] + 0.1 * np.cos(loop_angle + 0.3)
-                    y_end = node_y[i] + 0.1 * np.sin(loop_angle + 0.3)
-
-                    fig.add_annotation(
-                        x=x_end, y=y_end, ax=x_start, ay=y_start,
-                        xref='x', yref='y', axref='x', ayref='y',
-                        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=prob * 5 + 1,
-                        opacity=prob
-                    )
-                    # Label for the loop
-                    fig.add_annotation(
-                        x=node_x[i] + 0.2 * np.cos(loop_angle),
-                        y=node_y[i] + 0.2 * np.sin(loop_angle),
-                        text=f"{prob:.2f}", showarrow=False,
-                        font=dict(size=10, color="black")
-                    )
-                else: # Transitions between different nodes
-                    fig.add_annotation(
-                        x=node_x[j], y=node_y[j], ax=node_x[i], ay=node_y[i],
-                        xref='x', yref='y', axref='x', ayref='y',
-                        showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=prob * 5 + 1,
-                        opacity=min(1.0, prob * 2)
-                    )
-                    # Add transition probability label
-                    fig.add_annotation(
-                        x=(node_x[i] + node_x[j]) / 2,
-                        y=(node_y[i] + node_y[j]) / 2,
-                        text=f'{prob:.2f}',
-                        showarrow=False,
-                        font=dict(size=10, color="black")
-                    )
-
-    # Create nodes
-    node_sizes = stationary_dist * 100 + 20
-    fig.add_trace(go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers+text',
-        marker=dict(
-            size=node_sizes,
-            color=diffusion_coeffs,
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(title='Diffusion Coeff.'),
-            cmin=min(diffusion_coeffs),
-            cmin=cmin,
-            cmax=cmax
-        ),
-        text=[f"State {i}" for i in range(n_states)],
-        textposition="top center",
-        hoverinfo='text',
-        hovertext=[f"State {i}<br>Stationary Prob: {p:.2f}<br>Diffusion Coeff: {d:.4f}"
-                   for i, (p, d) in enumerate(zip(stationary_dist, diffusion_coeffs))]
-    ))
-
-    # Update layout
-    fig.update_layout(
-        title="HMM State Transition Diagram",
-        showlegend=False,
-        xaxis=dict(visible=False, range=[-1.5, 1.5]),
-        yaxis=dict(visible=False, range=[-1.5, 1.5]),
-        template="plotly_white",
-        width=600,
-        height=600
-    )
-    fig.update_yaxes(scaleanchor="x", scaleratio=1)
-
-    return fig
-=======
     except Exception:
         return _empty_fig("Failed to render polymer physics plot")
-feature/phase-1-analytics-visualization
 
 
 def plot_pca_results(pca_results: Dict[str, Any]) -> Dict[str, go.Figure]:
@@ -2330,6 +2416,3 @@ def plot_persistence_diagram(tda_results: Dict[str, Any]) -> go.Figure:
     )
 
     return fig
-=======
-main
-main

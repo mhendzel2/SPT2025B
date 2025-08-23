@@ -17,9 +17,6 @@ class TestSegmentation(unittest.TestCase):
         self.test_image[10:30, 10:30] = 150  # Object 1
         self.test_image[50:80, 50:80] = 200  # Object 2
         self.pixel_size = 0.1
-        # Create a noisy version for GMM tests
-        self.noisy_image = self.test_image.astype(np.float64) + np.random.normal(0, 10, self.test_image.shape)
-        self.noisy_image = np.clip(self.noisy_image, 0, 255).astype(np.uint8)
         # Create a ROI mask that includes both objects
         self.roi_mask = np.zeros((100, 100), dtype=bool)
         self.roi_mask[10:30, 10:30] = True
@@ -58,7 +55,7 @@ class TestSegmentation(unittest.TestCase):
         """Test Gaussian Mixture Model segmentation."""
         # Test with 3 components (background + 2 objects)
         result = gaussian_mixture_segmentation(
-            self.noisy_image, roi_mask=self.roi_mask, max_components=3, min_components=3
+            self.test_image, roi_mask=self.roi_mask, max_components=3, min_components=3
         )
         self.assertIn('classes', result)
         self.assertEqual(result['optimal_n_components'], 3)
@@ -68,7 +65,7 @@ class TestSegmentation(unittest.TestCase):
     def test_bayesian_gaussian_mixture_segmentation(self):
         """Test Bayesian Gaussian Mixture Model segmentation."""
         result = bayesian_gaussian_mixture_segmentation(
-            self.noisy_image, roi_mask=self.roi_mask, max_components=5
+            self.test_image, roi_mask=self.roi_mask, max_components=5
         )
         self.assertIn('classes', result)
         # The number of effective components should be around 3

@@ -35,7 +35,7 @@ def test_bocpd_and_hmm_recover_phase_boundaries():
     pred_h = boundaries_from_segments(seg_h)
     m_h = boundary_f1(truth_bounds, pred_h, tol=3)
 
-    assert m_b['f1'] >= 0.5, f"BOCPD boundary F1 too low: {m_b}"
-    assert m_h['f1'] >= 0.5, f"HMM boundary F1 too low: {m_h}"
+    assert m_b['f1'] >= 0.6, f"BOCPD boundary F1 too low: {m_b}"
+    assert m_h['f1'] >= 0.6, f"HMM boundary F1 too low: {m_h}"
     assert len(pred_b) >= 2, "BOCPD found fewer than 2 boundaries"
     assert len(pred_h) >= 2, "HMM found fewer than 2 boundaries"

@@ -67,7 +67,7 @@ from image_processing_utils import (
     normalize_image_for_display, create_timepoint_preview, 
     get_image_statistics
 )
-from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients, plot_hmm_state_transition_diagram
+from visualization import plot_tracks, plot_tracks_3d, plot_track_statistics, plot_motion_analysis, plot_diffusion_coefficients, plot_dwell_events_on_tracks, plot_gel_structure
 from segmentation import (
     segment_image_channel_otsu, 
     segment_image_channel_simple_threshold,
@@ -5369,10 +5369,17 @@ elif st.session_state.active_page == "Analysis":
                 
                 # Dwell events
                 st.subheader("Dwell Events")
-                if 'dwell_events' in results:
+                if 'dwell_events' in results and not results['dwell_events'].empty:
                     st.dataframe(results['dwell_events'])
-                    
+
                     # Display dwell time visualizations
+                    with st.spinner("Generating Dwell Event Visualization..."):
+                        dwell_plot_fig = plot_dwell_events_on_tracks(
+                            st.session_state.tracks_data,
+                            results['dwell_events']
+                        )
+                        st.plotly_chart(dwell_plot_fig, use_container_width=True)
+
                     if 'dwell_times' in results:
                         def plot_dwell_time_analysis(results):
                             import plotly.express as px
@@ -5394,6 +5401,8 @@ elif st.session_state.active_page == "Analysis":
                                 return px.scatter(title="No dwell time data available")
                         dwell_fig = plot_dwell_time_analysis(results)
                         st.plotly_chart(dwell_fig, use_container_width=True)
+                else:
+                    st.info("No dwell events detected with the current parameters.")
                     
                     if 'region_stats' in results:
                         st.subheader("Region Statistics")
@@ -5891,6 +5900,16 @@ elif st.session_state.active_page == "Analysis":
                         st.subheader("Structural Statistics")
                         for key, value in results['ensemble_results'].items():
                             st.text(f"{key}: {value}")
+
+                    # Add the new visualization
+                    if 'confined_regions' in results and not results['confined_regions'].empty:
+                        st.subheader("Gel Structure Visualization")
+                        with st.spinner("Generating Gel Structure Plot..."):
+                            gel_fig = plot_gel_structure(
+                                st.session_state.tracks_data,
+                                results['confined_regions']
+                            )
+                            st.plotly_chart(gel_fig, use_container_width=True)
                     
                     # Mesh properties
                     st.subheader("Mesh Properties")
@@ -7066,13 +7085,6 @@ elif st.session_state.active_page == "Advanced Analysis":
                     st.write(model.covars_)
                     st.write("Transition Matrix:")
                     st.write(model.transmat_)
-
-                    st.subheader("State Transition Diagram")
-                    try:
-                        fig = plot_hmm_state_transition_diagram(model)
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Could not generate state transition diagram: {e}")
 
                     st.subheader("State Predictions")
                     # Add state predictions to the tracks dataframe for visualization
