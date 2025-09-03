@@ -1341,6 +1341,13 @@ if st.session_state.active_page == "MD Integration":
                             except Exception as e:
                                 st.error(f"Error comparing trajectories: {str(e)}")
 
+# Simulation page
+elif st.session_state.active_page == "Simulation":
+    try:
+        show_simulation_page()
+    except Exception as e:
+        st.error(f"Simulation page error: {e}")
+
 # Home page                
 elif st.session_state.active_page == "Home":
     # Application title
