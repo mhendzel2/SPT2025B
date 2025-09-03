@@ -215,6 +215,50 @@ def get_available_masks():
 
 
 
+def _combine_channels(multichannel_img: np.ndarray, channel_indices: List[int], mode: str = "average", weights: Optional[List[float]] = None) -> np.ndarray:
+    """Combine multiple channels from a HxWxC image into a single 2D image.
+
+    Args:
+        multichannel_img: 3D array (H, W, C)
+        channel_indices: indices of channels to combine
+        mode: one of ["average", "max", "min", "sum", "weighted"]
+        weights: optional weights for weighted mode (same length as channel_indices)
+
+    Returns:
+        2D numpy array (H, W)
+    """
+    if multichannel_img is None or multichannel_img.ndim != 3 or multichannel_img.shape[2] == 0:
+        raise ValueError("Expected a multichannel image of shape (H, W, C)")
+    if not channel_indices:
+        # default to first channel
+        channel_indices = [0]
+    # Clip invalid indices
+    c = multichannel_img.shape[2]
+    channel_indices = [ci for ci in channel_indices if 0 <= ci < c]
+    if not channel_indices:
+        channel_indices = [0]
+    # Extract channels
+    stack = np.stack([multichannel_img[:, :, ci] for ci in channel_indices], axis=2)
+    if stack.shape[2] == 1:
+        return stack[:, :, 0]
+
+    mode = (mode or "average").lower()
+    if mode == "max":
+        return np.max(stack, axis=2)
+    if mode == "min":
+        return np.min(stack, axis=2)
+    if mode == "sum":
+        return np.sum(stack, axis=2)
+    if mode == "weighted":
+        if not weights or len(weights) != stack.shape[2]:
+            # default equal weights
+            weights = [1.0 / stack.shape[2]] * stack.shape[2]
+        w = np.array(weights, dtype=float)
+        w = w / (np.sum(w) if np.sum(w) != 0 else 1.0)
+        return np.tensordot(stack, w, axes=([2], [0]))
+    # default average
+    return np.mean(stack, axis=2)
+
 
 def create_mask_selection_ui(analysis_type: str = ""):
     """Create UI for selecting segmentation method and analyzing all classes from that method."""
@@ -1702,42 +1746,71 @@ elif st.session_state.active_page == "Image Processing":
                 # Multichannel image detected
                 st.info(f"Multichannel image detected with {num_channels} channels")
                 
-                # Channel selection for segmentation
+                # Channel selection for segmentation (support multi-channel)
                 st.subheader("Channel Selection for Segmentation")
-                selected_channel = st.radio(
-                    "Choose channel for segmentation:",
-                    range(num_channels),
+                default_sel = st.session_state.get("segmentation_channels", [0])
+                segmentation_channels = st.multiselect(
+                    "Choose channel(s) for segmentation:",
+                    options=list(range(num_channels)),
+                    default=[ci for ci in default_sel if 0 <= ci < num_channels] or [0],
                     format_func=lambda x: f"Channel {x + 1}",
-                    key="segmentation_channel_radio",
-                    horizontal=True,
-                    help="Select which channel to use for segmentation analysis"
+                    key="segmentation_channels_select",
+                    help="Select one or more channels to build the segmentation image"
                 )
-                
+
+                fusion_mode = st.selectbox(
+                    "Fusion mode",
+                    ["average", "max", "min", "sum", "weighted"],
+                    index=["average", "max", "min", "sum", "weighted"].index(
+                        st.session_state.get("segmentation_fusion_mode", "average")
+                    ),
+                    help="How to combine multiple channels into a single image for segmentation"
+                )
+
+                weights = None
+                if fusion_mode == "weighted" and len(segmentation_channels) > 1:
+                    weights_text = st.text_input(
+                        "Weights (comma-separated)",
+                        value=st.session_state.get("segmentation_weights", ",".join(["1"] * len(segmentation_channels))),
+                        help="Provide one weight per selected channel, e.g., 1,2,1"
+                    )
+                    try:
+                        weights = [float(x.strip()) for x in weights_text.split(",") if x.strip() != ""]
+                    except Exception:
+                        weights = None
+
                 # Display channel previews in tabs
                 channel_tabs = st.tabs([f"Channel {i+1}" for i in range(num_channels)])
-                
                 for i in range(num_channels):
                     with channel_tabs[i]:
                         channel_image = multichannel_data[:, :, i]
-                        
                         col1, col2 = st.columns([3, 1])
                         with col1:
-                            # Use normalized display function
                             st.image(normalize_image_for_display(channel_image), caption=f"Channel {i + 1}", use_container_width=True)
-                        
                         with col2:
                             st.write("**Statistics:**")
                             st.metric("Min", f"{channel_image.min():.1f}")
                             st.metric("Max", f"{channel_image.max():.1f}")
                             st.metric("Mean", f"{channel_image.mean():.1f}")
                             st.metric("Std", f"{channel_image.std():.1f}")
-                            
-                            if i == selected_channel:
-                                st.success("Selected for segmentation")
+                            if i in segmentation_channels:
+                                st.success("Selected")
+
+                # Use selected channels combined
+                try:
+                    current_image = _combine_channels(multichannel_data, segmentation_channels or [0], fusion_mode, weights)
+                except Exception as _e:
+                    st.warning(f"Combining channels failed ({_e}); falling back to channel 1")
+                    current_image = multichannel_data[:, :, 0]
+
+                # Persist choices
+                st.session_state.segmentation_channels = segmentation_channels or [0]
+                st.session_state.segmentation_fusion_mode = fusion_mode
+                if weights is not None:
+                    st.session_state.segmentation_weights = ",".join(map(str, weights))
                 
-                # Use selected channel
-                current_image = multichannel_data[:, :, selected_channel]
-                st.subheader(f"Using Channel {selected_channel + 1} for Segmentation")
+                sel_label = ", ".join([f"C{c+1}" for c in (segmentation_channels or [0])])
+                st.subheader(f"Using {sel_label} with '{fusion_mode}' fusion for Segmentation")
                 
             elif isinstance(mask_image_data, list) and len(mask_image_data) > 0:
                 # List of single-channel images
@@ -3433,6 +3506,52 @@ elif st.session_state.active_page == "Tracking":
             
             st.divider()
             
+            # If multichannel images, allow selecting channels for tracking
+            try:
+                _first_frame = st.session_state.image_data[0]
+                _is_mc = isinstance(_first_frame, np.ndarray) and _first_frame.ndim == 3 and _first_frame.shape[2] > 1
+                _num_ch = int(_first_frame.shape[2]) if _is_mc else 1
+            except Exception:
+                _is_mc, _num_ch = False, 1
+
+            if _is_mc:
+                st.subheader("Tracking Channel Selection")
+                default_track_sel = st.session_state.get("tracking_channels", [0])
+                tracking_channels = st.multiselect(
+                    "Choose channel(s) for tracking:",
+                    options=list(range(_num_ch)),
+                    default=[ci for ci in default_track_sel if 0 <= ci < _num_ch] or [0],
+                    format_func=lambda x: f"Channel {x + 1}",
+                    key="tracking_channels_select",
+                    help="Select one or two channels to detect particles on"
+                )
+                tracking_fusion_mode = st.selectbox(
+                    "Fusion mode",
+                    ["average", "max", "min", "sum", "weighted"],
+                    index=["average", "max", "min", "sum", "weighted"].index(
+                        st.session_state.get("tracking_fusion_mode", "average")
+                    ),
+                    help="How to combine the selected channels into a single detection image"
+                )
+                tracking_weights = None
+                if tracking_fusion_mode == "weighted" and len(tracking_channels) > 1:
+                    tw_text = st.text_input(
+                        "Weights (comma-separated)",
+                        value=st.session_state.get("tracking_weights", ",".join(["1"] * len(tracking_channels))),
+                        help="Provide one weight per selected channel, e.g., 1,1 or 1,2"
+                    )
+                    try:
+                        tracking_weights = [float(x.strip()) for x in tw_text.split(",") if x.strip() != ""]
+                    except Exception:
+                        tracking_weights = None
+                # persist
+                st.session_state.tracking_channels = tracking_channels or [0]
+                st.session_state.tracking_fusion_mode = tracking_fusion_mode
+                if tracking_weights is not None:
+                    st.session_state.tracking_weights = ",".join(map(str, tracking_weights))
+                sel_label = ", ".join([f"C{c+1}" for c in (tracking_channels or [0])])
+                st.info(f"Tracking will use {sel_label} with '{tracking_fusion_mode}' fusion.")
+
             # Detection parameters with real-time tuning
             st.subheader("Detection Parameters")
             
@@ -3453,8 +3572,24 @@ elif st.session_state.active_page == "Tracking":
                 else:
                     test_frame_idx = 0
                 
-                # Get test frame for preview
-                test_frame = st.session_state.image_data[test_frame_idx]
+                # Get test frame for preview (apply tracking channel fusion if multichannel)
+                raw_test = st.session_state.image_data[test_frame_idx]
+                if isinstance(raw_test, np.ndarray) and raw_test.ndim == 3 and raw_test.shape[2] > 1:
+                    # combine selected channels
+                    t_channels = st.session_state.get("tracking_channels", [0])
+                    t_mode = st.session_state.get("tracking_fusion_mode", "average")
+                    t_weights = None
+                    if t_mode == "weighted":
+                        try:
+                            t_weights = [float(x) for x in st.session_state.get("tracking_weights", "").split(",") if x.strip() != ""]
+                        except Exception:
+                            t_weights = None
+                    try:
+                        test_frame = _combine_channels(raw_test, t_channels, t_mode, t_weights)
+                    except Exception:
+                        test_frame = raw_test[:, :, 0]
+                else:
+                    test_frame = raw_test
                 frame_min, frame_max = float(np.min(test_frame)), float(np.max(test_frame))
                 frame_mean = float(np.mean(test_frame))
                 frame_std = float(np.std(test_frame))
@@ -3874,17 +4009,23 @@ Dilation expands detected particles to restore size after erosion."""
                         # Import the detect_particles function from tracking module
                         from tracking import detect_particles
                         
-                        # Get the current frame for detection
-                        current_frame = st.session_state.image_data[frame_idx].copy()
-                        
-                        # Convert to grayscale if needed
-                        if len(current_frame.shape) == 3:
-                            if current_frame.shape[2] == 3:
-                                # RGB to grayscale
-                                current_frame = np.mean(current_frame, axis=2)
-                            else:
-                                # Take first channel
-                                current_frame = current_frame[:, :, 0]
+                        # Get the current frame for detection (apply tracking fusion)
+                        _raw = st.session_state.image_data[frame_idx]
+                        if isinstance(_raw, np.ndarray) and _raw.ndim == 3 and _raw.shape[2] > 1:
+                            t_channels = st.session_state.get("tracking_channels", [0])
+                            t_mode = st.session_state.get("tracking_fusion_mode", "average")
+                            t_weights = None
+                            if t_mode == "weighted":
+                                try:
+                                    t_weights = [float(x) for x in st.session_state.get("tracking_weights", "").split(",") if x.strip() != ""]
+                                except Exception:
+                                    t_weights = None
+                            try:
+                                current_frame = _combine_channels(_raw, t_channels, t_mode, t_weights)
+                            except Exception:
+                                current_frame = _raw[:, :, 0]
+                        else:
+                            current_frame = _raw.copy()
                         
                         # Use advanced detection with fine-tuned parameters
                         if detection_method == "LoG":
@@ -4107,7 +4248,22 @@ Dilation expands detected particles to restore size after erosion."""
                             progress_bar.progress(progress)
                             status_text.text(f"Processing frame {current_frame_idx + 1}/{total_frames}...")
                             
-                            current_frame = st.session_state.image_data[current_frame_idx]
+                            _rawf = st.session_state.image_data[current_frame_idx]
+                            if isinstance(_rawf, np.ndarray) and _rawf.ndim == 3 and _rawf.shape[2] > 1:
+                                t_channels = st.session_state.get("tracking_channels", [0])
+                                t_mode = st.session_state.get("tracking_fusion_mode", "average")
+                                t_weights = None
+                                if t_mode == "weighted":
+                                    try:
+                                        t_weights = [float(x) for x in st.session_state.get("tracking_weights", "").split(",") if x.strip() != ""]
+                                    except Exception:
+                                        t_weights = None
+                                try:
+                                    current_frame = _combine_channels(_rawf, t_channels, t_mode, t_weights)
+                                except Exception:
+                                    current_frame = _rawf[:, :, 0]
+                            else:
+                                current_frame = _rawf
                             
                             # Run the same detection logic as the single frame version
                             if detection_method == "LoG":
