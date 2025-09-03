@@ -53,7 +53,7 @@ viscosity_medium = 1e-3     # Viscosity of surrounding medium (Pa·s)
 
 [file_handling]
 # File processing parameters
-max_file_size_mb = 1024     # Maximum file size to process (MB)
+max_file_size_mb = 32768     # Maximum file size to process (MB)
 chunk_size = 10000          # Chunk size for processing large files
 supported_formats = ["csv", "xlsx", "xml", "mvd2", "tiff", "tif"]
 

@@ -50,6 +50,7 @@ from rheology import MicrorheologyAnalyzer, create_rheology_plots, display_rheol
 from trajectory_heatmap import create_streamlit_heatmap_interface
 from state_manager import get_state_manager
 from analysis_manager import AnalysisManager
+from config_manager import get_config_manager
 
 # Import new page modules for multi-page architecture
 import importlib
@@ -819,6 +820,33 @@ with st.sidebar.expander("Unit Settings"):
         st.session_state.unit_converter.set_frame_interval(st.session_state.frame_interval)
         st.sidebar.success("Unit settings applied to all analyses!")
         st.rerun()
+
+# Show system limits for clarity across machines
+with st.sidebar.expander("System Limits"):
+    # Upload limit from Streamlit config
+    upload_limit_mb = None
+    try:
+        from streamlit import config as st_config  # type: ignore
+        upload_limit_mb = st_config.get_option("server.maxUploadSize")
+    except Exception:
+        try:
+            import toml  # type: ignore
+            cfg_path = os.path.join(".streamlit", "config.toml")
+            if os.path.exists(cfg_path):
+                cfg = toml.load(cfg_path)
+                upload_limit_mb = cfg.get("server", {}).get("maxUploadSize")
+        except Exception:
+            upload_limit_mb = None
+
+    cfg_mgr = get_config_manager()
+    processing_limit_mb = cfg_mgr.get("file_handling", "max_file_size_mb", None)
+    chunk_size = cfg_mgr.get("file_handling", "chunk_size", None)
+
+    st.write(f"Upload limit: {upload_limit_mb if upload_limit_mb is not None else 'unknown'} MB")
+    if processing_limit_mb is not None:
+        st.write(f"Processing limit: {processing_limit_mb} MB")
+    if chunk_size is not None:
+        st.write(f"Chunk size: {chunk_size} rows")
 
 # Main content area based on active page
 if st.session_state.active_page == "MD Integration":
