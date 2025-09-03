@@ -1189,7 +1189,8 @@ class EnhancedSPTReportGenerator:
                     else:
                         # Assume Plotly
                         try:
-                            div = pio.to_html(fig, include_plotlyjs='cdn', full_html=False)
+                            # Bundle plotly.js inline for fully self-contained HTML
+                            div = pio.to_html(fig, include_plotlyjs='inline', full_html=False)
                             parts.append(f"<div class='figure'>{div}</div>")
                         except Exception as e:
                             parts.append(f"<pre class='code'>Failed to render figure: {html.escape(str(e))}</pre>")
