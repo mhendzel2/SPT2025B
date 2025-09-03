@@ -729,6 +729,12 @@ if "confirm_delete_condition" not in st.session_state:
 if "confirm_delete_file" not in st.session_state:
     st.session_state.confirm_delete_file = False
 
+# Ensure detection-related session keys exist to avoid AttributeError before first use
+if 'detection_results' not in st.session_state:
+    st.session_state.detection_results = {}
+if 'all_detections' not in st.session_state:
+    st.session_state.all_detections = {}
+
 # Load sample data option in sidebar
 with st.sidebar.expander("Sample Data"):
     if st.button("Load Sample Data"):
