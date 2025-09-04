@@ -51,6 +51,7 @@ from trajectory_heatmap import create_streamlit_heatmap_interface
 from state_manager import get_state_manager
 from analysis_manager import AnalysisManager
 from config_manager import get_config_manager
+from channel_manager import channel_manager
 
 # Import new page modules for multi-page architecture
 import importlib
@@ -1748,12 +1749,41 @@ elif st.session_state.active_page == "Image Processing":
                 
                 # Channel selection for segmentation (support multi-channel)
                 st.subheader("Channel Selection for Segmentation")
+
+                # Channel labeling helpers
+                seg_label_key = "mask_channel_labels"
+                if seg_label_key not in st.session_state:
+                    st.session_state[seg_label_key] = {}
+                # Build display labels with saved or suggested names
+                def _seg_label(idx: int) -> str:
+                    saved = st.session_state[seg_label_key].get(idx)
+                    return f"Channel {idx + 1}" if not saved else f"{saved} (C{idx + 1})"
+
+                with st.expander("Name channels (optional)", expanded=False):
+                    common = channel_manager.get_common_names()
+                    cols = st.columns(min(4, num_channels))
+                    for i in range(num_channels):
+                        with cols[i % len(cols)]:
+                            current = st.session_state[seg_label_key].get(i, "")
+                            new_name = st.text_input(
+                                f"Channel {i+1} name",
+                                value=current,
+                                key=f"seg_label_input_{i}",
+                                placeholder="e.g., DAPI, GFP"
+                            )
+                            if new_name and new_name != current:
+                                is_valid, validated = channel_manager.validate_name(new_name)
+                                if is_valid:
+                                    st.session_state[seg_label_key][i] = validated
+                                    channel_manager.add_channel_name(validated)
+                                else:
+                                    st.warning(f"Invalid name for C{i+1}: {validated}")
                 default_sel = st.session_state.get("segmentation_channels", [0])
                 segmentation_channels = st.multiselect(
                     "Choose channel(s) for segmentation:",
                     options=list(range(num_channels)),
                     default=[ci for ci in default_sel if 0 <= ci < num_channels] or [0],
-                    format_func=lambda x: f"Channel {x + 1}",
+                    format_func=lambda x: _seg_label(x),
                     key="segmentation_channels_select",
                     help="Select one or more channels to build the segmentation image"
                 )
@@ -2036,15 +2066,22 @@ elif st.session_state.active_page == "Image Processing":
                             three_class_result[combined_result == 2] = 2  # Nuclear class 2
                             # Background remains 0
                             
-                            # Store generated masks for analysis
+                            # Compose trace info for segmentation channels/fusion
+                            seg_chs = st.session_state.get('segmentation_channels', [0])
+                            seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
+                            seg_lbls = st.session_state.get('mask_channel_labels', {})
+                            ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
+                            trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
+
+                            # Store generated masks for analysis with trace
                             store_mask("Nuclear_Boundaries", nuclear_mask, "Nuclear Boundary", 
-                                     f"Nuclear boundaries detected using {nuclear_method}")
+                                     f"Nuclear boundaries detected using {nuclear_method}{trace}")
                             store_mask("Nuclear_Internal_Classes", internal_classes, "Nuclear Internal", 
-                                     f"Internal nuclear segmentation using {internal_method}")
+                                     f"Internal nuclear segmentation using {internal_method}{trace}")
                             store_mask("Nuclear_Combined", combined_result, "Nuclear Combined", 
-                                     f"Combined nuclear segmentation: {nuclear_method} + {internal_method}")
+                                     f"Combined nuclear segmentation: {nuclear_method} + {internal_method}{trace}")
                             store_mask("Nuclear_Three_Class", three_class_result, "Nuclear Three-Class", 
-                                     f"Complete three-class nuclear segmentation: 0=Background, 1={nuclear_method}_Class1, 2={nuclear_method}_Class2")
+                                     f"Complete three-class nuclear segmentation: 0=Background, 1={nuclear_method}_Class1, 2={nuclear_method}_Class2{trace}")
                             
                             # Store results in session state
                             st.session_state.nuclear_segmentation_result = combined_result
@@ -2106,11 +2143,18 @@ elif st.session_state.active_page == "Image Processing":
                                 
                                 st.session_state.segmentation_mask = mask
                                 
+                                # Trace details
+                                seg_chs = st.session_state.get('segmentation_channels', [0])
+                                seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
+                                seg_lbls = st.session_state.get('mask_channel_labels', {})
+                                ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
+                                trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
+
                                 # Store generated masks for analysis
                                 store_mask("Simple_Density_Map", mask.astype(np.uint8), "Density Map", 
-                                         f"Density map segmentation (sigma_hp={sigma_hp}, disk_radius={disk_radius})")
+                                         f"Density map segmentation (sigma_hp={sigma_hp}, disk_radius={disk_radius}){trace}")
                                 store_mask("Density_Three_Class", density_three_class, "Density Three-Class", 
-                                         f"Complete density map classification: 0=Background, 1=Interior, 2=Exterior (sigma_hp={sigma_hp})")
+                                         f"Complete density map classification: 0=Background, 1=Interior, 2=Exterior (sigma_hp={sigma_hp}){trace}")
                                 
                                 col1, col2 = st.columns(2)
                                 with col1:
@@ -2156,9 +2200,16 @@ elif st.session_state.active_page == "Image Processing":
                 if seg_method in ["Manual", "Otsu", "Triangle"] and 'mask' in locals():
                     st.session_state.segmentation_mask = mask
                     
+                    # Trace details
+                    seg_chs = st.session_state.get('segmentation_channels', [0])
+                    seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
+                    seg_lbls = st.session_state.get('mask_channel_labels', {})
+                    ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
+                    trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
+
                     # Store generated mask for analysis
                     store_mask(f"Simple_{seg_method}", mask.astype(np.uint8), f"Simple {seg_method}", 
-                             f"{seg_method} threshold segmentation")
+                             f"{seg_method} threshold segmentation{trace}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
@@ -3516,12 +3567,39 @@ elif st.session_state.active_page == "Tracking":
 
             if _is_mc:
                 st.subheader("Tracking Channel Selection")
+                # Channel labeling for tracking
+                track_label_key = "tracking_channel_labels"
+                if track_label_key not in st.session_state:
+                    st.session_state[track_label_key] = {}
+                def _track_label(idx: int) -> str:
+                    saved = st.session_state[track_label_key].get(idx)
+                    return f"Channel {idx + 1}" if not saved else f"{saved} (C{idx + 1})"
+
+                with st.expander("Name channels (optional)", expanded=False):
+                    common = channel_manager.get_common_names()
+                    cols = st.columns(min(4, _num_ch))
+                    for i in range(_num_ch):
+                        with cols[i % len(cols)]:
+                            current = st.session_state[track_label_key].get(i, "")
+                            new_name = st.text_input(
+                                f"Channel {i+1} name",
+                                value=current,
+                                key=f"track_label_input_{i}",
+                                placeholder="e.g., DAPI, GFP"
+                            )
+                            if new_name and new_name != current:
+                                is_valid, validated = channel_manager.validate_name(new_name)
+                                if is_valid:
+                                    st.session_state[track_label_key][i] = validated
+                                    channel_manager.add_channel_name(validated)
+                                else:
+                                    st.warning(f"Invalid name for C{i+1}: {validated}")
                 default_track_sel = st.session_state.get("tracking_channels", [0])
                 tracking_channels = st.multiselect(
                     "Choose channel(s) for tracking:",
                     options=list(range(_num_ch)),
                     default=[ci for ci in default_track_sel if 0 <= ci < _num_ch] or [0],
-                    format_func=lambda x: f"Channel {x + 1}",
+                    format_func=lambda x: _track_label(x),
                     key="tracking_channels_select",
                     help="Select one or two channels to detect particles on"
                 )
@@ -3554,6 +3632,31 @@ elif st.session_state.active_page == "Tracking":
 
             # Detection parameters with real-time tuning
             st.subheader("Detection Parameters")
+
+            # Optional ROI restriction using segmentation masks
+            with st.expander("Restrict detection to segmentation classes (optional)", expanded=False):
+                roi_enabled = st.checkbox("Enable ROI restriction", value=False, key="tracking_roi_enabled")
+                roi_mask = None
+                if roi_enabled:
+                    # Reuse segmentation mask selection utility
+                    available_masks = get_available_masks()
+                    if not available_masks:
+                        st.info("No masks available. Generate masks in Image Processing.")
+                    else:
+                        mask_names = list(available_masks.keys())
+                        sel_mask_name = st.selectbox("Mask", mask_names, index=0, key="tracking_roi_mask_name")
+                        sel_mask = available_masks[sel_mask_name]
+                        unique_classes = sorted(list(np.unique(sel_mask)))
+                        sel_classes = st.multiselect(
+                            "Classes to include",
+                            options=unique_classes,
+                            default=[c for c in unique_classes if c != 0],
+                            key="tracking_roi_classes",
+                            help="Only pixels in these classes will be considered during detection"
+                        )
+                        # Build boolean ROI from chosen classes
+                        roi_mask = np.isin(sel_mask, sel_classes)
+                        st.caption(f"ROI built from mask '{sel_mask_name}' with classes {sel_classes}")
             
             # Add real-time detection tuning section
             with st.expander("🔍 Real-time Detection Tuning", expanded=True):
@@ -3590,9 +3693,21 @@ elif st.session_state.active_page == "Tracking":
                         test_frame = raw_test[:, :, 0]
                 else:
                     test_frame = raw_test
-                frame_min, frame_max = float(np.min(test_frame)), float(np.max(test_frame))
-                frame_mean = float(np.mean(test_frame))
-                frame_std = float(np.std(test_frame))
+                # If ROI restriction enabled, ignore out-of-ROI pixels for stats
+                if 'tracking_roi_enabled' in st.session_state and st.session_state.tracking_roi_enabled and roi_mask is not None:
+                    roi_vals = test_frame[roi_mask]
+                    if roi_vals.size > 0:
+                        frame_min, frame_max = float(np.min(roi_vals)), float(np.max(roi_vals))
+                        frame_mean = float(np.mean(roi_vals))
+                        frame_std = float(np.std(roi_vals))
+                    else:
+                        frame_min, frame_max = float(np.min(test_frame)), float(np.max(test_frame))
+                        frame_mean = float(np.mean(test_frame))
+                        frame_std = float(np.std(test_frame))
+                else:
+                    frame_min, frame_max = float(np.min(test_frame)), float(np.max(test_frame))
+                    frame_mean = float(np.mean(test_frame))
+                    frame_std = float(np.std(test_frame))
                 
                 # Ensure we have a valid range for the slider
                 if frame_max <= frame_min:
@@ -3657,6 +3772,10 @@ elif st.session_state.active_page == "Tracking":
                     
                     # Simple threshold preview on processed frame
                     threshold_mask = processed_frame > quick_threshold
+                    # Apply ROI if requested
+                    if 'tracking_roi_enabled' in st.session_state and st.session_state.tracking_roi_enabled and roi_mask is not None:
+                        if roi_mask.shape == threshold_mask.shape:
+                            threshold_mask = threshold_mask & roi_mask
                     detected_pixels = int(np.sum(threshold_mask))
                     total_pixels = threshold_mask.size
                     detection_percent = (detected_pixels / total_pixels) * 100
@@ -4026,6 +4145,11 @@ Dilation expands detected particles to restore size after erosion."""
                                 current_frame = _raw[:, :, 0]
                         else:
                             current_frame = _raw.copy()
+                        # Apply ROI
+                        if 'tracking_roi_enabled' in st.session_state and st.session_state.tracking_roi_enabled and roi_mask is not None:
+                            if roi_mask.shape == current_frame.shape:
+                                # Zero-out non-ROI to avoid detections there
+                                current_frame = current_frame * roi_mask
                         
                         # Use advanced detection with fine-tuned parameters
                         if detection_method == "LoG":
@@ -4264,6 +4388,10 @@ Dilation expands detected particles to restore size after erosion."""
                                     current_frame = _rawf[:, :, 0]
                             else:
                                 current_frame = _rawf
+                            # Apply ROI
+                            if 'tracking_roi_enabled' in st.session_state and st.session_state.tracking_roi_enabled and roi_mask is not None:
+                                if roi_mask.shape == current_frame.shape:
+                                    current_frame = current_frame * roi_mask
                             
                             # Run the same detection logic as the single frame version
                             if detection_method == "LoG":
