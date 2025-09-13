@@ -2669,6 +2669,8 @@ def create_interactive_plot(data: Dict[str, Any],
         - 'scatter': Plot scatter plot
         - 'heatmap': Plot 2D heatmap
         - 'time_series': Plot time series data
+        - 'animated_tracks': Create animated track visualization
+        - 'velocity_field': Create velocity field animation
     title : str, default='Interactive Plot'
         Title for the plot
     **kwargs
@@ -2845,6 +2847,33 @@ def create_interactive_plot(data: Dict[str, Any],
             else:
                 return _empty_fig("No time series data provided")
                 
+        elif plot_type == 'animated_tracks':
+            # Create animated track visualization
+            if 'tracks_df' in data:
+                tracks_df = data['tracks_df']
+                return create_animated_tracks(
+                    tracks_df, 
+                    title=title,
+                    frame_interval=kwargs.get('frame_interval', 100),
+                    trail_length=kwargs.get('trail_length', 10),
+                    show_labels=kwargs.get('show_labels', True)
+                )
+            else:
+                return _empty_fig("No track data provided for animated tracks")
+                
+        elif plot_type == 'velocity_field':
+            # Create velocity field animation
+            if 'tracks_df' in data and 'velocity_data' in data:
+                return create_velocity_field_animation(
+                    data['tracks_df'],
+                    data['velocity_data'],
+                    title=title,
+                    frame_interval=kwargs.get('frame_interval', 200),
+                    arrow_scale=kwargs.get('arrow_scale', 10.0)
+                )
+            else:
+                return _empty_fig("No track and velocity data provided for velocity field animation")
+                
         else:
             return _empty_fig(f"Unknown plot type: {plot_type}")
             
@@ -2940,3 +2969,381 @@ def create_dashboard_plot(analysis_results: Dict[str, Any],
         
     except Exception as e:
         return _empty_fig(f"Error creating dashboard: {str(e)}")
+
+
+def create_animated_tracks(tracks_df: pd.DataFrame,
+                          title: str = "Animated Particle Tracks",
+                          frame_interval: float = 100,
+                          trail_length: int = 10,
+                          show_labels: bool = True) -> go.Figure:
+    """
+    Create an animated visualization of particle tracks over time.
+    
+    This function creates a time-lapse animation showing particle movement
+    with optional trailing effects and labels.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
+    title : str, default="Animated Particle Tracks"
+        Title for the animation
+    frame_interval : float, default=100
+        Time interval between animation frames in milliseconds
+    trail_length : int, default=10
+        Number of previous positions to show as trail (0 = no trail)
+    show_labels : bool, default=True
+        Whether to show track ID labels
+        
+    Returns
+    -------
+    go.Figure
+        Animated Plotly figure with time controls
+    """
+    
+    if tracks_df.empty:
+        return _empty_fig("No track data provided for animation")
+    
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    if not all(col in tracks_df.columns for col in required_columns):
+        return _empty_fig(f"Missing required columns for animation: {required_columns}")
+    
+    try:
+        # Sort by frame for proper animation
+        tracks_df = tracks_df.sort_values(['frame', 'track_id']).copy()
+        
+        # Get frame range
+        frames = sorted(tracks_df['frame'].unique())
+        track_ids = sorted(tracks_df['track_id'].unique())
+        
+        # Create color map for tracks
+        colors = [_qual_colour(i) for i in range(len(track_ids))]
+        color_map = dict(zip(track_ids, colors))
+        
+        # Create animation frames
+        animation_frames = []
+        
+        for frame_idx, current_frame in enumerate(frames):
+            frame_data = []
+            
+            for track_id in track_ids:
+                # Get track data up to current frame
+                track_data = tracks_df[
+                    (tracks_df['track_id'] == track_id) & 
+                    (tracks_df['frame'] <= current_frame)
+                ].copy()
+                
+                if track_data.empty:
+                    continue
+                
+                # Apply trail length limit
+                if trail_length > 0 and len(track_data) > trail_length:
+                    track_data = track_data.tail(trail_length)
+                
+                # Create different opacity for trail effect
+                if len(track_data) > 1:
+                    # Create gradient opacity for trail
+                    opacities = np.linspace(0.3, 1.0, len(track_data))
+                else:
+                    opacities = [1.0]
+                
+                # Current position (last point)
+                current_pos = track_data.iloc[-1]
+                
+                # Add trail if more than one point
+                if len(track_data) > 1:
+                    # Trail line
+                    frame_data.append(
+                        go.Scatter(
+                            x=track_data['x'],
+                            y=track_data['y'],
+                            mode='lines',
+                            line=dict(
+                                color=color_map[track_id],
+                                width=2
+                            ),
+                            opacity=0.6,
+                            name=f'Track {track_id} Trail',
+                            showlegend=False,
+                            hoverinfo='skip'
+                        )
+                    )
+                
+                # Current position marker
+                frame_data.append(
+                    go.Scatter(
+                        x=[current_pos['x']],
+                        y=[current_pos['y']],
+                        mode='markers+text' if show_labels else 'markers',
+                        marker=dict(
+                            color=color_map[track_id],
+                            size=10,
+                            symbol='circle'
+                        ),
+                        text=[f'T{track_id}'] if show_labels else None,
+                        textposition='top center',
+                        name=f'Track {track_id}',
+                        showlegend=(frame_idx == 0),  # Show legend only for first frame
+                        hovertemplate=f'Track {track_id}<br>X: %{{x:.2f}}<br>Y: %{{y:.2f}}<br>Frame: {current_frame}<extra></extra>'
+                    )
+                )
+            
+            animation_frames.append(go.Frame(
+                data=frame_data,
+                name=str(current_frame),
+                layout=go.Layout(
+                    title=f"{title} - Frame {current_frame}"
+                )
+            ))
+        
+        # Create initial figure with first frame data
+        initial_data = animation_frames[0].data if animation_frames else []
+        
+        fig = go.Figure(data=initial_data, frames=animation_frames)
+        
+        # Update layout with animation controls
+        fig.update_layout(
+            title=title,
+            xaxis_title="X Position",
+            yaxis_title="Y Position",
+            template="plotly_white",
+            updatemenus=[{
+                'type': 'buttons',
+                'showactive': False,
+                'buttons': [
+                    {
+                        'label': 'Play',
+                        'method': 'animate',
+                        'args': [None, {
+                            'frame': {'duration': frame_interval, 'redraw': True},
+                            'fromcurrent': True,
+                            'transition': {'duration': 0}
+                        }]
+                    },
+                    {
+                        'label': 'Pause',
+                        'method': 'animate',
+                        'args': [[None], {
+                            'frame': {'duration': 0, 'redraw': False},
+                            'mode': 'immediate',
+                            'transition': {'duration': 0}
+                        }]
+                    },
+                    {
+                        'label': 'Reset',
+                        'method': 'animate',
+                        'args': [None, {
+                            'frame': {'duration': 0, 'redraw': True},
+                            'mode': 'immediate',
+                            'transition': {'duration': 0}
+                        }]
+                    }
+                ],
+                'x': 0.1,
+                'y': 0,
+                'xanchor': 'right',
+                'yanchor': 'top'
+            }],
+            sliders=[{
+                'steps': [
+                    {
+                        'args': [[frame.name], {
+                            'frame': {'duration': 0, 'redraw': True},
+                            'mode': 'immediate',
+                            'transition': {'duration': 0}
+                        }],
+                        'label': f'Frame {frame.name}',
+                        'method': 'animate'
+                    }
+                    for frame in animation_frames
+                ],
+                'x': 0.1,
+                'len': 0.9,
+                'xanchor': 'left',
+                'y': 0,
+                'yanchor': 'top',
+                'transition': {'duration': 0},
+                'currentvalue': {
+                    'visible': True,
+                    'prefix': 'Frame: ',
+                    'xanchor': 'right',
+                    'font': {'size': 12}
+                }
+            }]
+        )
+        
+        # Ensure equal aspect ratio for proper visualization
+        fig.update_layout(
+            xaxis=dict(scaleanchor="y", scaleratio=1),
+            yaxis=dict(scaleanchor="x", scaleratio=1)
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error creating animated tracks: {str(e)}")
+
+
+def create_velocity_field_animation(tracks_df: pd.DataFrame,
+                                  velocity_data: pd.DataFrame,
+                                  title: str = "Velocity Field Animation",
+                                  frame_interval: float = 200,
+                                  arrow_scale: float = 10.0) -> go.Figure:
+    """
+    Create an animated visualization of velocity field over time.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data
+    velocity_data : pd.DataFrame  
+        DataFrame containing velocity data with columns 'track_id', 'frame', 'vx', 'vy'
+    title : str, default="Velocity Field Animation"
+        Title for the animation
+    frame_interval : float, default=200
+        Time interval between animation frames in milliseconds
+    arrow_scale : float, default=10.0
+        Scale factor for velocity arrows
+        
+    Returns
+    -------
+    go.Figure
+        Animated velocity field visualization
+    """
+    
+    if tracks_df.empty or velocity_data.empty:
+        return _empty_fig("No track or velocity data provided for velocity field animation")
+    
+    try:
+        # Merge position and velocity data
+        merged_data = tracks_df.merge(
+            velocity_data[['track_id', 'frame', 'vx', 'vy']], 
+            on=['track_id', 'frame'], 
+            how='inner'
+        )
+        
+        if merged_data.empty:
+            return _empty_fig("No matching position and velocity data found")
+        
+        frames = sorted(merged_data['frame'].unique())
+        animation_frames = []
+        
+        for current_frame in frames:
+            frame_data = merged_data[merged_data['frame'] == current_frame].copy()
+            
+            if frame_data.empty:
+                continue
+            
+            # Calculate arrow endpoints
+            x_end = frame_data['x'] + frame_data['vx'] * arrow_scale
+            y_end = frame_data['y'] + frame_data['vy'] * arrow_scale
+            
+            # Calculate speed for color coding
+            speed = np.sqrt(frame_data['vx']**2 + frame_data['vy']**2)
+            
+            # Create velocity vectors as scatter plot with custom markers
+            scatter_data = go.Scatter(
+                x=frame_data['x'],
+                y=frame_data['y'],
+                mode='markers',
+                marker=dict(
+                    color=speed,
+                    colorscale='viridis',
+                    size=8,
+                    colorbar=dict(title="Speed"),
+                    symbol='arrow-up'
+                ),
+                name='Particles',
+                hovertemplate='Track %{text}<br>Position: (%{x:.2f}, %{y:.2f})<br>Speed: %{marker.color:.3f}<extra></extra>',
+                text=frame_data['track_id']
+            )
+            
+            # Add velocity arrows
+            arrow_traces = []
+            for _, row in frame_data.iterrows():
+                arrow_traces.append(
+                    go.Scatter(
+                        x=[row['x'], row['x'] + row['vx'] * arrow_scale],
+                        y=[row['y'], row['y'] + row['vy'] * arrow_scale],
+                        mode='lines',
+                        line=dict(color='red', width=2),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    )
+                )
+            
+            frame_traces = [scatter_data] + arrow_traces
+            
+            animation_frames.append(go.Frame(
+                data=frame_traces,
+                name=str(current_frame),
+                layout=go.Layout(
+                    title=f"{title} - Frame {current_frame}"
+                )
+            ))
+        
+        # Create figure with animation controls
+        fig = go.Figure(
+            data=animation_frames[0].data if animation_frames else [],
+            frames=animation_frames
+        )
+        
+        # Add animation controls similar to track animation
+        fig.update_layout(
+            title=title,
+            xaxis_title="X Position",
+            yaxis_title="Y Position", 
+            template="plotly_white",
+            updatemenus=[{
+                'type': 'buttons',
+                'showactive': False,
+                'buttons': [
+                    {
+                        'label': 'Play',
+                        'method': 'animate',
+                        'args': [None, {
+                            'frame': {'duration': frame_interval, 'redraw': True},
+                            'fromcurrent': True,
+                            'transition': {'duration': 0}
+                        }]
+                    },
+                    {
+                        'label': 'Pause',
+                        'method': 'animate',
+                        'args': [[None], {
+                            'frame': {'duration': 0, 'redraw': False},
+                            'mode': 'immediate',
+                            'transition': {'duration': 0}
+                        }]
+                    }
+                ],
+                'x': 0.1,
+                'y': 0,
+                'xanchor': 'right',
+                'yanchor': 'top'
+            }],
+            sliders=[{
+                'steps': [
+                    {
+                        'args': [[frame.name], {
+                            'frame': {'duration': 0, 'redraw': True},
+                            'mode': 'immediate',
+                            'transition': {'duration': 0}
+                        }],
+                        'label': f'Frame {frame.name}',
+                        'method': 'animate'
+                    }
+                    for frame in animation_frames
+                ],
+                'x': 0.1,
+                'len': 0.9,
+                'xanchor': 'left',
+                'y': 0,
+                'yanchor': 'top'
+            }]
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error creating velocity field animation: {str(e)}")
