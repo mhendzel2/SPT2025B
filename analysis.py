@@ -100,6 +100,87 @@ def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min
 
     return pd.DataFrame(msd_results)
 
+
+def calculate_velocity(tracks_df: pd.DataFrame, 
+                      pixel_size: float = 1.0, 
+                      frame_interval: float = 1.0,
+                      min_track_length: int = 5,
+                      window_size: int = 1) -> pd.DataFrame:
+    """
+    Calculate velocity for particle tracks.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
+    pixel_size : float, default=1.0
+        Pixel size in micrometers
+    frame_interval : float, default=1.0
+        Frame interval in seconds
+    min_track_length : int, default=5
+        Minimum track length to include in analysis
+    window_size : int, default=1
+        Window size for velocity calculation (1 = instantaneous velocity)
+
+    Returns
+    -------
+    pd.DataFrame
+        Velocity data with columns 'track_id', 'frame', 'vx', 'vy', 'speed', 'direction'
+    """
+    # Validate input
+    if tracks_df is None or tracks_df.empty:
+        return pd.DataFrame(columns=['track_id', 'frame', 'vx', 'vy', 'speed', 'direction'])
+
+    required_columns = ['track_id', 'frame', 'x', 'y']
+    if not all(col in tracks_df.columns for col in required_columns):
+        return pd.DataFrame(columns=['track_id', 'frame', 'vx', 'vy', 'speed', 'direction'])
+
+    velocity_results = []
+
+    # Group by track_id
+    for track_id, track_data in tracks_df.groupby('track_id'):
+        # Sort by frame
+        track = track_data.sort_values('frame').copy()
+
+        # Skip short tracks
+        if len(track) < min_track_length:
+            continue
+
+        # Convert to physical units
+        x = track['x'].values * pixel_size
+        y = track['y'].values * pixel_size
+        frames = track['frame'].values
+
+        # Calculate velocities with specified window size
+        for i in range(window_size, len(track)):
+            # Calculate displacement over window
+            dx = x[i] - x[i - window_size]
+            dy = y[i] - y[i - window_size]
+            
+            # Calculate time interval
+            dt = (frames[i] - frames[i - window_size]) * frame_interval
+            
+            if dt > 0:
+                # Calculate velocity components
+                vx = dx / dt
+                vy = dy / dt
+                
+                # Calculate speed and direction
+                speed = np.sqrt(vx**2 + vy**2)
+                direction = np.arctan2(vy, vx)
+                
+                velocity_results.append({
+                    'track_id': track_id,
+                    'frame': frames[i],
+                    'vx': vx,
+                    'vy': vy,
+                    'speed': speed,
+                    'direction': direction
+                })
+
+    return pd.DataFrame(velocity_results)
+
+
 def _calculate_goodness_of_fit(y_true, y_pred, n_params):
     """Calculate R-squared, AIC, and BIC."""
     # R-squared

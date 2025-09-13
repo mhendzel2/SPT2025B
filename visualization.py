@@ -2643,3 +2643,300 @@ def plot_persistence_diagram(tda_results: Dict[str, Any]) -> go.Figure:
     )
 
     return fig
+
+
+def create_interactive_plot(data: Dict[str, Any], 
+                          plot_type: str = 'tracks',
+                          title: str = 'Interactive Plot',
+                          **kwargs) -> go.Figure:
+    """
+    Create a generic interactive plot based on data type and plot specifications.
+    
+    This is a unified interface for creating various types of interactive plots
+    from tracking and analysis data.
+    
+    Parameters
+    ----------
+    data : Dict[str, Any]
+        Dictionary containing the data to plot. Expected keys depend on plot_type.
+    plot_type : str, default='tracks'
+        Type of plot to create. Options:
+        - 'tracks': Plot particle tracks
+        - 'msd': Plot mean squared displacement
+        - 'velocity': Plot velocity analysis
+        - 'diffusion': Plot diffusion coefficients
+        - 'histogram': Plot data histogram
+        - 'scatter': Plot scatter plot
+        - 'heatmap': Plot 2D heatmap
+        - 'time_series': Plot time series data
+    title : str, default='Interactive Plot'
+        Title for the plot
+    **kwargs
+        Additional keyword arguments passed to specific plotting functions
+        
+    Returns
+    -------
+    go.Figure
+        Interactive Plotly figure
+    """
+    
+    try:
+        if plot_type == 'tracks':
+            # Plot particle tracks
+            if 'tracks_df' in data:
+                tracks_df = data['tracks_df']
+                return plot_tracks(tracks_df, title=title, **kwargs)
+            else:
+                return _empty_fig("No track data provided for tracks plot")
+                
+        elif plot_type == 'msd':
+            # Plot MSD curves
+            if 'msd_data' in data:
+                return plot_msd_curves(data['msd_data'], title=title, **kwargs)
+            else:
+                return _empty_fig("No MSD data provided for MSD plot")
+                
+        elif plot_type == 'velocity':
+            # Plot velocity field or analysis
+            if 'velocity_data' in data:
+                velocity_data = data['velocity_data']
+                if 'field' in velocity_data:
+                    return plot_velocity_field(velocity_data, title=title, **kwargs)
+                else:
+                    # Create velocity scatter plot
+                    fig = go.Figure()
+                    if 'vx' in velocity_data and 'vy' in velocity_data:
+                        fig.add_trace(go.Scatter(
+                            x=velocity_data['vx'],
+                            y=velocity_data['vy'],
+                            mode='markers',
+                            name='Velocity',
+                            text=velocity_data.get('track_id', None),
+                            hovertemplate='vx: %{x:.3f}<br>vy: %{y:.3f}<br>%{text}<extra></extra>'
+                        ))
+                        fig.update_layout(
+                            title=title,
+                            xaxis_title='Velocity X (μm/s)',
+                            yaxis_title='Velocity Y (μm/s)',
+                            template="plotly_white"
+                        )
+                    return fig
+            else:
+                return _empty_fig("No velocity data provided for velocity plot")
+                
+        elif plot_type == 'diffusion':
+            # Plot diffusion coefficients
+            if 'diffusion_data' in data:
+                return plot_diffusion_coefficients(data['diffusion_data'])
+            else:
+                return _empty_fig("No diffusion data provided for diffusion plot")
+                
+        elif plot_type == 'histogram':
+            # Plot histogram
+            if 'values' in data:
+                values = data['values']
+                fig = go.Figure()
+                fig.add_trace(go.Histogram(
+                    x=values,
+                    name=data.get('label', 'Data'),
+                    nbinsx=kwargs.get('bins', 50),
+                    opacity=0.7
+                ))
+                fig.update_layout(
+                    title=title,
+                    xaxis_title=data.get('xlabel', 'Value'),
+                    yaxis_title=data.get('ylabel', 'Frequency'),
+                    template="plotly_white"
+                )
+                return fig
+            else:
+                return _empty_fig("No values provided for histogram")
+                
+        elif plot_type == 'scatter':
+            # Plot scatter plot
+            if 'x' in data and 'y' in data:
+                fig = go.Figure()
+                
+                # Color by category if provided
+                if 'color' in data:
+                    fig.add_trace(go.Scatter(
+                        x=data['x'],
+                        y=data['y'],
+                        mode='markers',
+                        marker=dict(
+                            color=data['color'],
+                            colorscale=kwargs.get('colorscale', 'viridis'),
+                            colorbar=dict(title=data.get('color_label', 'Color'))
+                        ),
+                        name=data.get('label', 'Data'),
+                        text=data.get('text', None),
+                        hovertemplate='x: %{x}<br>y: %{y}<br>%{text}<extra></extra>'
+                    ))
+                else:
+                    fig.add_trace(go.Scatter(
+                        x=data['x'],
+                        y=data['y'],
+                        mode='markers',
+                        name=data.get('label', 'Data'),
+                        text=data.get('text', None),
+                        hovertemplate='x: %{x}<br>y: %{y}<br>%{text}<extra></extra>'
+                    ))
+                
+                fig.update_layout(
+                    title=title,
+                    xaxis_title=data.get('xlabel', 'X'),
+                    yaxis_title=data.get('ylabel', 'Y'),
+                    template="plotly_white"
+                )
+                return fig
+            else:
+                return _empty_fig("No x,y data provided for scatter plot")
+                
+        elif plot_type == 'heatmap':
+            # Plot 2D heatmap
+            if 'z' in data:
+                fig = go.Figure()
+                fig.add_trace(go.Heatmap(
+                    z=data['z'],
+                    x=data.get('x', None),
+                    y=data.get('y', None),
+                    colorscale=kwargs.get('colorscale', 'viridis'),
+                    colorbar=dict(title=data.get('z_label', 'Value'))
+                ))
+                fig.update_layout(
+                    title=title,
+                    xaxis_title=data.get('xlabel', 'X'),
+                    yaxis_title=data.get('ylabel', 'Y'),
+                    template="plotly_white"
+                )
+                return fig
+            else:
+                return _empty_fig("No z data provided for heatmap")
+                
+        elif plot_type == 'time_series':
+            # Plot time series
+            if 'time' in data and 'values' in data:
+                fig = go.Figure()
+                
+                # Handle multiple series
+                if isinstance(data['values'], dict):
+                    for label, values in data['values'].items():
+                        fig.add_trace(go.Scatter(
+                            x=data['time'],
+                            y=values,
+                            mode='lines+markers',
+                            name=label
+                        ))
+                else:
+                    fig.add_trace(go.Scatter(
+                        x=data['time'],
+                        y=data['values'],
+                        mode='lines+markers',
+                        name=data.get('label', 'Data')
+                    ))
+                
+                fig.update_layout(
+                    title=title,
+                    xaxis_title=data.get('xlabel', 'Time'),
+                    yaxis_title=data.get('ylabel', 'Value'),
+                    template="plotly_white"
+                )
+                return fig
+            else:
+                return _empty_fig("No time series data provided")
+                
+        else:
+            return _empty_fig(f"Unknown plot type: {plot_type}")
+            
+    except Exception as e:
+        return _empty_fig(f"Error creating plot: {str(e)}")
+
+
+def create_dashboard_plot(analysis_results: Dict[str, Any],
+                         plot_config: Dict[str, Any]) -> go.Figure:
+    """
+    Create a dashboard-style plot with multiple subplots.
+    
+    Parameters
+    ----------
+    analysis_results : Dict[str, Any]
+        Complete analysis results from various analysis functions
+    plot_config : Dict[str, Any]
+        Configuration dictionary specifying which plots to include and layout
+        
+    Returns
+    -------
+    go.Figure
+        Interactive dashboard figure with multiple subplots
+    """
+    
+    try:
+        # Extract configuration
+        subplot_config = plot_config.get('subplots', {'rows': 2, 'cols': 2})
+        titles = plot_config.get('titles', [])
+        
+        # Create subplots
+        fig = make_subplots(
+            rows=subplot_config['rows'],
+            cols=subplot_config['cols'],
+            subplot_titles=titles,
+            specs=plot_config.get('specs', None)
+        )
+        
+        # Add plots based on configuration
+        plots = plot_config.get('plots', [])
+        
+        for i, plot_info in enumerate(plots):
+            row = (i // subplot_config['cols']) + 1
+            col = (i % subplot_config['cols']) + 1
+            
+            plot_type = plot_info.get('type', 'scatter')
+            data_key = plot_info.get('data_key', '')
+            
+            if data_key in analysis_results:
+                data = analysis_results[data_key]
+                
+                if plot_type == 'scatter':
+                    if 'x' in data and 'y' in data:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=data['x'],
+                                y=data['y'],
+                                mode='markers',
+                                name=plot_info.get('name', data_key)
+                            ),
+                            row=row, col=col
+                        )
+                        
+                elif plot_type == 'histogram':
+                    if 'values' in data:
+                        fig.add_trace(
+                            go.Histogram(
+                                x=data['values'],
+                                name=plot_info.get('name', data_key)
+                            ),
+                            row=row, col=col
+                        )
+                        
+                elif plot_type == 'box':
+                    if 'values' in data:
+                        fig.add_trace(
+                            go.Box(
+                                y=data['values'],
+                                name=plot_info.get('name', data_key)
+                            ),
+                            row=row, col=col
+                        )
+        
+        # Update layout
+        fig.update_layout(
+            title=plot_config.get('title', 'Analysis Dashboard'),
+            template="plotly_white",
+            height=plot_config.get('height', 600),
+            showlegend=plot_config.get('showlegend', True)
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error creating dashboard: {str(e)}")
