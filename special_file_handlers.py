@@ -1028,3 +1028,66 @@ def construct_tracks_from_spots(spots_df: pd.DataFrame) -> pd.DataFrame:
     tracks_df = tracks_df.sort_values(['track_id', sort_by]).reset_index(drop=True)
     
     return tracks_df
+
+def load_trackmate_xml_file(file_stream) -> pd.DataFrame:
+    """
+    Load a TrackMate XML file.
+    """
+    import xml.etree.ElementTree as ET
+    import pandas as pd
+
+    # Parse XML content
+    content = file_stream.read()
+    root = ET.fromstring(content)
+
+    # Dictionary to hold all spots, keyed by ID
+    spots = {}
+    # The XPath depends on the TrackMate version. Try a few common ones.
+    spot_elements = root.findall('.//Spot')
+    if not spot_elements:
+        spot_elements = root.findall('.//AllSpots/SpotsInFrame/Spot')
+
+    for spot in spot_elements:
+        spot_id = spot.get('ID')
+        spots[spot_id] = {
+            'frame': int(float(spot.get('FRAME', 0))),
+            'x': float(spot.get('POSITION_X', 0)),
+            'y': float(spot.get('POSITION_Y', 0)),
+            'z': float(spot.get('POSITION_Z', 0)),
+            'quality': float(spot.get('QUALITY', 0)),
+        }
+
+    # List to hold track data
+    track_data = []
+    track_elements = root.findall('.//Track')
+    if not track_elements:
+        track_elements = root.findall('.//AllTracks/Track')
+
+    if track_elements:
+        for track in track_elements:
+            track_id = int(track.get('TRACK_ID'))
+
+            # Get all spot IDs in this track from the edges
+            spot_ids = set()
+            for edge in track.findall('.//Edge'):
+                spot_ids.add(edge.get('SPOT_SOURCE_ID'))
+                spot_ids.add(edge.get('SPOT_TARGET_ID'))
+
+            # Add track data for each spot
+            for spot_id in spot_ids:
+                if spot_id in spots:
+                    spot_data = spots[spot_id].copy()
+                    spot_data['track_id'] = track_id
+                    track_data.append(spot_data)
+    else:
+        # If no tracks, treat all spots as belonging to a single track
+        for spot_id, spot_data in spots.items():
+            spot_data['track_id'] = 0
+            track_data.append(spot_data)
+
+    if not track_data:
+        raise ValueError("No track or spot data found in TrackMate XML file")
+
+    # Convert to DataFrame
+    df = pd.DataFrame(track_data)
+    return df

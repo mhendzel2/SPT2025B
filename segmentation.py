@@ -1208,8 +1208,15 @@ def apply_nuclear_segmentation_with_preprocessing(image: np.ndarray,
     nuclear_mask = segment_nuclear_boundary(processed_image, nuclear_params)
     
     # Step 2: Segment within nuclear regions on processed image
-    internal_classes = segment_within_nucleus(processed_image, nuclear_mask, internal_params)
-    
+    if internal_params.get('method') == 'Density Map':
+        internal_mask = apply_density_map_within_nucleus(processed_image, nuclear_mask, internal_params)
+        internal_classes = np.zeros_like(image, dtype=np.uint8)
+        nuclear_regions = nuclear_mask > 0
+        internal_classes[nuclear_regions & ~internal_mask] = 1
+        internal_classes[nuclear_regions & internal_mask] = 2
+    else:
+        internal_classes = segment_within_nucleus(processed_image, nuclear_mask, internal_params)
+
     # Create combined result
     combined_result = np.zeros_like(image, dtype=np.uint8)
     
