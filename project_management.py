@@ -67,7 +67,8 @@ class Condition:
     @classmethod
     def from_dict(cls, d: Dict) -> 'Condition':
         c = cls(d['id'], d.get('name', ''), d.get('description', ''))
-        c.files = d.get('files', [])
+        # Ensure a copy of the list is made to prevent shared state issues
+        c.files = list(d.get('files', []))
         return c
 
     def pool_tracks(self) -> pd.DataFrame:
@@ -153,6 +154,23 @@ class ProjectManager:
         p = Project(name=name, description=description)
         self.save_project(p, os.path.join(self.projects_dir, f"{p.id}.json"))
         return p
+
+    def delete_project(self, project_id: str) -> bool:
+        """Deletes a project's JSON file."""
+        project_path = None
+        for meta in self.list_projects():
+            if meta['id'] == project_id:
+                project_path = meta['path']
+                break
+
+        if project_path and os.path.exists(project_path):
+            try:
+                os.remove(project_path)
+                return True
+            except Exception as e:
+                print(f"Error deleting project {project_id}: {e}")
+                return False
+        return False
 
     def save_project(self, project: 'Project', project_path: str) -> None:
         save_project(project, project_path)

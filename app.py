@@ -1625,6 +1625,25 @@ elif st.session_state.active_page == "Project Management":
         st.info("Create or select a project to manage conditions and files.")
     else:
         st.subheader(f"Project: {proj.name}")
+
+        if st.button("Delete Project", key="pm_delete_project"):
+            st.session_state.confirm_delete = True
+
+        if st.session_state.get("confirm_delete"):
+            st.warning(f"Are you sure you want to delete project '{proj.name}'? This cannot be undone.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Yes, delete it", type="primary"):
+                    pmgr.delete_project(proj.id)
+                    st.session_state.pm_current = None
+                    st.session_state.confirm_delete = False
+                    st.success("Project deleted.")
+                    st.rerun()
+            with c2:
+                if st.button("Cancel"):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+
         # Add condition
         with st.expander("Add Condition", expanded=True):
             cname = st.text_input("Condition name", key="pm_new_cond_name")
@@ -1637,7 +1656,29 @@ elif st.session_state.active_page == "Project Management":
 
         # List conditions with file upload per condition
         for cond in list(proj.conditions):
-            with st.expander(f"Condition: {cond.name} ({len(cond.files)} files)", expanded=False):
+            with st.expander(f"Condition: {cond.name} ({len(cond.files)} files)", expanded=True):
+
+                # Delete condition button
+                if st.button("Delete Condition", key=f"delete_cond_{cond.id}"):
+                    if "confirm_delete_condition" not in st.session_state:
+                        st.session_state.confirm_delete_condition = {}
+                    st.session_state.confirm_delete_condition[cond.id] = True
+
+                if st.session_state.get("confirm_delete_condition", {}).get(cond.id):
+                    st.warning(f"Are you sure you want to delete condition '{cond.name}'?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Yes, delete", type="primary", key=f"confirm_delete_cond_{cond.id}"):
+                            pmgr.remove_condition(proj, cond.id)
+                            pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                            st.session_state.confirm_delete_condition[cond.id] = False
+                            st.success("Condition deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("Cancel", key=f"cancel_delete_cond_{cond.id}"):
+                            st.session_state.confirm_delete_condition[cond.id] = False
+                            st.rerun()
+
                 uploaded = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_{cond.id}")
                 if uploaded:
                     for uf in uploaded:
