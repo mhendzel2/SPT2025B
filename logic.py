@@ -332,3 +332,39 @@ def process_image_data(image_data):
     except Exception as e:
         st.error(f"Error processing image data: {str(e)}")
         return None
+
+def convert_mask_to_regions(mask: np.ndarray, class_id: int) -> list:
+    """
+    Convert a mask for a specific class into a list of regions for analysis.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        The segmentation mask.
+    class_id : int
+        The ID of the class to extract regions from.
+
+    Returns
+    -------
+    List[Dict]
+        A list of regions, where each region is a dictionary with 'x', 'y', and 'radius'.
+    """
+    from skimage import measure
+
+    regions = []
+    class_mask = (mask == class_id).astype(np.uint8)
+
+    # Label connected components in the class mask
+    labeled_mask = measure.label(class_mask, connectivity=2)
+
+    # Get properties of each labeled region
+    props = measure.regionprops(labeled_mask)
+
+    for prop in props:
+        # Get centroid and equivalent diameter (as a measure of radius)
+        y, x = prop.centroid
+        radius = prop.equivalent_diameter / 2
+
+        regions.append({'x': x, 'y': y, 'radius': radius})
+
+    return regions

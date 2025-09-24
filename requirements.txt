@@ -17,8 +17,10 @@ openpyxl>=3.0.0
 opencv-python>=4.5.0
 networkx>=3.0
 fbm>=0.2.0
-# segment-anything>=1.0
-# cellpose>=2.0
+torch>=2.0.0
+torchvision>=0.15.0
+segment-anything>=1.0
+cellpose>=2.0
 btrack
 deeptrack
 hmmlearn>=0.3.0

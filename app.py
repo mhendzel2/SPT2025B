@@ -261,6 +261,94 @@ def _combine_channels(multichannel_img: np.ndarray, channel_indices: List[int], 
     return np.mean(stack, axis=2)
 
 
+def segmentation_controls_ui(key_prefix="", current_image=None):
+    """UI for segmentation controls, reusable across pages."""
+    params = {}
+    if current_image is None:
+        st.warning("No image data provided for segmentation controls.")
+        return None
+
+    seg_approach = st.selectbox(
+        "Segmentation Approach",
+        ["Simple Segmentation", "Nuclear Segmentation (Two-Step)"],
+        help="Choose segmentation approach: Simple (binary) or Nuclear (two-step process)",
+        key=f"{key_prefix}_seg_approach"
+    )
+    params['seg_approach'] = seg_approach
+
+    if seg_approach == "Nuclear Segmentation (Two-Step)":
+        st.markdown("### Two-Step Nuclear Segmentation")
+        st.info("Choose methods and preprocessing that will be applied to the original image for both nuclear boundary detection and interior segmentation")
+
+        # Method Selection
+        st.markdown("#### Method Selection")
+        col1_method, col2_method = st.columns(2)
+        with col1_method:
+            params['nuclear_method'] = st.selectbox("Nuclear Boundary Detection", ["Otsu", "Triangle", "Manual"], key=f"{key_prefix}_nuc_method")
+        with col2_method:
+            params['internal_method'] = st.selectbox("Interior Segmentation", ["Otsu", "Triangle", "Manual", "Density Map"], key=f"{key_prefix}_int_method")
+
+        # Image Preprocessing
+        st.markdown("#### Image Preprocessing")
+        params['apply_preprocessing'] = st.checkbox("Apply Image Preprocessing", value=False, key=f"{key_prefix}_apply_preprocessing_nuclear")
+        if params.get('apply_preprocessing'):
+            col1_preprocess, col2_preprocess = st.columns(2)
+            with col1_preprocess:
+                params['preprocessing_method'] = st.selectbox("Preprocessing Method", ["Median Filter", "Gaussian Filter"], key=f"{key_prefix}_preprocessing_method_nuclear")
+            with col2_preprocess:
+                if params.get('preprocessing_method') == "Median Filter":
+                    params['preprocessing_size'] = st.slider("Median Filter Size", 3, 15, 5, 2, key=f"{key_prefix}_preprocessing_size_nuclear")
+                else: # Gaussian
+                    params['preprocessing_sigma'] = st.slider("Gaussian Sigma", 0.5, 3.0, 1.0, 0.1, key=f"{key_prefix}_preprocessing_sigma_nuclear")
+
+        # Nuclear Boundary Parameters
+        st.markdown("#### Nuclear Boundary Parameters")
+        col1_nuclear, col2_nuclear = st.columns(2)
+        with col1_nuclear:
+            if params.get('nuclear_method') == "Manual":
+                params['nuclear_threshold'] = st.slider("Nuclear Threshold", float(current_image.min()), float(current_image.max()), float((current_image.min() + current_image.max()) / 2), key=f"{key_prefix}_nuclear_threshold_new")
+            params['min_nuclear_size'] = st.slider("Minimum Nuclear Size (pixels)", 100, 10000, 1000, 100, key=f"{key_prefix}_min_nuc_size_new")
+        with col2_nuclear:
+            params['nuclear_closing'] = st.slider("Nuclear Closing Size", 1, 20, 5, 1, key=f"{key_prefix}_nuc_closing_new")
+            params['nuclear_smooth'] = st.checkbox("Smooth Nuclear Boundaries", value=True, key=f"{key_prefix}_nuc_smooth_new")
+
+        # Interior Segmentation Parameters
+        st.markdown("#### Interior Segmentation Parameters")
+        if params.get('internal_method') == "Manual":
+            params['internal_threshold'] = st.slider("Internal Threshold", float(current_image.min()), float(current_image.max()), float((current_image.min() + current_image.max()) / 2), key=f"{key_prefix}_internal_threshold_new")
+        elif params.get('internal_method') == "Density Map":
+            col1_int, col2_int = st.columns(2)
+            with col1_int:
+                params['sigma_hp'] = st.slider("High-pass Sigma", 0.5, 10.0, 2.0, 0.1, key=f"{key_prefix}_internal_sigma_new")
+                params['disk_radius'] = st.slider("Background Disk Radius", 5, 50, 10, 1, key=f"{key_prefix}_internal_disk_new")
+            with col2_int:
+                params['pcutoff_in'] = st.slider("Interior Threshold", 0.01, 0.5, 0.10, 0.01, key=f"{key_prefix}_internal_pcutoff_in_new")
+                params['pcutoff_out'] = st.slider("Background Threshold", 0.01, 0.5, 0.10, 0.01, key=f"{key_prefix}_internal_pcutoff_out_new")
+
+    else: # Simple Segmentation
+        seg_method = st.selectbox(
+            "Segmentation Method",
+            ["Otsu", "Triangle", "Manual", "Density Map"],
+            help="Choose the segmentation method for your image",
+            key=f"{key_prefix}_seg_method"
+        )
+        params['seg_method'] = seg_method
+        if seg_method == "Manual":
+            params['manual_threshold'] = st.slider(
+                "Threshold Value",
+                float(current_image.min()),
+                float(current_image.max()),
+                float((current_image.min() + current_image.max()) / 2),
+                key=f"{key_prefix}_manual_thresh"
+            )
+        elif seg_method == "Density Map":
+            params['sigma_hp'] = st.slider("High-pass Gaussian Sigma", 0.5, 10.0, 2.0, 0.1, key=f"{key_prefix}_dm_sigma")
+            params['disk_radius'] = st.slider("Background Disk Radius", 5, 50, 10, 1, key=f"{key_prefix}_dm_disk")
+            params['pcutoff_in'] = st.slider("Interior Threshold", 0.01, 0.5, 0.10, 0.01, key=f"{key_prefix}_dm_pcin")
+            params['pcutoff_out'] = st.slider("Background Threshold", 0.01, 0.5, 0.10, 0.01, key=f"{key_prefix}_dm_pcout")
+
+    return params
+
 def create_mask_selection_ui(analysis_type: str = ""):
     """Create UI for selecting segmentation method and analyzing all classes from that method."""
     available_masks = get_available_masks()
@@ -398,8 +486,8 @@ def detection_parameter_tuning_section():
     """Interactive detection parameter tuning with real-time threshold visualization"""
     st.subheader("🔍 Particle Detection Parameter Tuning")
 
-    if 'image_data' in st.session_state and st.session_state.image_data:
-        num_frames = len(st.session_state.image_data)
+    if state_manager.has_image_data():
+        num_frames = len(state_manager.get_image_data())
 
         if num_frames > 0:
             # Frame selection for parameter testing
@@ -416,7 +504,7 @@ def detection_parameter_tuning_section():
                 st.session_state.detection_test_frame = selected_frame_index
 
             # Get the test frame
-            test_frame = st.session_state.image_data[selected_frame_index]
+            test_frame = state_manager.get_image_data()[selected_frame_index]
             
             # Detection parameter controls
             st.markdown("### Detection Parameters")
@@ -552,7 +640,7 @@ Higher values reduce noise but may merge nearby particles.""")
 
 def preprocessing_options_ui():
     """UI for image preprocessing options including noise reduction"""
-    images_loaded = 'image_data' in st.session_state and st.session_state.image_data is not None
+    images_loaded = state_manager.has_image_data()
     
     st.sidebar.subheader("🔧 Image Preprocessing")
 
@@ -563,7 +651,7 @@ def preprocessing_options_ui():
     # --- Image Statistics ---
     if st.sidebar.checkbox("Show Image Statistics"):
         with st.sidebar.expander("Image Info"):
-            stats = get_image_statistics(st.session_state.image_data)
+            stats = get_image_statistics(state_manager.get_image_data())
             if stats:
                 st.sidebar.write(f"Frames: {stats['num_frames']}")
                 if stats['frame_shapes']:
@@ -620,13 +708,13 @@ def preprocessing_options_ui():
 
 def apply_preprocessing_pipeline():
     """Apply the selected preprocessing steps to loaded images"""
-    if 'image_data' not in st.session_state or not st.session_state.image_data:
+    if not state_manager.has_image_data():
         return
     
     # Get preprocessing settings
     std_denoise, std_method, std_params, ai_denoise, ai_model, ai_params = preprocessing_options_ui()
     
-    processed_images = st.session_state.image_data.copy()
+    processed_images = state_manager.get_image_data().copy()
     
     # Apply standard noise reduction
     if std_denoise and std_method:
@@ -757,7 +845,7 @@ nav_option = st.sidebar.radio(
     "Navigation",
     [
         "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
-        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
+        "Visualization", "Advanced Analysis", "Project Management", "Batch Processing", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
     ]
 )
 
@@ -787,12 +875,14 @@ with st.sidebar.expander("Sample Data"):
         try:
             sample_file_path = "sample_data/sample_tracks.csv"
             if os.path.exists(sample_file_path):
-                st.session_state.tracks_data = pd.read_csv(sample_file_path)
-                # Format to standard format
-                st.session_state.tracks_data = format_track_data(st.session_state.tracks_data)
+                sample_df = pd.read_csv(sample_file_path)
+                formatted_df = format_track_data(sample_df)
+                # Use the state manager to load the data, which also handles resetting analysis results
+                state_manager.load_tracks(formatted_df, source="sample_data")
                 # Calculate track statistics
-                st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                st.session_state.track_statistics = calculate_track_statistics(formatted_df)
                 st.sidebar.success("Sample data loaded successfully!")
+                st.rerun()  # Rerun to update the UI after loading
             else:
                 st.sidebar.warning("Sample data file not found.")
         except Exception as e:
@@ -800,23 +890,16 @@ with st.sidebar.expander("Sample Data"):
 
 # Display data status in sidebar
 with st.sidebar.expander("Data Status"):
-    if st.session_state.tracks_data is not None:
-        try:
-            if isinstance(st.session_state.tracks_data, pd.DataFrame) and not st.session_state.tracks_data.empty:
-                if 'track_id' in st.session_state.tracks_data.columns:
-                    st.write(f"Tracks loaded: {len(st.session_state.tracks_data['track_id'].unique())} tracks, {len(st.session_state.tracks_data)} points")
-                else:
-                    st.write(f"Data loaded: {len(st.session_state.tracks_data)} rows")
-                    st.write("Available columns: " + ", ".join(st.session_state.tracks_data.columns.tolist()))
-            else:
-                st.write("Track data format not recognized")
-        except Exception as e:
-            st.write(f"Track data present but format issue: {str(e)}")
+    if state_manager.has_tracks():
+        tracks = state_manager.get_tracks()
+        st.write(f"Tracks loaded: {tracks['track_id'].nunique()} tracks, {len(tracks)} points")
+        st.write(f"Source: {state_manager.get_track_filename() or 'Unknown'}")
     else:
         st.write("No track data loaded.")
-        
-    if st.session_state.image_data is not None:
-        st.write(f"Images loaded: {len(st.session_state.image_data)} frames")
+
+    if state_manager.has_image_data():
+        images = state_manager.get_image_data()
+        st.write(f"Images loaded: {len(images)} frames")
     else:
         st.write("No image data loaded.")
 
@@ -1131,7 +1214,7 @@ if st.session_state.active_page == "MD Integration":
         
         # Check if both MD and SPT data are available
         md_available = st.session_state.md_simulation is not None and st.session_state.md_simulation.trajectory is not None
-        spt_available = st.session_state.tracks_data is not None
+        spt_available = state_manager.has_tracks()
         
         if not md_available:
             st.warning("No MD simulation data loaded. Please load a simulation file first.")
@@ -1305,7 +1388,7 @@ if st.session_state.active_page == "MD Integration":
                     
                     # Number of tracks to show
                     max_md_tracks = min(10, st.session_state.md_tracks['track_id'].nunique())
-                    max_spt_tracks = min(10, st.session_state.tracks_data['track_id'].nunique())
+                    max_spt_tracks = min(10, state_manager.get_tracks()['track_id'].nunique())
                     
                     cols = st.columns(2)
                     
@@ -1344,12 +1427,12 @@ if st.session_state.active_page == "MD Integration":
                                         
                                         # Select random SPT tracks
                                         spt_track_ids = np.random.choice(
-                                            st.session_state.tracks_data['track_id'].unique(),
+                                            state_manager.get_tracks()['track_id'].unique(),
                                             spt_tracks_to_show,
                                             replace=False
                                         )
                                         
-                                        spt_subset = st.session_state.tracks_data[st.session_state.tracks_data['track_id'].isin(spt_track_ids)]
+                                        spt_subset = state_manager.get_tracks()[state_manager.get_tracks()['track_id'].isin(spt_track_ids)]
                                         
                                         # Plot SPT tracks
                                         fig_spt = plot_tracks(spt_subset, color_by='track_id')
@@ -1362,7 +1445,7 @@ if st.session_state.active_page == "MD Integration":
                                     md_subset = st.session_state.md_tracks.copy()
                                     md_subset['source'] = 'MD'
                                     
-                                    spt_subset = st.session_state.tracks_data.copy()
+                                    spt_subset = state_manager.get_tracks().copy()
                                     spt_subset['source'] = 'SPT'
                                     
                                     # Select random tracks
@@ -1493,10 +1576,10 @@ elif st.session_state.active_page == "Home":
             elif file_extension in ['.ims', '.xml']:
                 # Imaris file handling
                 try:
-                    st.session_state.tracks_data = load_imaris_file(uploaded_file)
+                    tracks_data = load_imaris_file(uploaded_file)
+                    state_manager.load_tracks(tracks_data, source=uploaded_file.name)
                     st.success(f"Imaris file loaded successfully: {uploaded_file.name}")
-                    # Calculate track statistics
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.session_state.track_statistics = calculate_track_statistics(state_manager.get_tracks())
                     st.session_state.active_page = "Analysis"
                     st.rerun()
                 except Exception as e:
@@ -1506,10 +1589,10 @@ elif st.session_state.active_page == "Home":
                 # Volocity file handling
                 try:
                     from volocity_handler import load_volocity_file
-                    st.session_state.tracks_data = load_volocity_file(uploaded_file)
+                    tracks_data = load_volocity_file(uploaded_file)
+                    state_manager.load_tracks(tracks_data, source=uploaded_file.name)
                     st.success(f"Volocity file loaded successfully: {uploaded_file.name}")
-                    # Calculate track statistics
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.session_state.track_statistics = calculate_track_statistics(state_manager.get_tracks())
                     st.session_state.active_page = "Analysis"
                     st.rerun()
                 except Exception as e:
@@ -1519,19 +1602,19 @@ elif st.session_state.active_page == "Home":
                 # MVD2 file handling
                 try:
                     from mvd2_handler import load_mvd2_file
-                    st.session_state.tracks_data = load_mvd2_file(uploaded_file)
+                    tracks_data = load_mvd2_file(uploaded_file)
+                    state_manager.load_tracks(tracks_data, source=uploaded_file.name)
                     st.success(f"MVD2 file loaded successfully: {uploaded_file.name}")
-                    # Calculate track statistics
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.session_state.track_statistics = calculate_track_statistics(state_manager.get_tracks())
                     st.session_state.active_page = "Analysis"
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error loading MVD2 file: {str(e)}")
                     
             # Display a preview if data is loaded
-            if st.session_state.image_data is not None:
+            if state_manager.has_image_data():
                 # Normalize image for display
-                display_image = st.session_state.image_data[0].copy()
+                display_image = state_manager.get_image_data()[0].copy()
                 if display_image.dtype != np.uint8:
                     if display_image.max() <= 1.0:
                         display_image = (display_image * 255).astype(np.uint8)
@@ -1540,8 +1623,8 @@ elif st.session_state.active_page == "Home":
                                        (display_image.max() - display_image.min()) * 255).astype(np.uint8)
                 st.image(display_image, caption="Image preview", use_container_width=True)
                 
-            if st.session_state.tracks_data is not None:
-                st.dataframe(st.session_state.tracks_data.head())
+            if state_manager.has_tracks():
+                st.dataframe(state_manager.get_tracks().head())
     
     with col2:
         st.subheader("Recent Analysis")
@@ -1578,11 +1661,10 @@ elif st.session_state.active_page == "Home":
             try:
                 sample_file_path = "sample_data/sample_tracks.csv"
                 if os.path.exists(sample_file_path):
-                    st.session_state.tracks_data = pd.read_csv(sample_file_path)
-                    # Format to standard format
-                    st.session_state.tracks_data = format_track_data(st.session_state.tracks_data)
-                    # Calculate track statistics
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    sample_df = pd.read_csv(sample_file_path)
+                    formatted_df = format_track_data(sample_df)
+                    state_manager.load_tracks(formatted_df, source="sample_data")
+                    st.session_state.track_statistics = calculate_track_statistics(state_manager.get_tracks())
                     st.success("Sample data loaded successfully!")
                     st.session_state.active_page = "Analysis"
                     st.rerun()
@@ -1679,17 +1761,50 @@ elif st.session_state.active_page == "Project Management":
                             st.session_state.confirm_delete_condition[cond.id] = False
                             st.rerun()
 
-                uploaded = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_{cond.id}")
-                if uploaded:
-                    for uf in uploaded:
+                st.subheader("Upload Paired Track and Image Files")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    track_files = st.file_uploader("Upload Track Files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_track_up_{cond.id}")
+                with col2:
+                    image_files = st.file_uploader("Upload Image Files (TIF, PNG)", type=["tif", "tiff", "png"], accept_multiple_files=True, key=f"pm_image_up_{cond.id}")
+
+                if track_files and image_files:
+                    st.write("Paired Files:")
+                    # Simple 1-to-1 pairing based on order. User must ensure order is correct.
+                    # A more advanced UI would allow manual pairing.
+                    num_pairs = min(len(track_files), len(image_files))
+                    for i in range(num_pairs):
+                        st.write(f"Pair {i+1}: {track_files[i].name} <-> {image_files[i].name}")
+
+                    if st.button("Add Paired Files to Condition", key=f"add_pairs_{cond.id}"):
+                        for i in range(num_pairs):
+                            track_file = track_files[i]
+                            image_file = image_files[i]
+                            try:
+                                import pandas as _pd
+                                df = _pd.read_csv(track_file)
+                                pmgr.add_file_to_condition(proj, cond.id, track_file.name, df, image_file=image_file)
+                            except Exception as e:
+                                st.warning(f"Failed to add pair {track_file.name}/{image_file.name}: {e}")
+                        pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                        st.success(f"{num_pairs} paired files added.")
+                        st.rerun()
+
+                # Also allow uploading track files without images
+                st.subheader("Upload Track Files Only")
+                uploaded_tracks_only = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_tracks_only_{cond.id}")
+                if uploaded_tracks_only:
+                    for uf in uploaded_tracks_only:
                         try:
                             import pandas as _pd
                             df = _pd.read_csv(uf)
-                            pmgr.add_file_to_condition(proj, cond.id, uf.name, df)
+                            pmgr.add_file_to_condition(proj, cond.id, uf.name, df, image_file=None)
                         except Exception as e:
                             st.warning(f"Failed to add {uf.name}: {e}")
                     pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
-                    st.success("Files added.")
+                    st.success("Track files added.")
+                    st.rerun()
 
                 # Show files and remove option
                 if cond.files:
@@ -1700,6 +1815,7 @@ elif st.session_state.active_page == "Project Management":
                         if cols[1].button("Preview", key=f"pv_{cond.id}_{f.get('id')}"):
                             try:
                                 import pandas as _pd, io as _io, os as _os
+                                # Preview Track Data
                                 if f.get('data'):
                                     df = _pd.read_csv(_io.BytesIO(f['data']))
                                 elif f.get('data_path') and _os.path.exists(f['data_path']):
@@ -1709,7 +1825,13 @@ elif st.session_state.active_page == "Project Management":
                                 if df is not None:
                                     st.dataframe(df.head())
                                 else:
-                                    st.info("No data available for preview.")
+                                    st.info("No track data available for preview.")
+
+                                # Preview Image Data
+                                if f.get('image_path') and _os.path.exists(f.get('image_path')):
+                                    st.image(f.get('image_path'), caption="Associated Image", width=150)
+                                else:
+                                    st.info("No associated image.")
                             except Exception as e:
                                 st.warning(f"Preview failed: {e}")
                         if cols[2].button("Remove", key=f"rm_{cond.id}_{f.get('id')}"):
@@ -1717,24 +1839,203 @@ elif st.session_state.active_page == "Project Management":
                             pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
                             st.experimental_rerun()
 
-                # Pool and preview
-                if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
-                    pooled = cond.pool_tracks()
-                    if pooled is not None and not pooled.empty:
-                        st.session_state.tracks_data = pooled
-                        try:
-                            st.session_state.track_statistics = calculate_track_statistics(pooled)
-                        except Exception:
-                            pass
-                        st.success(f"Pooled {len(pooled)} rows into current dataset.")
-                        st.dataframe(pooled.head())
-                    else:
-                        st.info("No data available to pool for this condition.")
+                # Action buttons for the condition
+                action_cols = st.columns(2)
+                with action_cols[0]:
+                    # Pool and preview
+                    if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
+                        pooled = cond.pool_tracks()
+                        if pooled is not None and not pooled.empty:
+                            state_manager.load_tracks(pooled, source=f"pooled_{cond.name}")
+                            try:
+                                st.session_state.track_statistics = calculate_track_statistics(pooled)
+                            except Exception:
+                                pass
+                            st.success(f"Pooled {len(pooled)} rows into current dataset.")
+                            st.dataframe(pooled.head())
+                        else:
+                            st.info("No data available to pool for this condition.")
+
+                with action_cols[1]:
+                    def assign_class_from_mask(df_group, mask):
+                        """Assigns a class to each point in a dataframe group based on a mask."""
+                        assignments = []
+                        for _, row in df_group.iterrows():
+                            # Assuming coordinates are in pixels
+                            x_coord = int(row['x'])
+                            y_coord = int(row['y'])
+
+                            if 0 <= y_coord < mask.shape[0] and 0 <= x_coord < mask.shape[1]:
+                                assignments.append(mask[y_coord, x_coord])
+                            else:
+                                assignments.append(0) # Default to background
+                        return pd.Series(assignments, index=df_group.index)
+
+                    # Analyze condition data
+                    if st.button("Analyze This Condition", key=f"analyze_{cond.id}", type="primary"):
+                        pooled = cond.pool_tracks()
+                        if pooled is not None and not pooled.empty:
+
+                            if 'file_id' in pooled.columns and any(f.get('mask_path') for f in cond.files):
+                                with st.spinner("Assigning classes based on segmentation masks..."):
+                                    all_classes = []
+                                    file_id_to_mask_path = {f['id']: f.get('mask_path') for f in cond.files}
+
+                                    # Use a list to store class series for later concatenation
+                                    class_series_list = []
+
+                                    # Group by file_id and process each group
+                                    for file_id, group in pooled.groupby('file_id'):
+                                        mask_path = file_id_to_mask_path.get(file_id)
+                                        if mask_path and os.path.exists(mask_path):
+                                            from PIL import Image
+                                            mask = np.array(Image.open(mask_path))
+                                            classes_for_group = assign_class_from_mask(group, mask)
+                                            class_series_list.append(classes_for_group)
+                                        else:
+                                            # If no mask, assign a default class of -1
+                                            class_series_list.append(pd.Series(-1, index=group.index, name='class'))
+
+                                    if class_series_list:
+                                        # Concatenate all series at once
+                                        pooled['class'] = pd.concat(class_series_list)
+                                        st.success("Class assignment from masks complete!")
+                                    else:
+                                        st.warning("No masks found to assign classes.")
+
+                            # Load data into state manager
+                            state_manager.load_tracks(pooled, source=f"pooled_{cond.name}")
+                            st.session_state.active_page = "Analysis"
+                            st.success(f"Loaded {len(pooled)} rows from condition '{cond.name}' for analysis.")
+                            st.rerun()
+                        else:
+                            st.warning("No data in this condition to analyze.")
 
         # Save project explicitly
         if st.button("Save Project"):
             pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
             st.success("Project saved.")
+
+# Batch Processing Page
+elif st.session_state.active_page == "Batch Processing":
+    st.title("Batch Segmentation and Analysis")
+
+    pmgr = pm.ProjectManager()
+    projects = pmgr.list_projects()
+
+    if not projects:
+        st.warning("No projects found. Please create a project in the 'Project Management' tab first.")
+    else:
+        project_names = [p['name'] for p in projects]
+        selected_project_name = st.selectbox("Select a Project", project_names)
+
+        if selected_project_name:
+            project_id = next((p['id'] for p in projects if p['name'] == selected_project_name), None)
+            if project_id:
+                project = pmgr.get_project(project_id)
+                if project and project.conditions:
+                    condition_names = [c.name for c in project.conditions]
+                    selected_condition_name = st.selectbox("Select a Condition", condition_names)
+
+                    if selected_condition_name:
+                        condition = next((c for c in project.conditions if c.name == selected_condition_name), None)
+                        if condition:
+                            st.subheader(f"Files in Condition: {condition.name}")
+
+                            # Display file pairs
+                            file_pairs = []
+                            for f in condition.files:
+                                if f.get('image_path') and os.path.exists(f.get('image_path')):
+                                    file_pairs.append({
+                                        "Track File": f['name'],
+                                        "Image File": os.path.basename(f['image_path']),
+                                        "Image Path": f['image_path'],
+                                        "Track Data Path": f.get('data_path'),
+                                        "Mask Path": f.get('mask_path')
+                                    })
+
+                            if file_pairs:
+                                st.dataframe(pd.DataFrame(file_pairs)[["Track File", "Image File", "Mask Path"]])
+
+                                # Segmentation parameters
+                                st.subheader("Segmentation Parameters")
+                                # Dummy image for UI controls since we don't have a single image to preview
+                                dummy_image = np.zeros((100, 100), dtype=np.uint8)
+                                segmentation_params = segmentation_controls_ui(key_prefix="batch_proc", current_image=dummy_image)
+
+                                # Run button
+                                if st.button("Run Batch Segmentation", key=f"batch_seg_{condition.id}"):
+                                    with st.spinner(f"Running batch segmentation for {len(file_pairs)} files..."):
+                                        progress_bar = st.progress(0)
+                                        for i, file_info in enumerate(file_pairs):
+                                            try:
+                                                image_path = file_info['Image Path']
+                                                track_file_name = file_info['Track File']
+
+                                                file_dict = next((f for f in condition.files if f['name'] == track_file_name and f.get('image_path') == image_path), None)
+
+                                                if not file_dict:
+                                                    st.warning(f"Could not find file object for {track_file_name}")
+                                                    continue
+
+                                                image_data = load_image_file(image_path)
+
+                                                current_image = image_data[0] if isinstance(image_data, list) else image_data
+                                                if current_image.ndim == 3 and current_image.shape[2] > 1:
+                                                    current_image = current_image[:,:,0] # Default to first channel for batch
+
+                                                seg_approach = segmentation_params.get('seg_approach')
+                                                result_mask = None
+
+                                                if seg_approach == "Nuclear Segmentation (Two-Step)":
+                                                    from segmentation import enhanced_threshold_image, density_map_threshold
+                                                    nuclear_mask, _ = enhanced_threshold_image(current_image, method=segmentation_params['nuclear_method'], manual_threshold=segmentation_params.get('nuclear_threshold'), min_size=segmentation_params['min_nuclear_size'], closing_disk_size=segmentation_params['nuclear_closing'], smooth_boundary=segmentation_params['nuclear_smooth'])
+                                                    if segmentation_params['internal_method'] == 'Density Map':
+                                                        internal_mask_results = density_map_threshold(current_image, roi_mask=nuclear_mask, **{k: v for k, v in segmentation_params.items() if k in ['sigma_hp', 'disk_radius', 'pcutoff_in', 'pcutoff_out']})
+                                                        result_mask = internal_mask_results['classes']
+                                                    else:
+                                                        internal_mask, _ = enhanced_threshold_image(current_image, method=segmentation_params['internal_method'], manual_threshold=segmentation_params.get('internal_threshold'))
+                                                        result_mask = nuclear_mask.astype(int) + internal_mask.astype(int)
+                                                else:
+                                                    from segmentation import enhanced_threshold_image, density_map_threshold
+                                                    seg_method = segmentation_params.get('seg_method')
+                                                    if seg_method == "Density Map":
+                                                        dm_results = density_map_threshold(current_image, **{k: v for k, v in segmentation_params.items() if k in ['sigma_hp', 'disk_radius', 'pcutoff_in', 'pcutoff_out']})
+                                                        result_mask = dm_results['classes']
+                                                    else:
+                                                        result_mask, _ = enhanced_threshold_image(current_image, method=seg_method, manual_threshold=segmentation_params.get('manual_threshold'))
+
+                                                if result_mask is not None:
+                                                    from PIL import Image
+                                                    project_data_dir = os.path.join(pmgr.projects_dir, project.id)
+                                                    mask_dir = os.path.join(project_data_dir, "masks")
+                                                    os.makedirs(mask_dir, exist_ok=True)
+                                                    mask_filename = f"{file_dict['id']}_mask.png"
+                                                    mask_path = os.path.join(mask_dir, mask_filename)
+
+                                                    if result_mask.dtype != np.uint8:
+                                                        if result_mask.max() > 0:
+                                                            result_mask = (result_mask / result_mask.max() * 255).astype(np.uint8)
+                                                        else:
+                                                            result_mask = result_mask.astype(np.uint8)
+                                                    Image.fromarray(result_mask).save(mask_path)
+                                                    file_dict['mask_path'] = mask_path
+
+                                            except Exception as e:
+                                                st.warning(f"Failed to process {file_info['Image File']}: {e}")
+
+                                            progress_bar.progress((i + 1) / len(file_pairs))
+
+                                        project_file_path = next((p['path'] for p in projects if p['id'] == project_id), None)
+                                        if project_file_path:
+                                            pmgr.save_project(project, project_file_path)
+
+                                        st.success("Batch segmentation complete!")
+                                        st.rerun()
+                            else:
+                                st.info("No image-track pairs found in this condition.")
+                else:
+                    st.warning("No conditions found in this project.")
 
 # Image Processing Page
 elif st.session_state.active_page == "Image Processing":
@@ -1742,539 +2043,13 @@ elif st.session_state.active_page == "Image Processing":
     
     # Image Processing tabs
     img_tabs = st.tabs([
-        "Segmentation",
         "Nuclear Density Analysis", 
-        "Advanced Segmentation",  # Added advanced segmentation tab
+        "Advanced Segmentation",
         "Export Results"
     ])
     
-    # Tab 1: Segmentation
+    # Tab 1: Nuclear Density Analysis
     with img_tabs[0]:
-        st.subheader("Image Segmentation")
-        
-        # Check for mask images from Data Loading tab
-        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
-            st.warning("Upload mask images in the Data Loading tab first to perform segmentation.")
-            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
-        else:
-            # Handle multichannel images
-            mask_image_data = st.session_state.mask_images
-            
-            # Debug information
-            st.write(f"Debug: mask_image_data type: {type(mask_image_data)}")
-            if isinstance(mask_image_data, np.ndarray):
-                st.write(f"Debug: shape: {mask_image_data.shape}")
-            elif isinstance(mask_image_data, list):
-                st.write(f"Debug: list length: {len(mask_image_data)}")
-                if len(mask_image_data) > 0:
-                    st.write(f"Debug: first item shape: {mask_image_data[0].shape}")
-            
-            # Check different multichannel scenarios
-            multichannel_detected = False
-            
-            # Case 1: Direct numpy array with channels
-            if isinstance(mask_image_data, np.ndarray) and len(mask_image_data.shape) == 3 and mask_image_data.shape[2] > 1:
-                multichannel_detected = True
-                num_channels = mask_image_data.shape[2]
-                multichannel_data = mask_image_data
-                
-            # Case 2: List with single multichannel array
-            elif isinstance(mask_image_data, list) and len(mask_image_data) == 1 and len(mask_image_data[0].shape) == 3 and mask_image_data[0].shape[2] > 1:
-                multichannel_detected = True
-                num_channels = mask_image_data[0].shape[2]
-                multichannel_data = mask_image_data[0]
-                
-            if multichannel_detected:
-                # Multichannel image detected
-                st.info(f"Multichannel image detected with {num_channels} channels")
-                
-                # Channel selection for segmentation (support multi-channel)
-                st.subheader("Channel Selection for Segmentation")
-
-                # Channel labeling helpers
-                seg_label_key = "mask_channel_labels"
-                if seg_label_key not in st.session_state:
-                    st.session_state[seg_label_key] = {}
-                # Build display labels with saved or suggested names
-                def _seg_label(idx: int) -> str:
-                    saved = st.session_state[seg_label_key].get(idx)
-                    return f"Channel {idx + 1}" if not saved else f"{saved} (C{idx + 1})"
-
-                with st.expander("Name channels (optional)", expanded=False):
-                    common = channel_manager.get_common_names()
-                    cols = st.columns(min(4, num_channels))
-                    for i in range(num_channels):
-                        with cols[i % len(cols)]:
-                            current = st.session_state[seg_label_key].get(i, "")
-                            new_name = st.text_input(
-                                f"Channel {i+1} name",
-                                value=current,
-                                key=f"seg_label_input_{i}",
-                                placeholder="e.g., DAPI, GFP"
-                            )
-                            if new_name and new_name != current:
-                                is_valid, validated = channel_manager.validate_name(new_name)
-                                if is_valid:
-                                    st.session_state[seg_label_key][i] = validated
-                                    channel_manager.add_channel_name(validated)
-                                else:
-                                    st.warning(f"Invalid name for C{i+1}: {validated}")
-                default_sel = st.session_state.get("segmentation_channels", [0])
-                segmentation_channels = st.multiselect(
-                    "Choose channel(s) for segmentation:",
-                    options=list(range(num_channels)),
-                    default=[ci for ci in default_sel if 0 <= ci < num_channels] or [0],
-                    format_func=lambda x: _seg_label(x),
-                    key="segmentation_channels_select",
-                    help="Select one or more channels to build the segmentation image"
-                )
-
-                fusion_mode = st.selectbox(
-                    "Fusion mode",
-                    ["average", "max", "min", "sum", "weighted"],
-                    index=["average", "max", "min", "sum", "weighted"].index(
-                        st.session_state.get("segmentation_fusion_mode", "average")
-                    ),
-                    help="How to combine multiple channels into a single image for segmentation"
-                )
-
-                weights = None
-                if fusion_mode == "weighted" and len(segmentation_channels) > 1:
-                    weights_text = st.text_input(
-                        "Weights (comma-separated)",
-                        value=st.session_state.get("segmentation_weights", ",".join(["1"] * len(segmentation_channels))),
-                        help="Provide one weight per selected channel, e.g., 1,2,1"
-                    )
-                    try:
-                        weights = [float(x.strip()) for x in weights_text.split(",") if x.strip() != ""]
-                    except Exception:
-                        weights = None
-
-                # Display channel previews in tabs
-                channel_tabs = st.tabs([f"Channel {i+1}" for i in range(num_channels)])
-                for i in range(num_channels):
-                    with channel_tabs[i]:
-                        channel_image = multichannel_data[:, :, i]
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.image(normalize_image_for_display(channel_image), caption=f"Channel {i + 1}", use_container_width=True)
-                        with col2:
-                            st.write("**Statistics:**")
-                            st.metric("Min", f"{channel_image.min():.1f}")
-                            st.metric("Max", f"{channel_image.max():.1f}")
-                            st.metric("Mean", f"{channel_image.mean():.1f}")
-                            st.metric("Std", f"{channel_image.std():.1f}")
-                            if i in segmentation_channels:
-                                st.success("Selected")
-
-                # Use selected channels combined
-                try:
-                    current_image = _combine_channels(multichannel_data, segmentation_channels or [0], fusion_mode, weights)
-                except Exception as _e:
-                    st.warning(f"Combining channels failed ({_e}); falling back to channel 1")
-                    current_image = multichannel_data[:, :, 0]
-
-                # Persist choices
-                st.session_state.segmentation_channels = segmentation_channels or [0]
-                st.session_state.segmentation_fusion_mode = fusion_mode
-                if weights is not None:
-                    st.session_state.segmentation_weights = ",".join(map(str, weights))
-                
-                sel_label = ", ".join([f"C{c+1}" for c in (segmentation_channels or [0])])
-                st.subheader(f"Using {sel_label} with '{fusion_mode}' fusion for Segmentation")
-                
-            elif isinstance(mask_image_data, list) and len(mask_image_data) > 0:
-                # List of single-channel images
-                current_image = mask_image_data[0]
-                st.info("Using first image from the loaded sequence")
-            else:
-                # Single channel image
-                current_image = mask_image_data
-                st.info("Single channel image loaded for segmentation")
-            
-            # Display selected image for segmentation (ensure single channel)
-            if len(current_image.shape) == 3:
-                # If still multichannel, take first channel
-                current_image = current_image[:, :, 0] if current_image.shape[2] > 1 else current_image.squeeze()
-            
-            display_image = current_image.astype(np.float32)
-            if display_image.max() > display_image.min():
-                display_image = (display_image - display_image.min()) / (display_image.max() - display_image.min())
-            st.image(normalize_image_for_display(display_image), caption="Image Selected for Segmentation", use_container_width=True)
-            
-            # Segmentation approach selection
-            seg_approach = st.selectbox(
-                "Segmentation Approach",
-                ["Simple Segmentation", "Nuclear Segmentation (Two-Step)"],
-                help="Choose segmentation approach: Simple (binary) or Nuclear (two-step process)"
-            )
-            
-            if seg_approach == "Nuclear Segmentation (Two-Step)":
-                st.markdown("### Two-Step Nuclear Segmentation")
-                st.info("Choose methods and preprocessing that will be applied to the original image for both nuclear boundary detection and interior segmentation")
-                
-                # Method Selection
-                st.markdown("#### Method Selection")
-                col1_method, col2_method = st.columns(2)
-                
-                with col1_method:
-                    st.markdown("**Nuclear Boundary Method**")
-                    nuclear_method = st.selectbox(
-                        "Nuclear Boundary Detection",
-                        ["Otsu", "Triangle", "Manual"],
-                        help="Method for detecting nuclear boundaries",
-                        key="nuclear_method_select"
-                    )
-                    
-                with col2_method:
-                    st.markdown("**Interior Segmentation Method**")
-                    internal_method = st.selectbox(
-                        "Interior Segmentation",
-                        ["Otsu", "Triangle", "Manual", "Density Map"],
-                        help="Method for segmenting within nuclear boundaries",
-                        key="internal_method_select"
-                    )
-                
-                # Image Preprocessing (applied to original image)
-                st.markdown("#### Image Preprocessing")
-                st.info("Preprocessing will be applied to the original image before both nuclear and interior segmentation")
-                
-                col1_preprocess, col2_preprocess = st.columns(2)
-                with col1_preprocess:
-                    apply_preprocessing = st.checkbox("Apply Image Preprocessing", value=False, key="apply_preprocessing_nuclear")
-                    if apply_preprocessing:
-                        preprocessing_method = st.selectbox("Preprocessing Method", ["Median Filter", "Gaussian Filter"], key="preprocessing_method_nuclear")
-                
-                with col2_preprocess:
-                    if apply_preprocessing:
-                        if preprocessing_method == "Median Filter":
-                            preprocessing_size = st.slider("Median Filter Size", 3, 15, 5, 2, key="preprocessing_size_nuclear")
-                        else:  # Gaussian
-                            preprocessing_sigma = st.slider("Gaussian Sigma", 0.5, 3.0, 1.0, 0.1, key="preprocessing_sigma_nuclear")
-                
-                # Nuclear Boundary Parameters
-                st.markdown("#### Nuclear Boundary Parameters")
-                col1_nuclear, col2_nuclear = st.columns(2)
-                with col1_nuclear:
-                    if nuclear_method == "Manual":
-                        nuclear_threshold = st.slider(
-                            "Nuclear Threshold", 
-                            float(current_image.min()), 
-                            float(current_image.max()), 
-                            float((current_image.min() + current_image.max()) / 2),
-                            key="nuclear_threshold_new"
-                        )
-                    min_nuclear_size = st.slider("Minimum Nuclear Size (pixels)", 100, 10000, 1000, 100, key="min_nuc_size_new")
-                
-                with col2_nuclear:
-                    nuclear_closing = st.slider("Nuclear Closing Size", 1, 20, 5, 1, key="nuc_closing_new")
-                    nuclear_smooth = st.checkbox("Smooth Nuclear Boundaries", value=True, key="nuc_smooth_new")
-                
-                # Interior Segmentation Parameters
-                st.markdown("#### Interior Segmentation Parameters")
-                
-                if internal_method == "Manual":
-                    internal_threshold = st.slider(
-                        "Internal Threshold", 
-                        float(current_image.min()), 
-                        float(current_image.max()), 
-                        float((current_image.min() + current_image.max()) / 2),
-                        key="internal_threshold_new"
-                    )
-                elif internal_method == "Density Map":
-                    col1_int, col2_int = st.columns(2)
-                    with col1_int:
-                        sigma_hp = st.slider("High-pass Sigma", 0.5, 10.0, 2.0, 0.1, key="internal_sigma_new")
-                        disk_radius = st.slider("Background Disk Radius", 5, 50, 10, 1, key="internal_disk_new")
-                    with col2_int:
-                        pcutoff_in = st.slider("Interior Threshold", 0.01, 0.5, 0.10, 0.01, key="internal_pcutoff_in_new")
-                        pcutoff_out = st.slider("Background Threshold", 0.01, 0.5, 0.10, 0.01, key="internal_pcutoff_out_new")
-                
-                # Initialize default values for parameters not set
-                if internal_method != "Density Map":
-                    sigma_hp = 2.0
-                    disk_radius = 10
-                    pcutoff_in = 0.10
-                    pcutoff_out = 0.10
-                
-                if internal_method != "Manual":
-                    internal_threshold = (current_image.min() + current_image.max()) / 2
-                
-                if nuclear_method != "Manual":
-                    nuclear_threshold = (current_image.min() + current_image.max()) * 0.6
-                
-                # Initialize preprocessing defaults
-                if 'apply_preprocessing' not in locals():
-                    apply_preprocessing = False
-                    preprocessing_method = "Median Filter"
-                    preprocessing_size = 5
-                    preprocessing_sigma = 1.0
-                
-                if st.button("Apply Nuclear Segmentation", key="nuclear_seg"):
-                    with st.spinner("Performing two-step nuclear segmentation..."):
-                        try:
-                            from segmentation import apply_nuclear_segmentation_with_preprocessing
-                            
-                            # Preprocessing parameters (applied to original image)
-                            preprocessing_params = {
-                                'apply_preprocessing': apply_preprocessing
-                            }
-                            if apply_preprocessing:
-                                preprocessing_params.update({
-                                    'method': preprocessing_method,
-                                    'size': preprocessing_size if preprocessing_method == "Median Filter" else None,
-                                    'sigma': preprocessing_sigma if preprocessing_method == "Gaussian Filter" else None
-                                })
-                            
-                            # Parameters for nuclear boundary detection
-                            nuclear_params = {
-                                'method': nuclear_method,
-                                'min_size': min_nuclear_size,
-                                'closing_size': nuclear_closing,
-                                'smooth_boundaries': nuclear_smooth
-                            }
-                            
-                            if nuclear_method == "Manual":
-                                nuclear_params['threshold'] = nuclear_threshold
-                            
-                            # Parameters for internal segmentation
-                            internal_params = {'method': internal_method}
-                            if internal_method == "Manual":
-                                internal_params['threshold'] = internal_threshold
-                            elif internal_method == "Density Map":
-                                internal_params.update({
-                                    'sigma_hp': sigma_hp,
-                                    'disk_radius': disk_radius,
-                                    'pcutoff_in': pcutoff_in,
-                                    'pcutoff_out': pcutoff_out
-                                })
-                            
-                            # Apply nuclear segmentation with preprocessing
-                            nuclear_mask, internal_classes, combined_result = apply_nuclear_segmentation_with_preprocessing(
-                                current_image, preprocessing_params, nuclear_params, internal_params
-                            )
-                            
-                            # Display results
-                            st.success("Nuclear segmentation completed!")
-                            
-                            col1_res, col2_res, col3_res = st.columns(3)
-                            
-                            with col1_res:
-                                st.subheader("Nuclear Mask")
-                                st.image(nuclear_mask.astype(np.uint8) * 255, 
-                                        caption="Nuclear boundary detection", 
-                                        use_container_width=True, clamp=True)
-                            
-                            with col2_res:
-                                st.subheader("Internal Classes")
-                                # Color-code internal classes
-                                display_internal = np.zeros_like(internal_classes, dtype=np.uint8)
-                                display_internal[internal_classes == 1] = 127
-                                display_internal[internal_classes == 2] = 255
-                                st.image(display_internal, 
-                                        caption="Internal segmentation", 
-                                        use_container_width=True, clamp=True)
-                            
-                            with col3_res:
-                                st.subheader("Combined Result")
-                                # Color-code combined result: 0=background, 1=nuclear class 1, 2=nuclear class 2
-                                display_combined = np.zeros_like(combined_result, dtype=np.uint8)
-                                display_combined[combined_result == 1] = 127
-                                display_combined[combined_result == 2] = 255
-                                st.image(display_combined, 
-                                        caption="Final segmentation (0=background, 1=class1, 2=class2)", 
-                                        use_container_width=True, clamp=True)
-                            
-                            # Statistics
-                            st.subheader("Segmentation Statistics")
-                            col1_stats, col2_stats, col3_stats = st.columns(3)
-                            
-                            with col1_stats:
-                                background_pixels = np.sum(combined_result == 0)
-                                st.metric("Background pixels", f"{background_pixels:,}")
-                            
-                            with col2_stats:
-                                class1_pixels = np.sum(combined_result == 1)
-                                st.metric("Nuclear class 1 pixels", f"{class1_pixels:,}")
-                            
-                            with col3_stats:
-                                class2_pixels = np.sum(combined_result == 2)
-                                st.metric("Nuclear class 2 pixels", f"{class2_pixels:,}")
-                            
-                            # Create complete three-class segmentation (background, class 1, class 2)
-                            three_class_result = np.zeros_like(combined_result)
-                            three_class_result[combined_result == 1] = 1  # Nuclear class 1
-                            three_class_result[combined_result == 2] = 2  # Nuclear class 2
-                            # Background remains 0
-                            
-                            # Compose trace info for segmentation channels/fusion
-                            seg_chs = st.session_state.get('segmentation_channels', [0])
-                            seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
-                            seg_lbls = st.session_state.get('mask_channel_labels', {})
-                            ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
-                            trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
-
-                            # Store generated masks for analysis with trace
-                            store_mask("Nuclear_Boundaries", nuclear_mask, "Nuclear Boundary", 
-                                     f"Nuclear boundaries detected using {nuclear_method}{trace}")
-                            store_mask("Nuclear_Internal_Classes", internal_classes, "Nuclear Internal", 
-                                     f"Internal nuclear segmentation using {internal_method}{trace}")
-                            store_mask("Nuclear_Combined", combined_result, "Nuclear Combined", 
-                                     f"Combined nuclear segmentation: {nuclear_method} + {internal_method}{trace}")
-                            store_mask("Nuclear_Three_Class", three_class_result, "Nuclear Three-Class", 
-                                     f"Complete three-class nuclear segmentation: 0=Background, 1={nuclear_method}_Class1, 2={nuclear_method}_Class2{trace}")
-                            
-                            # Store results in session state
-                            st.session_state.nuclear_segmentation_result = combined_result
-                            st.session_state.nuclear_mask = nuclear_mask
-                            st.session_state.internal_classes = internal_classes
-                            
-                            # Show generated masks info
-                            available_masks = get_available_masks()
-                            if len(available_masks) >= 3:
-                                st.info(f"Generated masks stored: {', '.join(available_masks[-3:])}")
-                            
-                        except Exception as e:
-                            st.error(f"Nuclear segmentation failed: {str(e)}")
-                            st.info("This feature requires the segmentation module to be properly configured")
-            
-            else:
-                # Simple segmentation method selection
-                seg_method = st.selectbox(
-                    "Segmentation Method",
-                    ["Otsu", "Triangle", "Manual", "Density Map"],
-                    help="Choose the segmentation method for your image"
-                )
-                
-                if seg_method == "Density Map":
-                    st.markdown("### Density Map Segmentation Parameters")
-                    col1, col2 = st.columns(2)
-                
-                    with col1:
-                        sigma_hp = st.slider("High-pass Gaussian Sigma", 0.5, 10.0, 2.0, 0.1, 
-                                           help="Sigma for initial smoothing and background subtraction")
-                        disk_radius = st.slider("Background Disk Radius", 5, 50, 10, 1,
-                                              help="Size of morphological disk for background estimation")
-                    
-                    with col2:
-                        pcutoff_in = st.slider("Interior Threshold", 0.01, 0.5, 0.10, 0.01,
-                                             help="Threshold for detecting interior regions")
-                        pcutoff_out = st.slider("Background Threshold", 0.01, 0.5, 0.10, 0.01,
-                                              help="Threshold for detecting background regions")
-                    
-                    if st.button("Apply Density Map Segmentation", key="density_seg"):
-                        with st.spinner("Applying density map segmentation..."):
-                            try:
-                                density_results = density_map_threshold(
-                                    current_image,
-                                    gaussian_sigma_hp=sigma_hp,
-                                    disk_radius=disk_radius,
-                                    pcutoff_in=pcutoff_in,
-                                    pcutoff_out=pcutoff_out
-                                )
-                                
-                                mask = density_results['mask_in']
-                                mask_out = density_results.get('mask_out', np.zeros_like(mask))
-                                
-                                # Create three-class density map (0=background, 1=interior, 2=exterior/boundary)
-                                density_three_class = np.zeros_like(mask, dtype=np.uint8)
-                                density_three_class[mask] = 1  # Interior regions
-                                density_three_class[mask_out] = 2  # Exterior/boundary regions
-                                # Background remains 0
-                                
-                                st.session_state.segmentation_mask = mask
-                                
-                                # Trace details
-                                seg_chs = st.session_state.get('segmentation_channels', [0])
-                                seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
-                                seg_lbls = st.session_state.get('mask_channel_labels', {})
-                                ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
-                                trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
-
-                                # Store generated masks for analysis
-                                store_mask("Simple_Density_Map", mask.astype(np.uint8), "Density Map", 
-                                         f"Density map segmentation (sigma_hp={sigma_hp}, disk_radius={disk_radius}){trace}")
-                                store_mask("Density_Three_Class", density_three_class, "Density Three-Class", 
-                                         f"Complete density map classification: 0=Background, 1=Interior, 2=Exterior (sigma_hp={sigma_hp}){trace}")
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write("**Original Image**")
-                                    st.image(display_image, use_container_width=True)
-                                
-                                with col2:
-                                    st.write("**Density Map Segmentation**")
-                                    mask_display = (mask * 255).astype(np.uint8)
-                                    st.image(mask_display, use_container_width=True)
-                                
-                                # Additional density map info
-                                st.write("**High-pass Filtered Image**")
-                                st.image(density_results['hp'], caption="Normalized High-pass", use_container_width=True)
-                                
-                                # Analysis
-                                analysis = analyze_density_segmentation(mask)
-                                st.write(f"Objects detected: {analysis['num_objects']}")
-                                st.write(f"Total area: {analysis['total_area']} pixels")
-                                
-                                st.success("Density map mask stored for analysis!")
-                                available_masks = get_available_masks()
-                                if available_masks:
-                                    st.info(f"Mask '{available_masks[-1]}' ready for region-based analysis")
-                                
-                            except Exception as e:
-                                st.error(f"Error in density map segmentation: {str(e)}")
-                
-                elif seg_method == "Manual":
-                    threshold_value = st.slider(
-                        "Threshold Value", 
-                        float(current_image.min()), 
-                        float(current_image.max()), 
-                        float((current_image.min() + current_image.max()) / 2)
-                    )
-                    mask, info = enhanced_threshold_image(current_image, method='manual', manual_threshold=threshold_value)
-                elif seg_method == "Otsu":
-                    mask, info = enhanced_threshold_image(current_image, method='otsu')
-                elif seg_method == "Triangle":
-                    mask, info = enhanced_threshold_image(current_image, method='triangle')
-                
-                # Display segmentation result for simple methods
-                if seg_method in ["Manual", "Otsu", "Triangle"] and 'mask' in locals():
-                    st.session_state.segmentation_mask = mask
-                    
-                    # Trace details
-                    seg_chs = st.session_state.get('segmentation_channels', [0])
-                    seg_mode = st.session_state.get('segmentation_fusion_mode', 'average')
-                    seg_lbls = st.session_state.get('mask_channel_labels', {})
-                    ch_label_list = [seg_lbls.get(ci, f"C{ci+1}") for ci in seg_chs]
-                    trace = f" | channels: {', '.join(ch_label_list)} | fusion: {seg_mode}"
-
-                    # Store generated mask for analysis
-                    store_mask(f"Simple_{seg_method}", mask.astype(np.uint8), f"Simple {seg_method}", 
-                             f"{seg_method} threshold segmentation{trace}")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write("**Original Image**")
-                        st.image(display_image, use_container_width=True)
-                    
-                    with col2:
-                        st.write("**Segmentation Result**")
-                        mask_display = (mask * 255).astype(np.uint8)
-                        st.image(mask_display, use_container_width=True)
-                    
-                    # Analysis
-                    analysis = analyze_density_segmentation(mask)
-                    st.write(f"Objects detected: {analysis['num_objects']}")
-                    st.write(f"Total area: {analysis['total_area']} pixels")
-                    
-                    st.success(f"{seg_method} mask stored for analysis!")
-                    available_masks = get_available_masks()
-                    if available_masks:
-                        mask_names = list(available_masks.keys())
-                        st.info(f"Mask '{mask_names[-1]}' ready for region-based analysis")
-    
-    # Tab 2: Nuclear Density Analysis
-    with img_tabs[1]:
         st.subheader("Nuclear Density Mapping & Classification")
         
         if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
@@ -2283,34 +2058,6 @@ elif st.session_state.active_page == "Image Processing":
         else:
             # Handle multichannel images
             mask_image_data = st.session_state.mask_images
-
-    # Tab 3: Advanced Segmentation
-    with img_tabs[2]:
-        st.subheader("Advanced Segmentation Methods")
-        
-        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
-            st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
-            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
-        else:
-            if ADVANCED_SEGMENTATION_AVAILABLE:
-                # Call the integration function from advanced_segmentation module
-                integrate_advanced_segmentation_with_app()
-            else:
-                st.error("Advanced segmentation module not available.")
-                st.info("Please install required packages to use advanced segmentation features.")
-                
-                with st.expander("Installation Instructions"):
-                    st.markdown("""
-                    ### Required packages:
-                    
-                    ```
-                    pip install torch torchvision segment-anything cellpose opencv-python
-                    ```
-                    """)
-    
-    # Tab 4: Export Results (moved from position 3 to 4)
-    with img_tabs[3]:
-        # ... existing code for export tab ...
             
             # Check different multichannel scenarios
             multichannel_detected = False
@@ -3077,13 +2824,13 @@ Lower values provide faster comparison but may miss fine differences between met
                             st.error(f"Error in density classification: {str(e)}")
             
             # Integration with particle tracking
-            if 'density_classes' in st.session_state and st.session_state.density_classes is not None and st.session_state.tracks_data is not None:
+            if 'density_classes' in st.session_state and st.session_state.density_classes is not None and state_manager.has_tracks():
                 st.markdown("### Step 3: Integrate with Particle Tracking")
                 
                 if st.button("Assign Density Classes to Tracks", key="assign_density"):
                     with st.spinner("Assigning density classes to particle tracks..."):
                         try:
-                            tracks_df = st.session_state.tracks_data.copy()
+                            tracks_df = state_manager.get_tracks().copy()
                             classes = st.session_state.density_classes
                             
                             # Assign density class to each track position
@@ -3113,7 +2860,7 @@ Lower values provide faster comparison but may miss fine differences between met
                                 density_assignments.append(density_class)
                             
                             tracks_df['nuclear_density_class'] = density_assignments
-                            st.session_state.tracks_data = tracks_df
+                            state_manager.load_tracks(tracks_df)
                             
                             # Display summary
                             class_summary = tracks_df['nuclear_density_class'].value_counts().sort_index()
@@ -3131,6 +2878,30 @@ Lower values provide faster comparison but may miss fine differences between met
                             
                         except Exception as e:
                             st.error(f"Error assigning density classes: {str(e)}")
+
+    # Tab 2: Advanced Segmentation
+    with img_tabs[1]:
+        st.subheader("Advanced Segmentation Methods")
+
+        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
+            st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
+            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
+        else:
+            if ADVANCED_SEGMENTATION_AVAILABLE:
+                # Call the integration function from advanced_segmentation module
+                integrate_advanced_segmentation_with_app()
+            else:
+                st.error("Advanced segmentation module not available.")
+                st.info("Please install required packages to use advanced segmentation features.")
+
+                with st.expander("Installation Instructions"):
+                    st.markdown("""
+                    ### Required packages:
+
+                    ```
+                    pip install torch torchvision segment-anything cellpose opencv-python
+                    ```
+                    """)
     
     # Tab 3: Export Results
     with img_tabs[2]:
@@ -3324,12 +3095,13 @@ elif st.session_state.active_page == "Data Loading":
         
         if track_file is not None:
             try:
-                st.session_state.tracks_data = load_tracks_file(track_file)
+                tracks_data = load_tracks_file(track_file)
+                state_manager.set_tracks(tracks_data, filename=track_file.name)
                 st.success(f"Track data loaded successfully: {track_file.name}")
                 
                 # Calculate track statistics
                 with st.spinner("Calculating track statistics..."):
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.session_state.track_statistics = calculate_track_statistics(tracks_data)
                 
                 # Display preview
                 st.subheader("Data Preview")
@@ -3438,14 +3210,14 @@ elif st.session_state.active_page == "Data Loading":
         
         if tracking_image_file is not None:
             try:
-                st.session_state.image_data = load_image_file(tracking_image_file)
+                state_manager.load_image_data(load_image_file(tracking_image_file), {'filename': tracking_image_file.name})
                 st.success(f"Image loaded successfully: {tracking_image_file.name}")
                 
                 # Display image preview
-                if isinstance(st.session_state.image_data, list) and len(st.session_state.image_data) > 0:
-                    preview_image = st.session_state.image_data[0]
+                if isinstance(state_manager.get_image_data(), list) and len(state_manager.get_image_data()) > 0:
+                    preview_image = state_manager.get_image_data()[0]
                 else:
-                    preview_image = st.session_state.image_data
+                    preview_image = state_manager.get_image_data()
                 
                 if preview_image is not None:
                     st.subheader("Image Preview")
@@ -3555,13 +3327,13 @@ elif st.session_state.active_page == "Data Loading":
                 if selected_sample == "Sample Track Data (CSV)":
                     # Generate sample track data
                     from test_data_generator import generate_sample_tracks
-                    st.session_state.tracks_data = generate_sample_tracks()
+                    state_manager.load_tracks(generate_sample_tracks(), source="sample_data")
                     st.success("Sample track data loaded successfully!")
                     
                 elif selected_sample == "Sample Microscopy Images":
                     # Generate sample image data
                     from test_data_generator import generate_sample_image
-                    st.session_state.image_data = generate_sample_image()
+                    state_manager.load_image_data(generate_sample_image(), {'filename': 'sample_image'})
                     st.success("Sample microscopy image loaded successfully!")
                     
                 elif selected_sample == "Sample MD Simulation Data":
@@ -3577,7 +3349,7 @@ elif st.session_state.active_page == "Data Loading":
 elif st.session_state.active_page == "Tracking":
     st.title("Particle Detection and Tracking")
     
-    if st.session_state.image_data is None:
+    if not state_manager.has_image_data():
         st.warning("No image data loaded. Please upload images first.")
         st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
     else:
@@ -3600,7 +3372,7 @@ elif st.session_state.active_page == "Tracking":
             
             # If multichannel images, allow selecting channels for tracking
             try:
-                _first_frame = st.session_state.image_data[0]
+                _first_frame = state_manager.get_image_data()[0]
                 _is_mc = isinstance(_first_frame, np.ndarray) and _first_frame.ndim == 3 and _first_frame.shape[2] > 1
                 _num_ch = int(_first_frame.shape[2]) if _is_mc else 1
             except Exception:
@@ -3704,7 +3476,7 @@ elif st.session_state.active_page == "Tracking":
                 st.write("**Preview detection settings on a test frame before running full detection**")
                 
                 # Frame selection for testing
-                num_frames = len(st.session_state.image_data)
+                num_frames = len(state_manager.get_image_data())
                 if num_frames > 1:
                     test_frame_idx = st.slider(
                         "Test Frame",
@@ -3717,7 +3489,7 @@ elif st.session_state.active_page == "Tracking":
                     test_frame_idx = 0
                 
                 # Get test frame for preview (apply tracking channel fusion if multichannel)
-                raw_test = st.session_state.image_data[test_frame_idx]
+                raw_test = state_manager.get_image_data()[test_frame_idx]
                 if isinstance(raw_test, np.ndarray) and raw_test.ndim == 3 and raw_test.shape[2] > 1:
                     # combine selected channels
                     t_channels = st.session_state.get("tracking_channels", [0])
@@ -4144,11 +3916,11 @@ Dilation expands detected particles to restore size after erosion."""
                             )
             
             # Display image and interactive detector
-            if len(st.session_state.image_data) > 1:
+            if len(state_manager.get_image_data()) > 1:
                 frame_idx = st.slider(
                     "Frame to preview",
                     min_value=0,
-                    max_value=len(st.session_state.image_data) - 1,
+                    max_value=len(state_manager.get_image_data()) - 1,
                     value=0
                 )
             else:
@@ -4170,7 +3942,7 @@ Dilation expands detected particles to restore size after erosion."""
                         from tracking import detect_particles
                         
                         # Get the current frame for detection (apply tracking fusion)
-                        _raw = st.session_state.image_data[frame_idx]
+                        _raw = state_manager.get_image_data()[frame_idx]
                         if isinstance(_raw, np.ndarray) and _raw.ndim == 3 and _raw.shape[2] > 1:
                             t_channels = st.session_state.get("tracking_channels", [0])
                             t_mode = st.session_state.get("tracking_fusion_mode", "average")
@@ -4393,7 +4165,7 @@ Dilation expands detected particles to restore size after erosion."""
             
             # Run detection on all frames
             if all_frames_button:
-                total_frames = len(st.session_state.image_data)
+                total_frames = len(state_manager.get_image_data())
                 
                 with st.spinner(f"Running detection on all {total_frames} frames..."):
                     # Initialize progress tracking
@@ -4413,7 +4185,7 @@ Dilation expands detected particles to restore size after erosion."""
                             progress_bar.progress(progress)
                             status_text.text(f"Processing frame {current_frame_idx + 1}/{total_frames}...")
                             
-                            _rawf = st.session_state.image_data[current_frame_idx]
+                            _rawf = state_manager.get_image_data()[current_frame_idx]
                             if isinstance(_rawf, np.ndarray) and _rawf.ndim == 3 and _rawf.shape[2] > 1:
                                 t_channels = st.session_state.get("tracking_channels", [0])
                                 t_mode = st.session_state.get("tracking_fusion_mode", "average")
@@ -4648,7 +4420,7 @@ Dilation expands detected particles to restore size after erosion."""
                         status_text.empty()
             
             # Display current frame
-            display_image = st.session_state.image_data[frame_idx].copy()
+            display_image = state_manager.get_image_data()[frame_idx].copy()
             
             # Normalize image data to 0-255 range for display
             if display_image.dtype != np.uint8:
@@ -4859,8 +4631,8 @@ Dilation expands detected particles to restore size after erosion."""
 
                             # Filter by minimum track length and store directly
                             if not tracks_data.empty:
-                                # Store the filtered DataFrame directly
-                                st.session_state.tracks_data = tracks_data
+                                # Use the state manager to ensure data is persisted correctly
+                                state_manager.load_tracks(tracks_data, source="tracking_module")
                                 
                                 # Data is already in DataFrame format, just store results
                                 st.session_state.track_results = {
@@ -4871,6 +4643,7 @@ Dilation expands detected particles to restore size after erosion."""
                                 
                                 st.success(f"✅ Successfully linked {tracks_data['track_id'].nunique()} tracks with {len(tracks_data)} total points!")
                                 st.balloons()
+                                st.rerun() # Rerun to update other parts of the UI
                                 
                             else:
                                 st.warning("No tracks found with the current parameters. Try adjusting the linking settings.")
@@ -4886,7 +4659,8 @@ Dilation expands detected particles to restore size after erosion."""
         with tab3:
             st.header("Track Results")
             
-            if st.session_state.tracks_data is not None:
+            if state_manager.has_tracks():
+                tracks = state_manager.get_tracks()
                 # Display track statistics
                 st.subheader("Track Statistics")
                 if st.session_state.track_statistics is not None:
@@ -4894,14 +4668,14 @@ Dilation expands detected particles to restore size after erosion."""
                 else:
                     # Calculate statistics if not already done
                     with st.spinner("Calculating track statistics..."):
-                        st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                        st.session_state.track_statistics = calculate_track_statistics(tracks)
                     st.dataframe(st.session_state.track_statistics)
                 
                 # Preview tracks
                 st.subheader("Track Visualization")
-                max_tracks_to_display = min(20, st.session_state.tracks_data['track_id'].nunique())
+                max_tracks_to_display = min(20, tracks['track_id'].nunique())
                 fig = plot_tracks(
-                    st.session_state.tracks_data.query(f"track_id < {max_tracks_to_display}"), 
+                    tracks.query(f"track_id < {max_tracks_to_display}"),
                     color_by='track_id'
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -4916,10 +4690,11 @@ Dilation expands detected particles to restore size after erosion."""
 elif st.session_state.active_page == "Analysis":
     st.title("Track Analysis")
     
-    if st.session_state.tracks_data is None:
+    if not state_manager.has_tracks():
         st.warning("No track data loaded. Please upload track data first.")
         st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
     else:
+        tracks = state_manager.get_tracks()
         # Create tabs for different analysis modules
         tabs = st.tabs([
             "Overview", 
@@ -4940,7 +4715,7 @@ elif st.session_state.active_page == "Analysis":
             st.subheader("Track Statistics")
             if not hasattr(st.session_state, 'track_statistics') or st.session_state.track_statistics is None:
                 with st.spinner("Calculating track statistics..."):
-                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.session_state.track_statistics = calculate_track_statistics(tracks)
             
             st.dataframe(st.session_state.track_statistics)
             
@@ -4958,17 +4733,17 @@ elif st.session_state.active_page == "Analysis":
                     color_map = st.session_state.track_statistics.set_index('track_id')[color_by].to_dict()
                     
                     # Add a temporary column for coloring
-                    temp_df = st.session_state.tracks_data.copy()
+                    temp_df = tracks.copy()
                     temp_df[color_by] = temp_df['track_id'].map(color_map)
                     
                     fig = plot_tracks(temp_df, color_by=color_by)
                 else:
-                    fig = plot_tracks(st.session_state.tracks_data, color_by=color_by)
+                    fig = plot_tracks(tracks, color_by=color_by)
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
             elif viz_type == "3D Tracks (time as Z)":
-                fig = plot_tracks_3d(st.session_state.tracks_data)
+                fig = plot_tracks_3d(tracks)
                 st.plotly_chart(fig, use_container_width=True)
                 
             else:  # Statistics
@@ -4984,132 +4759,29 @@ elif st.session_state.active_page == "Analysis":
         # Diffusion Analysis tab
         with tabs[1]:
             st.header("Diffusion Analysis")
-            
-            # Primary analysis choice: whole image vs segmentation-based
-            analysis_type = st.radio(
-                "Analysis Type",
-                ["Whole Image Analysis", "Segmentation-Based Analysis"],
-                help="Choose whether to analyze all tracks together or segment them by regions"
-            )
+
+            # Check if data is pre-classified from project management
+            if 'class' in tracks.columns:
+                st.info("Pre-classified data detected. Performing analysis on existing classes.")
+                analysis_type = "Pre-classified"
+                tracks_with_classes = tracks
+                segmentation_method = "Pre-classified"
+            else:
+                analysis_type = st.radio(
+                    "Analysis Type",
+                    ["Whole Image Analysis", "Segmentation-Based Analysis"],
+                    help="Choose whether to analyze all tracks together or segment them by regions"
+                )
             
             selected_mask = None
             selected_classes = None
-            segmentation_method = None
-            tracks_with_classes = None
-            analysis_option = None
             
             if analysis_type == "Segmentation-Based Analysis":
-                # Get available masks
-                available_masks = get_available_masks()
-                
-                if not available_masks:
-                    st.error("No segmentation masks available. Please create masks in the Image Processing tab first.")
+                selected_mask, selected_classes, segmentation_method = create_mask_selection_ui("diffusion")
+                if selected_mask:
+                    tracks_with_classes = apply_mask_to_tracks(tracks, selected_mask[0], list(selected_classes.values())[0])
                 else:
-                    # Categorize masks by type using metadata
-                    simple_masks = []
-                    two_step_masks = []
-                    density_masks = []
-                    
-                    for mask_name in available_masks.keys():
-                        if mask_name in st.session_state.mask_metadata:
-                            mask_meta = st.session_state.mask_metadata[mask_name]
-                            mask_type = mask_meta.get('type', 'unknown').lower()
-                            
-                            if 'density' in mask_type or 'nuclear_density' in mask_type:
-                                density_masks.append(mask_name)
-                            elif mask_meta.get('n_classes', 2) >= 3:
-                                two_step_masks.append(mask_name)
-                            else:
-                                simple_masks.append(mask_name)
-                    
-                    # Build segmentation options
-                    segmentation_options = []
-                    if simple_masks:
-                        segmentation_options.append("Simple Segmentation (Binary)")
-                    if two_step_masks:
-                        segmentation_options.append("Two-Step Segmentation (3 Classes)")
-                    if density_masks:
-                        segmentation_options.append("Nuclear Density Mapping")
-                    
-                    if segmentation_options:
-                        segmentation_method = st.selectbox(
-                            "Choose Segmentation Method",
-                            segmentation_options,
-                            help="Select the type of segmentation to use for analysis"
-                        )
-                        
-                        # Select specific mask and assign tracks to classes
-                        if segmentation_method == "Simple Segmentation (Binary)":
-                            if simple_masks:
-                                selected_mask = simple_masks[0] if len(simple_masks) == 1 else st.selectbox("Select Mask", simple_masks)
-                                st.info(f"Using mask: **{selected_mask}**")
-                                
-                                # Assign tracks to classes dynamically
-                                tracks_with_classes = apply_mask_to_tracks(st.session_state.tracks_data, selected_mask, [0, 1])
-                                if 'class' in tracks_with_classes.columns:
-                                    class_summary = tracks_with_classes['class'].value_counts().sort_index()
-                                    st.write("**Track Distribution:**")
-                                    for class_id, count in class_summary.items():
-                                        class_name = ["Background", "Nucleus"][int(class_id)]
-                                        st.write(f"- {class_name}: {count} track points")
-                                    
-                        elif segmentation_method == "Two-Step Segmentation (3 Classes)":
-                            if two_step_masks:
-                                selected_mask = two_step_masks[0] if len(two_step_masks) == 1 else st.selectbox("Select Mask", two_step_masks)
-                                st.info(f"Using mask: **{selected_mask}**")
-                                
-                                # Analysis options for Two-Step Segmentation
-                                analysis_option = st.selectbox(
-                                    "Two-Step Analysis Method",
-                                    [
-                                        "Analyze all three classes separately",
-                                        "Analyze classes separately, then combine Class 1 and 2"
-                                    ]
-                                )
-                                
-                                # Assign tracks to classes dynamically
-                                tracks_with_classes = apply_mask_to_tracks(st.session_state.tracks_data, selected_mask, [0, 1, 2])
-                                if 'class' in tracks_with_classes.columns:
-                                    class_summary = tracks_with_classes['class'].value_counts().sort_index()
-                                    st.write("**Track Distribution:**")
-                                    for class_id, count in class_summary.items():
-                                        class_name = ["Background", "Class 1", "Class 2"][int(class_id)]
-                                        st.write(f"- {class_name}: {count} track points")
-                                
-                        elif segmentation_method == "Nuclear Density Mapping":
-                            if density_masks:
-                                selected_mask = density_masks[0] if len(density_masks) == 1 else st.selectbox("Select Mask", density_masks)
-                                st.info(f"Using mask: **{selected_mask}**")
-                                
-                                # Get mask metadata to determine number of classes
-                                mask_metadata = st.session_state.mask_metadata[selected_mask]
-                                n_classes = mask_metadata['n_classes']
-                                class_list = list(range(n_classes))
-                                
-                                # Assign tracks to classes dynamically
-                                tracks_with_classes = apply_mask_to_tracks(st.session_state.tracks_data, selected_mask, class_list)
-                                if 'class' in tracks_with_classes.columns:
-                                    class_summary = tracks_with_classes['class'].value_counts().sort_index()
-                                    st.write("**Track Distribution:**")
-                                    for class_id, count in class_summary.items():
-                                        if int(class_id) == 0:
-                                            class_name = "Background"
-                                        elif int(class_id) == 1:
-                                            class_name = "Low Density"
-                                        elif int(class_id) == 2:
-                                            class_name = "High Density"
-                                        else:
-                                            class_name = f"Class {int(class_id)}"
-                                        st.write(f"- {class_name}: {count} track points")
-                    else:
-                        st.error("No compatible segmentation masks found.")
-            
-            if selected_mask:
-                mask_name = selected_mask[0] if isinstance(selected_mask, list) else selected_mask
-                st.info(f"Analysis will be performed on mask: {mask_name}")
-                if selected_classes:
-                    mask_classes = selected_classes.get(mask_name, []) if isinstance(selected_classes, dict) else selected_classes
-                    st.info(f"Using mask classes: {', '.join(map(str, mask_classes))}")
+                    tracks_with_classes = None
             
             # Parameters for diffusion analysis
             st.subheader("Analysis Parameters")
@@ -5175,7 +4847,7 @@ elif st.session_state.active_page == "Analysis":
                             # Standard whole-image diffusion analysis
                             st.subheader("Whole Image Diffusion Analysis")
                             diffusion_results = analyze_diffusion(
-                                st.session_state.tracks_data,
+                                tracks,
                                 max_lag=max_lag,
                                 pixel_size=pixel_size,
                                 frame_interval=frame_interval,
@@ -5428,7 +5100,17 @@ elif st.session_state.active_page == "Analysis":
         # Motion Analysis tab
         with tabs[2]:
             st.header("Motion Analysis")
-            
+
+            tracks_with_classes_motion = None
+            if 'class' in tracks.columns:
+                st.info("Pre-classified data detected. Performing analysis on existing classes.")
+                tracks_with_classes_motion = tracks
+                selected_mask_motion = True # Enable class-based logic path
+                segmentation_method_motion = "Pre-classified"
+            else:
+                # UI for mask selection
+                selected_mask_motion, selected_classes_motion, segmentation_method_motion = create_mask_selection_ui("motion")
+
             # Parameters for motion analysis
             st.subheader("Analysis Parameters")
             
@@ -5496,37 +5178,42 @@ elif st.session_state.active_page == "Analysis":
                         analyze_velocity_autocorr = "Velocity Autocorrelation" in analysis_options
                         analyze_persistence = "Directional Persistence" in analysis_options
                         
-                        motion_results = analyze_motion(
-                            st.session_state.tracks_data,
-                            window_size=window_size,
-                            analyze_velocity_autocorr=analyze_velocity_autocorr,
-                            analyze_persistence=analyze_persistence,
-                            motion_classification=motion_classification,
-                            min_track_length=min_track_length,
-                            pixel_size=pixel_size,
-                            frame_interval=frame_interval
-                        )
+                        if selected_mask_motion:
+                            # Segmentation-based analysis (either from UI or pre-classified)
+                            if tracks_with_classes_motion is None: # Not pre-classified
+                                tracks_with_classes_motion = apply_mask_to_tracks(tracks, selected_mask_motion[0], list(selected_classes_motion.values())[0])
+
+                            motion_results = {}
+                            if tracks_with_classes_motion is not None and 'class' in tracks_with_classes_motion.columns:
+                                for class_id in tracks_with_classes_motion['class'].unique():
+                                    class_tracks = tracks_with_classes_motion[tracks_with_classes_motion['class'] == class_id]
+                                    if len(class_tracks) > 0:
+                                        result = analyze_motion(
+                                            class_tracks,
+                                            window_size=window_size,
+                                            analyze_velocity_autocorr=analyze_velocity_autocorr,
+                                            analyze_persistence=analyze_persistence,
+                                            motion_classification=motion_classification,
+                                            min_track_length=min_track_length,
+                                            pixel_size=pixel_size,
+                                            frame_interval=frame_interval
+                                        )
+                                        motion_results[f"Class {int(class_id)}"] = result
+                        else:
+                            # Whole image analysis
+                            motion_results = analyze_motion(
+                                tracks,
+                                window_size=window_size,
+                                analyze_velocity_autocorr=analyze_velocity_autocorr,
+                                analyze_persistence=analyze_persistence,
+                                motion_classification=motion_classification,
+                                min_track_length=min_track_length,
+                                pixel_size=pixel_size,
+                                frame_interval=frame_interval
+                            )
                         
                         # Store results in session state
                         st.session_state.analysis_results["motion"] = motion_results
-                        
-                        # Create a record of this analysis
-                        analysis_record = create_analysis_record(
-                            name="Motion Analysis",
-                            analysis_type="motion",
-                            parameters={
-                                "window_size": window_size,
-                                "pixel_size": pixel_size,
-                                "frame_interval": frame_interval,
-                                "min_track_length": min_track_length,
-                                "motion_classification": motion_classification,
-                                "analyze_velocity_autocorr": analyze_velocity_autocorr,
-                                "analyze_persistence": analyze_persistence
-                            }
-                        )
-                        
-                        # Add to recent analyses
-                        st.session_state.recent_analyses.append(analysis_record)
                         
                         st.success("Motion analysis completed successfully!")
                     except Exception as e:
@@ -5536,39 +5223,55 @@ elif st.session_state.active_page == "Analysis":
             if "motion" in st.session_state.analysis_results:
                 results = st.session_state.analysis_results["motion"]
                 
-                # Track results
-                st.subheader("Motion Analysis Results")
-                if 'track_results' in results:
-                    st.dataframe(results['track_results'])
-                    
-                    # Generate motion analysis visualizations
-                    try:
-                        motion_vis = plot_motion_analysis(results)
-                        # plot_motion_analysis may return a Matplotlib Figure or a dict of Plotly figures
-                        from matplotlib.figure import Figure as MplFigure
-                        if isinstance(motion_vis, MplFigure):
-                            st.subheader("Motion Analysis Visualization")
-                            st.pyplot(motion_vis, use_container_width=True)
-                        elif isinstance(motion_vis, dict):
-                            if motion_vis and not motion_vis.get("empty"):
-                                st.subheader("Motion Analysis Visualizations")
+                # This condition handles both UI-based segmentation and pre-classified data
+                if isinstance(results, dict) and any(k.startswith("Class") for k in results.keys()):
+                    # Class-based results
+                    for class_name, class_results in results.items():
+                        st.subheader(f"Motion Analysis Results - {class_name}")
+                        if 'track_results' in class_results:
+                            st.dataframe(class_results['track_results'])
+                            try:
+                                motion_vis = plot_motion_analysis(class_results)
+                                if isinstance(motion_vis, dict):
+                                    for plot_name, fig in motion_vis.items():
+                                        if fig:
+                                            st.subheader(plot_name.replace("_", " ").title())
+                                            st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.warning(f"Could not generate motion visualizations for {class_name}: {str(e)}")
+                        else:
+                            st.warning(f"No results available for {class_name}.")
+                else:
+                    # Whole image results
+                    st.subheader("Motion Analysis Results")
+                    if 'track_results' in results:
+                        st.dataframe(results['track_results'])
+                        try:
+                            motion_vis = plot_motion_analysis(results)
+                            if isinstance(motion_vis, dict):
                                 for plot_name, fig in motion_vis.items():
-                                    if fig and plot_name != "empty":
+                                    if fig:
                                         st.subheader(plot_name.replace("_", " ").title())
                                         st.plotly_chart(fig, use_container_width=True)
-                            else:
-                                st.info("No visualization data available for motion analysis.")
-                        else:
-                            st.info("No visualization data available for motion analysis.")
-                    except Exception as e:
-                        st.warning(f"Could not generate motion visualizations: {str(e)}")
-                else:
-                    st.warning("No results available to display.")
+                        except Exception as e:
+                            st.warning(f"Could not generate motion visualizations: {str(e)}")
+                    else:
+                        st.warning("No results available to display.")
         
         # Clustering Analysis tab
         with tabs[3]:
             st.header("Clustering Analysis")
-            
+
+            tracks_with_classes_clustering = None
+            if 'class' in tracks.columns:
+                st.info("Pre-classified data detected. Performing analysis on existing classes.")
+                tracks_with_classes_clustering = tracks
+                selected_mask_clustering = True # Enable class-based logic path
+                segmentation_method_clustering = "Pre-classified"
+            else:
+                # UI for mask selection
+                selected_mask_clustering, selected_classes_clustering, segmentation_method_clustering = create_mask_selection_ui("clustering")
+
             # Parameters for clustering analysis
             st.subheader("Analysis Parameters")
             
@@ -5626,35 +5329,40 @@ elif st.session_state.active_page == "Analysis":
                         track_clusters = "Track Clusters" in analysis_options
                         analyze_dynamics = "Analyze Dynamics" in analysis_options
                         
-                        clustering_results = analyze_clustering(
-                            st.session_state.tracks_data,
-                            method=clustering_method,
-                            epsilon=epsilon,
-                            min_samples=min_samples,
-                            track_clusters=track_clusters,
-                            analyze_dynamics=analyze_dynamics,
-                            pixel_size=pixel_size
-                        )
+                        if selected_mask_clustering:
+                            # Segmentation-based analysis (either from UI or pre-classified)
+                            if tracks_with_classes_clustering is None: # Not pre-classified
+                                tracks_with_classes_clustering = apply_mask_to_tracks(tracks, selected_mask_clustering[0], list(selected_classes_clustering.values())[0])
+
+                            clustering_results = {}
+                            if tracks_with_classes_clustering is not None and 'class' in tracks_with_classes_clustering.columns:
+                                for class_id in tracks_with_classes_clustering['class'].unique():
+                                    class_tracks = tracks_with_classes_clustering[tracks_with_classes_clustering['class'] == class_id]
+                                    if len(class_tracks) > 0:
+                                        result = analyze_clustering(
+                                            class_tracks,
+                                            method=clustering_method,
+                                            epsilon=epsilon,
+                                            min_samples=min_samples,
+                                            track_clusters=track_clusters,
+                                            analyze_dynamics=analyze_dynamics,
+                                            pixel_size=pixel_size
+                                        )
+                                        clustering_results[f"Class {int(class_id)}"] = result
+                        else:
+                            # Whole image analysis
+                            clustering_results = analyze_clustering(
+                                tracks,
+                                method=clustering_method,
+                                epsilon=epsilon,
+                                min_samples=min_samples,
+                                track_clusters=track_clusters,
+                                analyze_dynamics=analyze_dynamics,
+                                pixel_size=pixel_size
+                            )
                         
                         # Store results in session state
                         st.session_state.analysis_results["clustering"] = clustering_results
-                        
-                        # Create a record of this analysis
-                        analysis_record = create_analysis_record(
-                            name="Clustering Analysis",
-                            analysis_type="clustering",
-                            parameters={
-                                "method": clustering_method,
-                                "epsilon": epsilon,
-                                "min_samples": min_samples,
-                                "track_clusters": track_clusters,
-                                "analyze_dynamics": analyze_dynamics,
-                                "pixel_size": pixel_size
-                            }
-                        )
-                        
-                        # Add to recent analyses
-                        st.session_state.recent_analyses.append(analysis_record)
                         
                         st.success("Clustering analysis completed successfully!")
                     except Exception as e:
@@ -5664,60 +5372,27 @@ elif st.session_state.active_page == "Analysis":
             if "clustering" in st.session_state.analysis_results:
                 results = st.session_state.analysis_results["clustering"]
                 
-                # Cluster statistics
-                st.subheader("Cluster Statistics")
-                if 'frame_results' in results and results['frame_results']:
-                    # Create a dataframe from the cluster stats in the first frame with clusters
-                    for frame_result in results['frame_results']:
-                        if isinstance(frame_result, dict) and 'cluster_stats' in frame_result and not frame_result['cluster_stats'].empty:
-                            st.dataframe(frame_result['cluster_stats'])
-                            break
-                    else:
-                        # If no frame has cluster stats
-                        st.warning("No cluster statistics available to display.")
-                    
-                    # Show ensemble statistics
-                    if 'ensemble_results' in results:
-                        st.subheader("Ensemble Statistics")
-                        for key, value in results['ensemble_results'].items():
-                            st.text(f"{key}: {value}")
-                            
-                    # Display clustering visualizations
-                    if 'spatial_clusters' in results:
-                        # Define a simple plot_spatial_clustering function if not already defined
-                        def plot_spatial_clustering(results):
-                            import plotly.express as px
-                            if 'cluster_tracks' in results and not results['cluster_tracks'].empty:
-                                df = results['cluster_tracks']
-                                fig = px.scatter(
-                                    df, x='x', y='y', color='cluster_id',
-                                    title="Spatial Clustering of Tracks",
-                                    labels={'x': 'X Position (µm)', 'y': 'Y Position (µm)', 'cluster_id': 'Cluster'}
-                                )
-                                fig.update_yaxes(autorange="reversed")
-                                return fig
-                            else:
-                                return px.scatter(title="No clustering data available")
-                        spatial_fig = plot_spatial_clustering(results) if 'clustering_results' in results else st.warning('No clustering results available')
-                        st.plotly_chart(spatial_fig, use_container_width=True)
-                    
-                    if 'cluster_summary' in results:
-                        st.subheader("Cluster Summary")
+                # This condition handles both UI-based segmentation and pre-classified data
+                if isinstance(results, dict) and any(k.startswith("Class") for k in results.keys()):
+                    # Class-based results
+                    for class_name, class_results in results.items():
+                        st.subheader(f"Clustering Analysis Results - {class_name}")
+                        if 'cluster_summary' in class_results and not class_results['cluster_summary'].empty:
+                            st.dataframe(class_results['cluster_summary'])
+                        else:
+                            st.warning(f"No clusters found for {class_name}.")
+                else:
+                    # Whole image results
+                    st.subheader("Clustering Analysis Results")
+                    if 'cluster_summary' in results and not results['cluster_summary'].empty:
                         st.dataframe(results['cluster_summary'])
-                else:
-                    st.warning("No cluster statistics available to display.")
-                    
-                # Points with cluster assignments
-                st.subheader("Cluster Assignments")
-                if 'cluster_tracks' in results and not results['cluster_tracks'].empty:
-                    st.dataframe(results['cluster_tracks'].head(20))
-                else:
-                    st.warning("No cluster assignments available to display.")
+                    else:
+                        st.warning("No clusters found.")
 
         # Dwell Time Analysis tab
         with tabs[4]:
             st.header("Dwell Time Analysis")
-            
+
             # Parameters for dwell time analysis
             st.subheader("Analysis Parameters")
             
@@ -5744,367 +5419,107 @@ elif st.session_state.active_page == "Analysis":
             with col2:
                 # Use current unit settings as default values
                 units = get_current_units()
-                
-                # Auto-detect if data is already in micrometers
-                data_in_micrometers = False
-                if st.session_state.tracks_data is not None:
-                    try:
-                        if isinstance(st.session_state.tracks_data, pd.DataFrame) and 'x' in st.session_state.tracks_data.columns and 'y' in st.session_state.tracks_data.columns:
-                            # Check if data appears to be in micrometers (typical range 0-100 µm)
-                            x_range = st.session_state.tracks_data['x'].max() - st.session_state.tracks_data['x'].min()
-                            y_range = st.session_state.tracks_data['y'].max() - st.session_state.tracks_data['y'].min()
-                            if x_range < 1000 and y_range < 1000:  # Likely already in micrometers
-                                data_in_micrometers = True
-                    except (KeyError, TypeError, AttributeError):
-                        pass  # Skip micrometers detection if data format is invalid
-                
-                if data_in_micrometers:
-                    st.info("📏 Data appears to already be in micrometers. Setting pixel size to 1.0.")
-                    pixel_size = 1.0
-                else:
-                    pixel_size = st.number_input(
-                        "Pixel Size (µm)",
-                        min_value=0.01,
-                        max_value=10.0,
-                        value=units['pixel_size'],
-                        step=0.01,
-                        key="dwell_pixel_size",
-                        help="Pixel size in micrometers. Set to 1.0 if data is already in µm."
-                    )
-                
-                frame_interval = st.number_input(
-                    "Frame Interval (s)",
-                    min_value=0.001,
-                    max_value=60.0,
-                    value=units['frame_interval'],
-                    step=0.001,
-                    key="dwell_frame_interval",
-                    help="Time between frames in seconds"
-                )
-                
-                use_regions = st.checkbox(
-                    "Define Regions of Interest",
-                    value=False,
-                    help="Define specific regions for dwell time analysis"
-                )
-            
-            # Region definition (if enabled)
+                pixel_size = units['pixel_size']
+                frame_interval = units['frame_interval']
+
+            st.subheader("Region Definition for Dwell Time Analysis")
+            available_masks = get_available_masks()
             regions = None
-            if use_regions:
-                st.subheader("Regions of Interest")
-                
-                num_regions = st.slider(
-                    "Number of Regions",
-                    min_value=1,
-                    max_value=10,
-                    value=1
-                )
-                
-                regions = []
-                for i in range(num_regions):
-                    with st.expander(f"Region {i+1}"):
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            x = st.number_input(f"X center (Region {i+1})", value=0.0)
-                        with col2:
-                            y = st.number_input(f"Y center (Region {i+1})", value=0.0)
-                        with col3:
-                            radius = st.number_input(f"Radius (Region {i+1})", value=1.0, min_value=0.1)
-                        
-                        regions.append({'x': x, 'y': y, 'radius': radius})
-            
+
+            if not available_masks:
+                st.info("No masks available to define regions. Generate masks in the Image Processing tab first.")
+            else:
+                mask_name = st.selectbox("Select Mask to Define Dwell Regions", list(available_masks.keys()), key="dwell_time_mask_select")
+                if mask_name:
+                    mask_metadata = st.session_state.mask_metadata[mask_name]
+                    st.write(f"Using mask '{mask_name}' with {mask_metadata['n_classes']} classes as regions.")
+
+                    from logic import convert_mask_to_regions
+                    all_classes = mask_metadata.get('classes', [])
+                    regions = convert_mask_to_regions(mask_name, all_classes)
+
             # Run analysis on button click
             if st.button("Run Dwell Time Analysis"):
-                with st.spinner("Running dwell time analysis..."):
-                    try:
-                        dwell_results = analyze_dwell_time(
-                            st.session_state.tracks_data,
-                            regions=regions,
-                            threshold_distance=threshold_distance,
-                            min_dwell_frames=min_dwell_frames,
-                            pixel_size=pixel_size,
-                            frame_interval=frame_interval
-                        )
-                        
-                        # Store results in session state
-                        st.session_state.analysis_results["dwell_time"] = dwell_results
-                        
-                        # Create a record of this analysis
-                        analysis_record = create_analysis_record(
-                            name="Dwell Time Analysis",
-                            analysis_type="dwell_time",
-                            parameters={
-                                "threshold_distance": threshold_distance,
-                                "min_dwell_frames": min_dwell_frames,
-                                "pixel_size": pixel_size,
-                                "frame_interval": frame_interval,
-                                "use_regions": use_regions,
-                                "num_regions": len(regions) if regions else 0
-                            }
-                        )
-                        
-                        # Add to recent analyses
-                        st.session_state.recent_analyses.append(analysis_record)
-                        
-                        st.success("Dwell time analysis completed successfully!")
-                    except Exception as e:
-                        st.error(f"Error running dwell time analysis: {str(e)}")
+                if regions is None:
+                    st.warning("Please select a mask to define regions for dwell time analysis.")
+                else:
+                    with st.spinner("Running dwell time analysis..."):
+                        try:
+                            dwell_results = analyze_dwell_time(
+                                tracks,
+                                regions=regions,
+                                threshold_distance=threshold_distance,
+                                min_dwell_frames=min_dwell_frames,
+                                pixel_size=pixel_size,
+                                frame_interval=frame_interval
+                            )
+
+                            st.session_state.analysis_results["dwell_time"] = dwell_results
+                            st.success("Dwell time analysis completed successfully!")
+                        except Exception as e:
+                            st.error(f"Error running dwell time analysis: {str(e)}")
             
             # Display results if available
             if "dwell_time" in st.session_state.analysis_results:
                 results = st.session_state.analysis_results["dwell_time"]
-                
-                # Dwell events
-                st.subheader("Dwell Events")
-                if 'dwell_events' in results:
+                st.subheader("Dwell Time Results")
+                if 'dwell_events' in results and not results['dwell_events'].empty:
                     st.dataframe(results['dwell_events'])
-                    
-                    # Display dwell time visualizations
-                    if 'dwell_times' in results:
-                        def plot_dwell_time_analysis(results):
-                            import plotly.express as px
-                            if 'dwell_times' in results and isinstance(results['dwell_times'], dict) and results['dwell_times']:
-                                dwell_data = []
-                                for class_val, stats in results['dwell_times'].items():
-                                    dwell_data.append({
-                                        'Class': int(class_val),
-                                        'Mean Dwell Time (frames)': stats['mean'],
-                                        'Std Dev (frames)': stats['std'],
-                                        'Min (frames)': stats['min'],
-                                        'Max (frames)': stats['max'],
-                                        'Count': stats['count']
-                                    })
-                                df = pd.DataFrame(dwell_data)
-                                fig = px.bar(df, x='Class', y='Mean Dwell Time (frames)', error_y='Std Dev (frames)', title='Mean Dwell Time by Class')
-                                return fig
-                            else:
-                                return px.scatter(title="No dwell time data available")
-                        dwell_fig = plot_dwell_time_analysis(results)
-                        st.plotly_chart(dwell_fig, use_container_width=True)
-                    
-                    if 'region_stats' in results:
-                        st.subheader("Region Statistics")
-                        st.dataframe(results['region_stats'])
+                    st.subheader("Dwell Statistics")
+                    for key, value in results.get('dwell_stats', {}).items():
+                        st.metric(key.replace("_", " ").title(), f"{value:.2f}")
                 else:
-                    st.warning("No dwell events available to display.")
-                    
-                # Dwell statistics
-                st.subheader("Dwell Statistics")
-                if 'dwell_stats' in results and results['dwell_stats']:
-                    for key, value in results['dwell_stats'].items():
-                        st.text(f"{key}: {value}")
-                else:
-                    # Display default statistics when no dwell events are detected
-                    st.text("Total tracks analyzed: " + str(len(st.session_state.tracks_data['track_id'].unique())))
-                    st.text("Tracks with dwell events: 0")
-                    st.text("Total dwell events: 0")
-                    st.text("Mean dwell time: 0.0 s")
-                    st.text("Median dwell time: 0.0 s")
-                    st.info("No dwell events were detected with the current parameters. Try adjusting the threshold distance or minimum dwell frames.")
+                    st.warning("No dwell events found with the current parameters.")
         
         # Boundary Crossing Analysis tab
         with tabs[5]:
             st.header("Boundary Crossing Analysis")
 
-            # Run boundary crossing analysis
-            if st.button("Analyze Boundary Crossings"):
-                with st.spinner("Analyzing boundary crossings..."):
-                    try:
-                        # Add class information to tracks
-                        tracks_with_classes = apply_mask_to_tracks(
-                            st.session_state.tracks_data,
-                            selected_mask,
-                            []  # Don't filter, get all classes
-                        )
-            
-                        # Filter by minimum track length
-                        track_lengths = tracks_with_classes.groupby('track_id').size()
-                        valid_tracks = track_lengths[track_lengths >= min_track_length].index
-                        filtered_tracks = tracks_with_classes[tracks_with_classes['track_id'].isin(valid_tracks)]
+            # UI for mask selection
+            selected_mask_boundary, selected_classes_boundary, segmentation_method_boundary = create_mask_selection_ui("boundary_crossing")
 
-                        # --- FIX STARTS HERE ---
-                        # Convert the selected segmentation mask into the correct boundary format
-                        from segmentation import convert_compartments_to_boundary_crossing_format
-            
-                        # Create a list of dictionaries for each compartment region
-                        compartments_for_conversion = []
-                        for class_id in filtered_tracks['class'].unique():
-                            if class_id != 'none':
-                                # Get the mask data properly
-                                if selected_mask and selected_mask[0] in st.session_state.available_masks:
-                                    mask_data = st.session_state.available_masks[selected_mask[0]]
-                                    comp_mask = (mask_data == class_id)
-                                    props = measure.regionprops(comp_mask.astype(int))
-                                else:
-                                    props = []
-                    
-                                # Process ALL regions for this class, not just the first one
+            if st.button("Analyze Boundary Crossings"):
+                if selected_mask_boundary:
+                    with st.spinner("Analyzing boundary crossings..."):
+                        try:
+                            mask_data = st.session_state.available_masks[selected_mask_boundary[0]]
+
+                            from skimage import measure
+                            compartments = []
+                            for class_id in np.unique(mask_data):
+                                if class_id == 0: continue # Skip background
+                                class_mask = (mask_data == class_id)
+                                labeled_mask = measure.label(class_mask)
+                                props = measure.regionprops(labeled_mask)
                                 for i, prop in enumerate(props):
                                     min_row, min_col, max_row, max_col = prop.bbox
-                                    compartments_for_conversion.append({
+                                    compartments.append({
                                         'id': f'class_{class_id}_region_{i}',
-                                        'bbox_um': {
-                                            'x1': min_col * get_global_pixel_size(),
-                                            'y1': min_row * get_global_pixel_size(),
-                                            'x2': max_col * get_global_pixel_size(),
-                                            'y2': max_row * get_global_pixel_size()
-                                         }
+                                        'bbox_px': (min_col, min_row, max_col, max_row)
                                     })
-            
-                        boundaries = convert_compartments_to_boundary_crossing_format(compartments_for_conversion)
-                        # --- FIX ENDS HERE ---
 
-                        # Analyze boundary crossings using the correctly formatted boundaries
-                        boundary_stats = analyze_boundary_crossing(
-                            filtered_tracks,
-                            boundaries=boundaries,  # Pass the corrected boundaries
-                            pixel_size=get_global_pixel_size(),
-                            frame_interval=get_global_frame_interval(),
-                            min_track_length=min_track_length
-                        )
-            
-                        if "error" not in boundary_stats:
+                            boundaries = convert_compartments_to_boundary_crossing_format(compartments)
+
+                            boundary_stats = analyze_boundary_crossing(
+                                tracks,
+                                boundaries=boundaries,
+                                pixel_size=get_global_pixel_size(),
+                                frame_interval=get_global_frame_interval()
+                            )
                             st.session_state.analysis_results["boundary_crossing"] = boundary_stats
                             st.success("Boundary crossing analysis completed!")
-                        else:
-                            st.error(boundary_stats["error"])
-        
-                    except Exception as e:
-                        st.error(f"Error during boundary crossing analysis: {str(e)}")
-                
-            # Display results if available
+                        except Exception as e:
+                            st.error(f"Error during boundary crossing analysis: {str(e)}")
+                else:
+                    st.warning("Please select a segmentation mask to define boundaries for this analysis.")
+            
             if "boundary_crossing" in st.session_state.analysis_results:
                 results = st.session_state.analysis_results["boundary_crossing"]
-                
-                # Overview statistics
-                st.subheader("Crossing Statistics Overview")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Total Tracks", results["total_tracks"])
-                
-                with col2:
-                    st.metric("Tracks with Crossings", results["tracks_with_crossings"])
-                
-                with col3:
-                    st.metric("Total Crossings", results["total_crossings"])
-                
-                with col4:
-                    crossing_rate = (results["tracks_with_crossings"] / results["total_tracks"] * 100) if results["total_tracks"] > 0 else 0
-                    st.metric("Crossing Rate (%)", f"{crossing_rate:.1f}")
-                
-                # Class transition matrix
-                st.subheader("Class Transition Analysis")
-                
-                if results["class_transitions"]:
-                    # Create transition dataframe
-                    transitions_data = []
-                    for transition, count in results["class_transitions"].items():
-                        from_class, to_class = transition.split('->')
-                        transitions_data.append({
-                            'From Class': int(from_class),
-                            'To Class': int(to_class),
-                            'Count': count,
-                            'Transition': transition
-                        })
-                    
-                    transitions_df = pd.DataFrame(transitions_data)
-                    st.dataframe(transitions_df)
-                    
-                    # Transition visualization
-                    if len(transitions_df) > 0:
-                        fig = px.bar(transitions_df, 
-                                    x='Transition', 
-                                    y='Count',
-                                    title='Class Transition Frequency',
-                                    labels={'Count': 'Number of Transitions'})
-                        fig.update_xaxes(title='Transition Type')
-                        st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("No class transitions detected.")
-                
-                # Dwell time analysis
-                st.subheader("Dwell Time Analysis")
-                
-                if results["dwell_times"]:
-                    dwell_summary = []
-                    for class_val, stats in results["dwell_times"].items():
-                        dwell_summary.append({
-                            'Class': int(class_val),
-                            'Mean Dwell Time (frames)': f"{stats['mean']:.2f}",
-                            'Std Dev (frames)': f"{stats['std']:.2f}",
-                            'Min (frames)': stats['min'],
-                            'Max (frames)': stats['max'],
-                            'Count': stats['count']
-                        })
-                    
-                    dwell_df = pd.DataFrame(dwell_summary)
-                    st.dataframe(dwell_df)
-                    
-                    # Convert to time units if frame interval is available
-                    if frame_interval > 0:
-                        st.subheader("Dwell Times in Time Units")
-                        time_dwell_summary = []
-                        for class_val, stats in results["dwell_times"].items():
-                            time_dwell_summary.append({
-                                'Class': int(class_val),
-                                'Mean Dwell Time (s)': f"{stats['mean'] * frame_interval:.3f}",
-                                'Std Dev (s)': f"{stats['std'] * frame_interval:.3f}",
-                                'Min (s)': f"{stats['min'] * frame_interval:.3f}",
-                                'Max (s)': f"{stats['max'] * frame_interval:.3f}",
-                                'Count': stats['count']
-                            })
-                        
-                        time_dwell_df = pd.DataFrame(time_dwell_summary)
-                        st.dataframe(time_dwell_df)
-                else:
-                    st.info("No dwell time data available.")
-                
-                # Individual crossing tracks
-                st.subheader("Tracks with Boundary Crossings")
-                
-                if results["crossing_tracks"]:
-                    # Show summary of crossing tracks
-                    crossing_summary = []
-                    for track_info in results["crossing_tracks"]:
-                        crossing_summary.append({
-                            'Track ID': track_info['track_id'],
-                            'Number of Crossings': track_info['num_crossings'],
-                            'Crossing Details': f"{len(track_info['crossings'])} transitions"
-                        })
-                    
-                    crossing_summary_df = pd.DataFrame(crossing_summary)
-                    st.dataframe(crossing_summary_df)
-                    
-                    # Option to view detailed crossing information
-                    if st.checkbox("Show Detailed Crossing Information"):
-                        selected_track = st.selectbox(
-                            "Select track to view details:",
-                            options=[track['track_id'] for track in results["crossing_tracks"]]
-                        )
-                        
-                        if selected_track:
-                            track_info = next(t for t in results["crossing_tracks"] if t['track_id'] == selected_track)
-                            
-                            st.write(f"**Track {selected_track} Crossing Details:**")
-                            
-                            crossing_details = []
-                            for crossing in track_info['crossings']:
-                                crossing_details.append({
-                                    'Frame': crossing['frame'],
-                                    'From Class': crossing['from_class'],
-                                    'To Class': crossing['to_class'],
-                                    'Position (X, Y)': f"({crossing['position'][0]:.1f}, {crossing['position'][1]:.1f})"
-                                })
-                            
-                            crossing_details_df = pd.DataFrame(crossing_details)
-                            st.dataframe(crossing_details_df)
-                else:
-                    st.info("No tracks with boundary crossings found.")
-            
-            else:
-                st.info("Please select a segmentation mask from the Image Processing tab to perform boundary crossing analysis.")
+                st.subheader("Crossing Statistics")
+                st.dataframe(pd.DataFrame([results['summary']]))
+
+                st.subheader("Crossing Events")
+                st.dataframe(results['crossing_events'])
         
         # Multi-Channel Analysis tab  
         with tabs[6]:
@@ -6151,7 +5566,7 @@ elif st.session_state.active_page == "Analysis":
                     st.session_state.channel2_data = None
                 
                 # Configure the Analysis settings
-                if st.session_state.tracks_data is not None and st.session_state.channel2_data is not None:
+                if state_manager.has_tracks() and st.session_state.channel2_data is not None:
                     st.subheader("Multi-Channel Analysis Settings")
                     
                     # Organize parameters in columns
@@ -6195,7 +5610,7 @@ elif st.session_state.active_page == "Analysis":
                                 analyzer = MultiChannelAnalyzer()
                                 
                                 # Add channels
-                                analyzer.add_channel(st.session_state.tracks_data, primary_channel_name)
+                                analyzer.add_channel(state_manager.get_tracks(), primary_channel_name)
                                 analyzer.add_channel(st.session_state.channel2_data, secondary_channel_name)
                                 
                                 # Calculate colocalization
@@ -6270,7 +5685,7 @@ elif st.session_state.active_page == "Analysis":
                 st.warning("Multi-Channel Analysis module is not available. Please ensure the 'correlative_analysis.py' file is properly installed.")
                 
         # Advanced Analysis tab
-        with tabs[6]:
+        with tabs[7]:
             st.header("Advanced Analysis")
             
             # Create subtabs for different advanced analysis types
@@ -6340,7 +5755,7 @@ elif st.session_state.active_page == "Analysis":
                     with st.spinner("Running gel structure analysis..."):
                         try:
                             gel_results = analyze_gel_structure(
-                                st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                 min_confinement_time=min_confinement_time,
                                 pixel_size=pixel_size,
                                 frame_interval=frame_interval,
@@ -6473,7 +5888,7 @@ elif st.session_state.active_page == "Analysis":
                     with st.spinner("Running diffusion population analysis..."):
                         try:
                             diffpop_results = analyze_diffusion_population(
-                                st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                 max_lag=max_lag,
                                 pixel_size=pixel_size,
                                 frame_interval=frame_interval,
@@ -6619,7 +6034,7 @@ elif st.session_state.active_page == "Analysis":
                     with st.spinner("Running active transport analysis..."):
                         try:
                             active_results = analyze_active_transport(
-                                st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                 window_size=window_size,
                                 min_track_length=min_track_length,
                                 pixel_size=pixel_size,
@@ -6803,7 +6218,7 @@ elif st.session_state.active_page == "Analysis":
                     with st.spinner("Running boundary crossing analysis..."):
                         try:
                             boundary_results = analyze_boundary_crossing(
-                                st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                 boundaries=boundaries,
                                 pixel_size=pixel_size,
                                 frame_interval=frame_interval,
@@ -6899,7 +6314,7 @@ elif st.session_state.active_page == "Analysis":
                     with st.spinner("Running crowding analysis..."):
                         try:
                             crowding_results = analyze_crowding(
-                                st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                 radius_of_influence=radius_of_influence,
                                 pixel_size=pixel_size,
                                 min_track_length=min_track_length
@@ -6999,7 +6414,7 @@ elif st.session_state.active_page == "Analysis":
             with adv_tabs[5]:
                 st.header("Biophysical Models Analysis")
                 
-                if st.session_state.tracks_data is not None:
+                if state_manager.has_tracks():
                     # Create subtabs for different biophysical analyses
                     bio_tabs = st.tabs([
                         "Biophysical Models",
@@ -7019,10 +6434,11 @@ elif st.session_state.active_page == "Analysis":
 elif st.session_state.active_page == "Visualization":
     st.title("Visualization Tools")
     
-    if st.session_state.tracks_data is None:
+    if not state_manager.has_tracks():
         st.warning("No track data loaded. Please upload track data first.")
         st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
     else:
+        tracks = state_manager.get_tracks()
         # Create tabs for different visualization types
         viz_tabs = st.tabs([
             "Track Visualization", 
@@ -7059,8 +6475,8 @@ elif st.session_state.active_page == "Visualization":
                 max_tracks = st.slider(
                     "Max Tracks to Display",
                     min_value=1,
-                    max_value=min(100, st.session_state.tracks_data['track_id'].nunique()),
-                    value=min(20, st.session_state.tracks_data['track_id'].nunique()),
+                    max_value=min(100, tracks['track_id'].nunique()),
+                    value=min(20, tracks['track_id'].nunique()),
                     help="Maximum number of tracks to display (for better performance)"
                 )
                 
@@ -7071,11 +6487,11 @@ elif st.session_state.active_page == "Visualization":
                 )
             
             # Filter tracks if needed
-            if max_tracks < st.session_state.tracks_data['track_id'].nunique():
-                unique_tracks = st.session_state.tracks_data['track_id'].unique()[:max_tracks]
-                filtered_tracks = st.session_state.tracks_data[st.session_state.tracks_data['track_id'].isin(unique_tracks)]
+            if max_tracks < tracks['track_id'].nunique():
+                unique_tracks = tracks['track_id'].unique()[:max_tracks]
+                filtered_tracks = tracks[tracks['track_id'].isin(unique_tracks)]
             else:
-                filtered_tracks = st.session_state.tracks_data
+                filtered_tracks = tracks
             
             # Generate plot
             with st.spinner("Generating track visualization..."):
@@ -7191,9 +6607,9 @@ elif st.session_state.active_page == "Visualization":
                 elif viz_type == "Spatial Map":
                     if 'track_results' in diffusion_results and isinstance(diffusion_results['track_results'], pd.DataFrame) and not diffusion_results['track_results'].empty:
                         # Merge track results with position data
-                        if 'diffusion_coeff' in diffusion_results['track_results'].columns and not st.session_state.tracks_data.empty:
+                        if 'diffusion_coeff' in diffusion_results['track_results'].columns and not state_manager.get_tracks().empty:
                             # Get the mean position of each track
-                            track_positions = st.session_state.tracks_data.groupby('track_id')[['x', 'y']].mean().reset_index()
+                            track_positions = state_manager.get_tracks().groupby('track_id')[['x', 'y']].mean().reset_index()
                             merged_data = pd.merge(track_positions, diffusion_results['track_results'], on='track_id')
                             
                             # Create a spatial map colored by diffusion coefficient
@@ -7319,11 +6735,11 @@ elif st.session_state.active_page == "Visualization":
                             st.dataframe(motion_results['motion_type_stats'])
                         
                         # If track-level classifications are available, create a spatial map
-                        if 'track_motion_types' in motion_results and not st.session_state.tracks_data.empty:
+                        if 'track_motion_types' in motion_results and not state_manager.get_tracks().empty:
                             st.subheader("Spatial Distribution of Motion Types")
                             try:
                                 # Get the mean position of each track
-                                track_positions = st.session_state.tracks_data.groupby('track_id')[['x', 'y']].mean().reset_index()
+                                track_positions = state_manager.get_tracks().groupby('track_id')[['x', 'y']].mean().reset_index()
                                 motion_track_data = pd.merge(track_positions, motion_results['track_motion_types'], on='track_id')
                                 
                                 # Create a spatial map colored by motion type
@@ -7366,18 +6782,18 @@ elif st.session_state.active_page == "Visualization":
                 max_tracks = st.slider(
                     "Max Tracks to Display",
                     min_value=1,
-                    max_value=min(50, st.session_state.tracks_data['track_id'].nunique()),
-                    value=min(20, st.session_state.tracks_data['track_id'].nunique()),
+                    max_value=min(50, state_manager.get_tracks()['track_id'].nunique()),
+                    value=min(20, state_manager.get_tracks()['track_id'].nunique()),
                     key="3d_max_tracks",
                     help="Maximum number of tracks to display (for better performance)"
                 )
             
             # Filter tracks if needed
-            if max_tracks < st.session_state.tracks_data['track_id'].nunique():
-                unique_tracks = st.session_state.tracks_data['track_id'].unique()[:max_tracks]
-                filtered_tracks = st.session_state.tracks_data[st.session_state.tracks_data['track_id'].isin(unique_tracks)]
+            if max_tracks < state_manager.get_tracks()['track_id'].nunique():
+                unique_tracks = state_manager.get_tracks()['track_id'].unique()[:max_tracks]
+                filtered_tracks = state_manager.get_tracks()[state_manager.get_tracks()['track_id'].isin(unique_tracks)]
             else:
-                filtered_tracks = st.session_state.tracks_data
+                filtered_tracks = state_manager.get_tracks()
             
             # Generate 3D plot
             with st.spinner("Generating 3D visualization..."):
@@ -7437,7 +6853,7 @@ elif st.session_state.active_page == "Visualization":
                     # Create custom plot using Plotly
                     if plot_kind == "scatter":
                         fig = px.scatter(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             y=y_axis,
                             color=color_by,
@@ -7446,7 +6862,7 @@ elif st.session_state.active_page == "Visualization":
                         )
                     elif plot_kind == "line":
                         fig = px.line(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             y=y_axis,
                             color=color_by,
@@ -7455,7 +6871,7 @@ elif st.session_state.active_page == "Visualization":
                         )
                     elif plot_kind == "histogram":
                         fig = px.histogram(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             color=color_by,
                             title=f"Histogram of {x_axis}",
@@ -7463,7 +6879,7 @@ elif st.session_state.active_page == "Visualization":
                         )
                     elif plot_kind == "box":
                         fig = px.box(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             y=y_axis,
                             color=color_by,
@@ -7472,7 +6888,7 @@ elif st.session_state.active_page == "Visualization":
                         )
                     elif plot_kind == "violin":
                         fig = px.violin(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             y=y_axis,
                             color=color_by,
@@ -7482,7 +6898,7 @@ elif st.session_state.active_page == "Visualization":
                     elif plot_kind == "heatmap":
                         # Create 2D histogram for heatmap
                         fig = px.density_heatmap(
-                            st.session_state.tracks_data,
+                            tracks,
                             x=x_axis,
                             y=y_axis,
                             title=f"Heatmap of {y_axis} vs {x_axis}",
@@ -7517,7 +6933,7 @@ elif st.session_state.active_page == "Advanced Analysis":
             st.header("Hidden Markov Model (HMM) Analysis")
             st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
 
-            if st.session_state.tracks_data is not None:
+            if state_manager.has_tracks():
                 if fit_hmm is None:
                     st.warning(_hmm_warning())
                 else:
@@ -7530,7 +6946,7 @@ elif st.session_state.active_page == "Advanced Analysis":
 
                 if st.button("Run HMM Analysis"):
                     with st.spinner("Fitting HMM..."):
-                        model, predictions = fit_hmm(st.session_state.tracks_data, n_states, n_iter)
+                        model, predictions = fit_hmm(state_manager.get_tracks(), n_states, n_iter)
                         st.session_state.analysis_results["hmm"] = {
                             "model": model,
                             "predictions": predictions
@@ -7585,7 +7001,7 @@ elif st.session_state.active_page == "Advanced Analysis":
 
                     st.subheader("State Predictions")
                     # Add state predictions to the tracks dataframe for visualization
-                    tracks_with_states = st.session_state.tracks_data.copy()
+                    tracks_with_states = state_manager.get_tracks().copy()
                     state_assignments = []
                     for i, row in tracks_with_states.iterrows():
                         track_id = row['track_id']
@@ -7683,7 +7099,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         
                                         # Calculate MSD first
                                         msd_results = calculate_msd(
-                                            st.session_state.tracks_data,
+                                            state_manager.get_tracks(),
                                              pixel_size=pixel_size,
                                             frame_interval=frame_interval
                                        )
@@ -7744,7 +7160,7 @@ elif st.session_state.active_page == "Advanced Analysis":
             st.header("Microrheology Analysis")
             st.write("Calculate G' (storage modulus), G\" (loss modulus), and effective viscosity from particle tracking data.")
             
-            if st.session_state.tracks_data is not None:
+            if state_manager.has_tracks():
                 # Parameters section
                 st.subheader("Analysis Parameters")
                 
@@ -7885,7 +7301,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             else:
                                 # Single dataset analysis - use the proper analysis method
                                 analysis_results = analyzer.analyze_microrheology(
-                                    st.session_state.tracks_data,
+                                state_manager.get_tracks(),
                                     pixel_size_um=pixel_size_um,
                                     frame_interval_s=frame_interval_s,
                                     max_lag=max_lag_frames
@@ -8312,7 +7728,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             # Multi-dataset analysis with different sampling rates
                             try:
                                 # Load additional datasets
-                                track_datasets = [st.session_state.tracks_data]  # Include current dataset
+                                track_datasets = [state_manager.get_tracks()]  # Include current dataset
                                 
                                 for uploaded_file in multi_files:
                                     # Load each additional file
@@ -8424,7 +7840,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                     with st.spinner("Running Ornstein-Uhlenbeck analysis..."):
                         units = get_current_units()
                         ou_results = analyze_ornstein_uhlenbeck(
-                            st.session_state.tracks_data,
+                            state_manager.get_tracks(),
                             pixel_size=units['pixel_size'],
                             frame_interval=units['frame_interval']
                         )
@@ -8447,10 +7863,11 @@ elif st.session_state.active_page == "Advanced Analysis":
 elif st.session_state.active_page == "AI Anomaly Detection":
     st.title("AI-Powered Anomaly Detection")
     
-    if st.session_state.tracks_data is None:
+    if not state_manager.has_tracks():
         st.warning("No track data loaded. Please upload track data first.")
         st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
     else:
+        tracks = state_manager.get_tracks()
         st.write("Detect unusual particle behaviors using advanced machine learning algorithms.")
         
         # Parameters for anomaly detection
@@ -8521,7 +7938,7 @@ elif st.session_state.active_page == "AI Anomaly Detection":
                     detector = AnomalyDetector(contamination=contamination)
                     
                     # Filter tracks by minimum length
-                    filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
+                    filtered_tracks = tracks.groupby('track_id').filter(
                         lambda x: len(x) >= min_track_length
                     )
                     
@@ -8561,7 +7978,7 @@ elif st.session_state.active_page == "AI Anomaly Detection":
             visualizer = AnomalyVisualizer()
             
             # Filter tracks for visualization
-            filtered_tracks = st.session_state.tracks_data.groupby('track_id').filter(
+            filtered_tracks = tracks.groupby('track_id').filter(
                 lambda x: len(x) >= results['parameters']['min_track_length']
             )
             

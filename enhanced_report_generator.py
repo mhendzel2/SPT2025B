@@ -287,10 +287,27 @@ class EnhancedSPTReportGenerator:
         categories = self._group_analyses_by_category()
         
         selected_analyses = self._display_analysis_selector(categories)
+
+        # Segmentation Mask Selection
+        st.markdown("---")
+        st.subheader("🔬 Include Segmentation Masks")
+        available_masks = st.session_state.get('available_masks', {})
+        selected_masks = []
+        if available_masks:
+            mask_options = list(available_masks.keys())
+            selected_masks = st.multiselect(
+                "Select masks to include in the report:",
+                options=mask_options,
+                default=[],
+                help="Choose which generated segmentation masks to add to the report."
+            )
+        else:
+            st.info("No segmentation masks available. Generate masks in the 'Image Processing' tab.")
+
         report_config = self._display_report_config()
             
         if st.button("🚀 Generate Comprehensive Report", type="primary"):
-            if selected_analyses:
+            if selected_analyses or selected_masks:
                 # Get units using centralized utilities
                 if DATA_UTILS_AVAILABLE:
                     current_units = get_units()
@@ -305,7 +322,7 @@ class EnhancedSPTReportGenerator:
                         'frame_interval': st.session_state.get('frame_interval', 0.1)
                     }
 
-                self.generate_automated_report(tracks_df, selected_analyses, report_config, current_units)
+                self.generate_automated_report(tracks_df, selected_analyses, report_config, current_units, selected_masks=selected_masks)
             else:
                 st.warning("Please select at least one analysis to include in the report.")
 
@@ -423,109 +440,58 @@ class EnhancedSPTReportGenerator:
         
         return {'format': report_format, 'include_raw': include_raw}
 
-    def generate_automated_report(self, tracks_df, selected_analyses, config, current_units):
-        """Execute comprehensive analysis pipeline using existing results."""
-        st.subheader("📄 Generating Report from Analysis Results")
-        
-        # Get analysis results using centralized utilities
-        if DATA_UTILS_AVAILABLE:
-            analysis_results = get_analysis_results()
-        elif self.state_manager:
-            analysis_results = self.state_manager.get_analysis_results()
-        else:
-            analysis_results = st.session_state.get('analysis_results', {})
-        
-        if not analysis_results:
-            st.warning("⚠️ No pre-computed analysis results found. Running analyses now...")
-            # Run analyses directly
-            self._run_analyses_for_report(tracks_df, selected_analyses, config, current_units)
-        else:
-            # Use existing results
-            self._generate_report_from_results(analysis_results, selected_analyses, config, current_units)
+    def generate_automated_report(self, tracks_df, selected_analyses, config, current_units, selected_masks=None):
+        """Execute comprehensive analysis pipeline and generate a report."""
+        st.subheader("📄 Generating Report")
 
-    def _run_analyses_for_report(self, tracks_df, selected_analyses, config, current_units):
-        """Run analyses directly for report generation."""
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
+        if selected_masks is None:
+            selected_masks = []
+
+        # 1. Run analyses and collect results
         self.report_results = {}
         self.report_figures = {}
-        
+
+        existing_results = st.session_state.get('analysis_results', {})
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
         for i, analysis_key in enumerate(selected_analyses):
-            if analysis_key not in self.available_analyses:
-                continue
-                
-            analysis = self.available_analyses[analysis_key]
-            status_text.text(f"Running {analysis['name']}...")
-            progress_bar.progress((i + 1) / len(selected_analyses))
-            
-            try:
-                # Run the analysis
-                result = analysis['function'](tracks_df, current_units)
-                
-                if result.get('success', False):
-                    self.report_results[analysis_key] = result
-                    
-                    # Generate visualization
-                    fig = analysis['visualization'](result)
+            analysis_info = self.available_analyses.get(analysis_key, {})
+            status_text.text(f"Processing {analysis_info.get('name', analysis_key)}...")
+
+            if analysis_key in existing_results and existing_results[analysis_key].get('success', False):
+                # Use existing result
+                self.report_results[analysis_key] = existing_results[analysis_key]
+                st.info(f"Using existing result for {analysis_info.get('name', analysis_key)}.")
+            else:
+                # Run analysis
+                try:
+                    result = analysis_info['function'](tracks_df, current_units)
+                    if result.get('success', False):
+                        self.report_results[analysis_key] = result
+                        st.success(f"✅ Completed {analysis_info.get('name', analysis_key)}")
+                    else:
+                        st.warning(f"⚠️ {analysis_info.get('name', analysis_key)} failed: {result.get('error', 'Unknown error')}")
+                except Exception as e:
+                    st.error(f"❌ Failed to run {analysis_info.get('name', analysis_key)}: {str(e)}")
+
+            # Generate visualization for the result we have
+            if analysis_key in self.report_results:
+                try:
+                    fig = analysis_info['visualization'](self.report_results[analysis_key])
                     if fig:
                         self.report_figures[analysis_key] = fig
-                    
-                    st.success(f"✅ Completed {analysis['name']}")
-                else:
-                    st.warning(f"⚠️ {analysis['name']} failed: {result.get('error', 'Unknown error')}")
-                    
-            except Exception as e:
-                st.error(f"❌ Failed to run {analysis['name']}: {str(e)}")
-        
-        status_text.text("Report generation complete!")
-        progress_bar.progress(1.0)
-        
-        # Display the generated report
-        self._display_generated_report(config, current_units)
+                except Exception as e:
+                    st.warning(f"Could not generate visualization for {analysis_info.get('name', analysis_key)}: {e}")
 
-    def _generate_report_from_results(self, analysis_results, selected_analyses, config, current_units):
-        """Generate report from existing analysis results."""
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        self.report_results = {}
-        self.report_figures = {}
-        
-        for i, analysis_key in enumerate(selected_analyses):
-            analysis = self.available_analyses[analysis_key]
-            
-            # Check if analysis results are available
-            if analysis_key not in analysis_results:
-                st.warning(f"⚠️ Skipping {analysis['name']} - analysis has not been run. Please complete this analysis first.")
-                continue
-                
-            # Verify analysis was successful
-            if not analysis_results[analysis_key].get('success', False):
-                st.warning(f"⚠️ Skipping {analysis['name']} - analysis failed or incomplete.")
-                continue
-            
-            status_text.text(f"Adding {analysis['name']} to report...")
-            progress_bar.progress((i + 1) / len(selected_analyses))
-            
-            try:
-                # Use existing analysis results instead of re-running
-                self.report_results[analysis_key] = analysis_results[analysis_key]
-                
-                # Generate visualization from existing data
-                fig = analysis['visualization'](analysis_results[analysis_key])
-                # Some visualization functions may return dict of plotly figs or matplotlib
-                if fig is not None:
-                    self.report_figures[analysis_key] = fig
-                st.success(f"✅ Added {analysis['name']} to report")
-                
-            except Exception as e:
-                st.error(f"❌ Failed to add {analysis['name']} to report: {str(e)}")
-        
-        status_text.text("Report generation complete!")
-        
-        # Display the generated report
-        self._display_generated_report(config, current_units)
+            progress_bar.progress((i + 1) / len(selected_analyses) if selected_analyses else 1)
+
+        status_text.text("All analyses processed.")
+        progress_bar.progress(1.0)
+
+        # 2. Display the generated report with analyses and masks
+        self._display_generated_report(config, current_units, selected_masks)
 
     # --- Full Implementations of Analysis Wrappers ---
 
@@ -1064,31 +1030,31 @@ class EnhancedSPTReportGenerator:
         
         return results
 
-    def _display_generated_report(self, config, current_units):
+    def _display_generated_report(self, config, current_units, selected_masks=None):
         """Display the generated report with download options."""
-        if not self.report_results:
-            st.warning("No analysis results to display.")
+        if not self.report_results and not selected_masks:
+            st.warning("No analysis results or masks to display.")
             return
-            
+
         st.subheader("📄 Generated Report")
-        
+
         # Create download options
         col1, col2, col3, col4, col5 = st.columns(5)
-        
+
         with col1:
             if st.button("📊 View Interactive Report"):
-                self._show_interactive_report(current_units)
-        
+                self._show_interactive_report(current_units, selected_masks)
+
         with col2:
             # Generate and provide JSON download
-            report_data = self._generate_report_data(config, current_units)
+            report_data = self._generate_report_data(config, current_units, selected_masks)
             st.download_button(
                 "💾 Download JSON Report",
                 data=json.dumps(report_data, indent=2, default=str),
                 file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"
             )
-        
+
         with col3:
             # Generate and provide CSV summary download
             summary_csv = self._generate_csv_summary()
@@ -1103,7 +1069,7 @@ class EnhancedSPTReportGenerator:
         # HTML export
         with col4:
             try:
-                html_bytes = self._export_html_report(config, current_units)
+                html_bytes = self._export_html_report(config, current_units, selected_masks)
                 if html_bytes:
                     st.download_button(
                         "🌐 Download HTML Report",
@@ -1117,7 +1083,7 @@ class EnhancedSPTReportGenerator:
         # PDF export (best-effort)
         with col5:
             try:
-                pdf_bytes = self._export_pdf_report(current_units)
+                pdf_bytes = self._export_pdf_report(current_units, selected_masks)
                 if pdf_bytes:
                     st.download_button(
                         "🧾 Download PDF Report",
@@ -1128,8 +1094,26 @@ class EnhancedSPTReportGenerator:
             except Exception as e:
                 st.info(f"PDF export unavailable: {e}")
 
-    def _export_html_report(self, config, current_units) -> bytes:
-        """Assemble a standalone HTML report including figures.
+    def _convert_mask_to_base64_png(self, mask_array: np.ndarray) -> str:
+        """Convert a numpy array mask to a base64 encoded PNG."""
+        from PIL import Image
+        import io
+        import base64
+
+        if mask_array.dtype != np.uint8:
+            # Normalize and convert to uint8 if it's not already
+            if mask_array.max() > 0:
+                mask_array = (mask_array / mask_array.max() * 255).astype(np.uint8)
+            else:
+                mask_array = mask_array.astype(np.uint8)
+
+        img = Image.fromarray(mask_array)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+    def _export_html_report(self, config, current_units, selected_masks=None) -> bytes:
+        """Assemble a standalone HTML report including figures and masks.
 
         Returns raw HTML bytes suitable for download.
         """
@@ -1204,6 +1188,32 @@ class EnhancedSPTReportGenerator:
                     except Exception:
                         pass
 
+                parts.append("</div>")
+
+            # Include segmentation masks if selected
+            if selected_masks:
+                parts.append("<div class='section'>")
+                parts.append("<h2>Segmentation Masks</h2>")
+                available_masks = st.session_state.get('available_masks', {})
+                mask_metadata = st.session_state.get('mask_metadata', {})
+                for mask_name in selected_masks:
+                    if mask_name in available_masks:
+                        parts.append(f"<h3>{html.escape(mask_name)}</h3>")
+                        mask_array = available_masks[mask_name]
+                        meta = mask_metadata.get(mask_name, {})
+
+                        # Display metadata
+                        parts.append("<ul>")
+                        for k, v in meta.items():
+                            parts.append(f"<li><b>{html.escape(str(k)).title()}:</b> {html.escape(str(v))}</li>")
+                        parts.append("</ul>")
+
+                        # Embed mask image
+                        try:
+                            b64_img = self._convert_mask_to_base64_png(mask_array)
+                            parts.append(f"<div class='figure'><img src='data:image/png;base64,{b64_img}' style='max-width:50%; border:1px solid #ccc;'></div>")
+                        except Exception as e:
+                            parts.append(f"<pre class='code'>Failed to render mask image: {html.escape(str(e))}</pre>")
                 parts.append("</div>")
 
             parts.append("</body></html>")
@@ -1285,9 +1295,12 @@ class EnhancedSPTReportGenerator:
             # reportlab not available or another error; signal to caller
             raise RuntimeError(str(e))
 
-    def _show_interactive_report(self, current_units):
+    def _show_interactive_report(self, current_units, selected_masks=None):
         """Display interactive report with visualizations."""
         st.subheader("📊 Interactive Analysis Report")
+
+        if selected_masks is None:
+            selected_masks = []
         
         # Display summary statistics
         if 'basic_statistics' in self.report_results:
@@ -1338,6 +1351,24 @@ class EnhancedSPTReportGenerator:
                         else:
                             st.plotly_chart(fig, use_container_width=True)
 
+        # Display selected masks
+        if selected_masks:
+            st.subheader("🔬 Segmentation Masks")
+            available_masks = st.session_state.get('available_masks', {})
+            mask_metadata = st.session_state.get('mask_metadata', {})
+            for mask_name in selected_masks:
+                if mask_name in available_masks:
+                    with st.expander(f"Mask: {mask_name}", expanded=True):
+                        mask_array = available_masks[mask_name]
+                        meta = mask_metadata.get(mask_name, {})
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.image(mask_array, caption=f"Mask: {mask_name}", use_column_width=True)
+                        with col2:
+                            st.write("**Metadata:**")
+                            st.json(meta)
+
     def _display_basic_stats(self, stats):
         """Display basic statistics in a formatted way."""
         col1, col2 = st.columns(2)
@@ -1368,9 +1399,12 @@ class EnhancedSPTReportGenerator:
             for motion_type, count in summary.items():
                 st.metric(f"{motion_type.title()} Motion", count)
 
-    def _generate_report_data(self, config, current_units):
+    def _generate_report_data(self, config, current_units, selected_masks=None):
         """Generate comprehensive report data for download."""
         import datetime
+
+        if selected_masks is None:
+            selected_masks = []
         
         report_data = {
             'metadata': {

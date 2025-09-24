@@ -11,11 +11,12 @@ import pandas as pd
 
 class FileObject:
     """Represents a file with track data within a project condition."""
-    def __init__(self, file_id: str, file_name: str, tracks_df: pd.DataFrame, upload_date: str):
+    def __init__(self, file_id: str, file_name: str, tracks_df: pd.DataFrame, upload_date: str, image_path: Optional[str] = None):
         self.id = file_id
         self.file_name = file_name
         self.track_data = tracks_df
         self.upload_date = upload_date
+        self.image_path = image_path
 
     def to_dict(self, save_path: str = None) -> Dict:
         track_data_file = None
@@ -32,7 +33,8 @@ class FileObject:
             'id': self.id,
             'file_name': self.file_name,
             'upload_date': self.upload_date,
-            'data_path': track_data_file
+            'data_path': track_data_file,
+            'image_path': self.image_path
         }
 
     @classmethod
@@ -44,7 +46,7 @@ class FileObject:
                 df = pd.read_csv(p)
             except Exception:
                 df = None
-        return cls(d['id'], d.get('file_name', 'unknown'), df, d.get('upload_date', ''))
+        return cls(d['id'], d.get('file_name', 'unknown'), df, d.get('upload_date', ''), image_path=d.get('image_path'))
 
 class Condition:
     """Represents an experimental condition."""
@@ -75,11 +77,14 @@ class Condition:
         pooled = []
         for f in self.files:
             try:
+                df = None
                 if 'data' in f and f['data'] is not None:
                     df = pd.read_csv(io.BytesIO(f['data']))
-                    pooled.append(df)
                 elif 'data_path' in f and f['data_path'] and os.path.exists(f['data_path']):
                     df = pd.read_csv(f['data_path'])
+
+                if df is not None:
+                    df['file_id'] = f.get('id')
                     pooled.append(df)
             except Exception:
                 continue
@@ -195,13 +200,29 @@ class ProjectManager:
         return projects
 
     def add_file_to_condition(self, project: 'Project', condition_id: str, 
-                             file_name: str, tracks_df: pd.DataFrame) -> str:
+                             file_name: str, tracks_df: pd.DataFrame, image_file: Optional[Any] = None) -> str:
         cond = next((c for c in project.conditions if c.id == condition_id), None)
         if cond is None:
             raise ValueError("Condition not found")
+
         fid = str(uuid.uuid4())
+        image_path = None
+        if image_file:
+            # Construct a path within a 'data' subdirectory of the project's main directory
+            data_dir = os.path.join(self.projects_dir, project.id, "data")
+            os.makedirs(data_dir, exist_ok=True)
+            image_ext = os.path.splitext(image_file.name)[1]
+            image_path = os.path.join(data_dir, f"{fid}_image{image_ext}")
+            with open(image_path, "wb") as f:
+                f.write(image_file.getbuffer())
+
         cond.files.append({
-            'id': fid, 'name': file_name, 'type': 'text/csv', 'size': 0, 'data': tracks_df.to_csv(index=False).encode('utf-8')
+            'id': fid,
+            'name': file_name,
+            'type': 'text/csv',
+            'size': 0,
+            'data': tracks_df.to_csv(index=False).encode('utf-8'),
+            'image_path': image_path
         })
         return fid
 
