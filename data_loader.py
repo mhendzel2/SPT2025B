@@ -13,7 +13,7 @@ import re
 from typing import List, Dict, Tuple, Any, Optional, Union
 from PIL import Image
 from utils import format_track_data, validate_tracks_dataframe
-from special_file_handlers import load_trackmate_file, load_cropped_cell3_spots, load_ms2_spots_file, load_imaris_file
+from special_file_handlers import load_trackmate_file, load_cropped_cell3_spots, load_ms2_spots_file, load_imaris_file, load_trackmate_xml_file
 from mvd2_handler import load_mvd2_file
 from volocity_handler import load_volocity_file
 from state_manager import StateManager
@@ -750,114 +750,8 @@ def load_tracks_file(file) -> pd.DataFrame:
     # For XML files (TrackMate)
     elif file_extension == '.xml':
         try:
-            import xml.etree.ElementTree as ET
-            
-            # Parse XML content
-            content = file.getvalue()
-            root = ET.fromstring(content)
-            
-            # Initialize data containers
-            track_data = []
-            spots_dict = {}
-            
-            # Try to find spots in different XML structures
-            
-            # Method 1: Try standard TrackMate format
-            model = root.find('.//Model')
-            if model is not None:
-                all_spots = model.find('.//AllSpots')
-                if all_spots is not None:
-                    for frame_elem in all_spots.findall('SpotsInFrame'):
-                        frame = int(frame_elem.get('frame', 0))
-                        
-                        for spot_elem in frame_elem.findall('Spot'):
-                            spot_id = spot_elem.get('ID')
-                            x = float(spot_elem.get('POSITION_X', 0))
-                            y = float(spot_elem.get('POSITION_Y', 0))
-                            z = float(spot_elem.get('POSITION_Z', 0))
-                            
-                            spots_dict[spot_id] = {
-                                'frame': frame,
-                                'x': x,
-                                'y': y,
-                                'z': z
-                            }
-                
-                # Find tracks if available
-                all_tracks = model.find('.//AllTracks')
-                if all_tracks is not None:
-                    for track_elem in all_tracks.findall('.//Track'):
-                        track_id = int(track_elem.get('TRACK_ID', -1))
-                        
-                        # Get spots in this track
-                        spot_ids = set()
-                        for edge in track_elem.findall('.//Edge'):
-                            source_id = edge.get('SPOT_SOURCE_ID')
-                            target_id = edge.get('SPOT_TARGET_ID')
-                            spot_ids.add(source_id)
-                            spot_ids.add(target_id)
-                        
-                        # Add track data for each spot
-                        for spot_id in spot_ids:
-                            if spot_id in spots_dict:
-                                spot_data = spots_dict[spot_id].copy()
-                                spot_data['track_id'] = track_id
-                                track_data.append(spot_data)
-                
-                # If no tracks found, use spots as individual tracks
-                if not track_data and spots_dict:
-                    for spot_id, spot_data in spots_dict.items():
-                        spot_data = spot_data.copy()
-                        spot_data['track_id'] = 0  # Single track
-                        track_data.append(spot_data)
-            
-            # Method 2: Try TrackMate export format with <particle> and <detection> elements
-            if not track_data:
-                particles = root.findall('.//particle')
-                if particles:
-                    for track_id, particle in enumerate(particles):
-                        detections = particle.findall('.//detection')
-                        for detection in detections:
-                            frame = int(detection.get('t', 0))
-                            x = float(detection.get('x', 0))
-                            y = float(detection.get('y', 0))
-                            z = float(detection.get('z', 0))
-                            
-                            track_data.append({
-                                'track_id': track_id,
-                                'frame': frame,
-                                'x': x,
-                                'y': y,
-                                'z': z
-                            })
-            
-            # Method 3: Try to find any spot-like elements in the XML
-            if not track_data:
-                # Look for any elements that might contain coordinate data
-                for elem in root.iter():
-                    # Check if element has coordinate attributes
-                    if ('x' in elem.attrib.keys() or 'X' in elem.attrib.keys() or 
-                        'POSITION_X' in elem.attrib.keys()):
-                        
-                        # Extract coordinates
-                        x = float(elem.get('x', elem.get('X', elem.get('POSITION_X', 0))))
-                        y = float(elem.get('y', elem.get('Y', elem.get('POSITION_Y', 0))))
-                        z = float(elem.get('z', elem.get('Z', elem.get('POSITION_Z', 0))))
-                        frame = int(elem.get('frame', elem.get('Frame', elem.get('t', 0))))
-                        
-                        track_data.append({
-                            'track_id': 0,
-                            'frame': frame,
-                            'x': x,
-                            'y': y,
-                            'z': z
-                        })
-            
-            if not track_data:
-                raise ValueError("No track data found in TrackMate XML file")
-            
-            # Convert to DataFrame
-            tracks_df = pd.DataFrame(track_data)
+            file_stream = io.StringIO(file.getvalue().decode("utf-8"))
+            tracks_df = load_trackmate_xml_file(file_stream)
             
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
@@ -869,8 +763,6 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             return standardized_df
             
-        except ET.ParseError:
-            raise ValueError("Invalid XML file format")
         except Exception as e:
             raise ValueError(f"Error loading TrackMate XML file: {str(e)}")
     
