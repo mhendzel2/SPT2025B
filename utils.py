@@ -65,14 +65,23 @@ def initialize_session_state():
     if 'loaded_datasets' not in st.session_state:
         st.session_state.loaded_datasets = {}
 
-def validate_tracks_dataframe(tracks_df: pd.DataFrame) -> Tuple[bool, str]:
+def validate_tracks_dataframe(tracks_df: pd.DataFrame, 
+                             check_duplicates: bool = True,
+                             check_continuity: bool = False,
+                             max_frame_gap: int = 10) -> Tuple[bool, str]:
     """
-    Validate that a tracks DataFrame has the required structure and data quality.
+    Enhanced validation for tracks DataFrame with comprehensive data quality checks.
 
     Parameters
     ----------
     tracks_df : pd.DataFrame
         DataFrame containing particle tracks
+    check_duplicates : bool, default True
+        Check for duplicate track/frame combinations
+    check_continuity : bool, default False
+        Check for large gaps in frame sequences (slower)
+    max_frame_gap : int, default 10
+        Maximum allowed gap in frames for continuity check
 
     Returns
     -------
@@ -91,17 +100,43 @@ def validate_tracks_dataframe(tracks_df: pd.DataFrame) -> Tuple[bool, str]:
     if missing_columns:
         return False, f"Missing required columns: {missing_columns}"
 
-    if tracks_df[['x', 'y']].isnull().any().any():
-        return False, "Contains null values in position columns"
+    # Check for null values
+    null_counts = tracks_df[['x', 'y']].isnull().sum()
+    if null_counts.any():
+        total_nulls = null_counts.sum()
+        return False, f"Contains {total_nulls} null values in position columns"
 
     if len(tracks_df['track_id'].unique()) == 0:
         return False, "No tracks found"
+
+    # Check for negative frames
+    if (tracks_df['frame'] < 0).any():
+        return False, "Contains negative frame numbers"
+    
+    # Check for duplicate positions in same track
+    if check_duplicates:
+        duplicates = tracks_df.groupby(['track_id', 'frame']).size()
+        if (duplicates > 1).any():
+            n_dups = (duplicates > 1).sum()
+            return False, f"Contains {n_dups} duplicate track/frame combinations"
+    
+    # Check frame continuity if requested
+    if check_continuity:
+        for track_id in tracks_df['track_id'].unique()[:10]:  # Check first 10 tracks
+            track = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+            frames = track['frame'].values
+            if len(frames) > 1:
+                gaps = np.diff(frames)
+                if (gaps > max_frame_gap).any():
+                    max_gap = gaps.max()
+                    return False, f"Track {track_id} has large frame gap ({max_gap} frames)"
 
     min_track_length = tracks_df.groupby('track_id').size().min()
     if min_track_length < 2:
         return False, f"Tracks too short (minimum length: {min_track_length})"
 
-    return True, f"Valid tracks DataFrame with {len(tracks_df['track_id'].unique())} tracks"
+    n_tracks = len(tracks_df['track_id'].unique())
+    return True, f"Valid tracks DataFrame with {n_tracks} tracks"
 
 def convert_coordinates_to_microns(tracks_df: pd.DataFrame, pixel_size: float = 0.1) -> pd.DataFrame:
     """

@@ -406,12 +406,14 @@ def load_tracks_file(file) -> pd.DataFrame:
             # If renaming created duplicate standardized names (e.g., two columns mapped to 'x'),
             # keep the first occurrence to ensure 1-D selections below.
             if tracks_df.columns.duplicated().any():
-                try:
-                    dup_names = [c for c, d in zip(tracks_df.columns, tracks_df.columns.duplicated()) if d]
-                    if dup_names:
-                        st.warning(f"Detected duplicate mapped columns after renaming: {sorted(set(dup_names))}. Keeping the first occurrence of each.")
-                except Exception:
-                    pass
+                dup_names = tracks_df.columns[tracks_df.columns.duplicated()].unique().tolist()
+                st.error(f"⚠️ Critical: Duplicate columns detected: {dup_names}")
+                st.info(f"Keeping first occurrence of each duplicate column. Please review your data file.")
+                
+                # Log for debugging
+                import logging
+                logging.warning(f"Dropped duplicate columns in file: {dup_names}")
+                
                 tracks_df = tracks_df.loc[:, ~tracks_df.columns.duplicated(keep='first')]
             
             # Check if we have required columns
@@ -427,7 +429,7 @@ def load_tracks_file(file) -> pd.DataFrame:
                 st.dataframe(df.head())
                 return pd.DataFrame()
             
-            # Convert to numeric where appropriate
+            # Convert to numeric where appropriate with validation
             for col in ['track_id', 'frame', 'x', 'y', 'z']:
                 if col in tracks_df.columns:
                     # Guard against duplicate columns resulting in a DataFrame selection
@@ -435,7 +437,21 @@ def load_tracks_file(file) -> pd.DataFrame:
                     if isinstance(col_obj, pd.DataFrame):
                         # Pick the first occurrence
                         col_obj = col_obj.iloc[:, 0]
-                    tracks_df[col] = pd.to_numeric(col_obj, errors='coerce')
+                    
+                    # Track conversion issues
+                    original_count = len(col_obj)
+                    converted = pd.to_numeric(col_obj, errors='coerce')
+                    nan_count = converted.isna().sum()
+                    
+                    # Report conversion issues
+                    if nan_count > 0:
+                        nan_pct = (nan_count / original_count) * 100
+                        if nan_pct > 10:
+                            st.error(f"⚠️ Column '{col}': {nan_count} ({nan_pct:.1f}%) invalid values converted to NaN")
+                        else:
+                            st.warning(f"Column '{col}': {nan_count} invalid values converted to NaN")
+                    
+                    tracks_df[col] = converted
             
             # Remove rows with NaN values in essential columns
             tracks_df = tracks_df.dropna(subset=['track_id', 'frame', 'x', 'y'])
@@ -625,8 +641,27 @@ def load_tracks_file(file) -> pd.DataFrame:
 
             return standardized_df
             
+        except pd.errors.ParserError as e:
+            st.error("❌ CSV parsing failed - check file format")
+            st.info("💡 Suggestions:")
+            st.info("- Verify the delimiter (comma, semicolon, tab)")
+            st.info("- Check for malformed rows")
+            st.info("- Ensure consistent number of columns")
+            raise ValueError(f"CSV parsing error: {str(e)}")
+        except UnicodeDecodeError as e:
+            st.error("❌ File encoding issue")
+            st.info("💡 Try saving your file as UTF-8 encoded CSV")
+            raise ValueError(f"Encoding error: {str(e)}")
+        except ValueError as e:
+            # Re-raise validation errors
+            raise
         except Exception as e:
-            raise ValueError(f"Error loading CSV file: {str(e)}")
+            import traceback
+            st.error(f"❌ Unexpected error loading CSV file")
+            st.error(f"Error details: {str(e)}")
+            if st.checkbox("Show detailed traceback"):
+                st.code(traceback.format_exc())
+            raise
     
     # For Excel files
     elif file_extension in ['.xlsx', '.xls']:
