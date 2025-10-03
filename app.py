@@ -27,6 +27,12 @@ import plotly.express as px
 import project_management as pm
 from scipy.stats import linregress
 
+# Import logging configuration
+from logging_config import get_logger
+
+# Initialize logger for app.py
+logger = get_logger(__name__)
+
 
 # Import report generation module
 try:
@@ -1760,14 +1766,14 @@ elif st.session_state.active_page == "Image Processing":
             # Handle multichannel images
             mask_image_data = st.session_state.mask_images
             
-            # Debug information
-            st.write(f"Debug: mask_image_data type: {type(mask_image_data)}")
+            # Log mask image data information
+            logger.debug(f"Mask image data type: {type(mask_image_data)}")
             if isinstance(mask_image_data, np.ndarray):
-                st.write(f"Debug: shape: {mask_image_data.shape}")
+                logger.debug(f"Mask shape: {mask_image_data.shape}")
             elif isinstance(mask_image_data, list):
-                st.write(f"Debug: list length: {len(mask_image_data)}")
+                logger.debug(f"Mask list length: {len(mask_image_data)}")
                 if len(mask_image_data) > 0:
-                    st.write(f"Debug: first item shape: {mask_image_data[0].shape}")
+                    logger.debug(f"First mask item shape: {mask_image_data[0].shape}")
             
             # Check different multichannel scenarios
             multichannel_detected = False
@@ -2972,13 +2978,13 @@ Lower values provide faster comparison but may miss fine differences between met
                                             comp_df = pd.DataFrame(formatted_stats)
                                             st.dataframe(comp_df, use_container_width=True)
                                 
-                                # Debug info for Bayesian GMM
+                                # Log Bayesian GMM classification info
                                 if segmentation_method == "Bayesian GMM (Auto)":
                                     unique_classes = np.unique(classes)
-                                    st.write(f"Debug - Unique classes found: {unique_classes}")
-                                    st.write(f"Debug - Class counts: {[(c, np.sum(classes == c)) for c in unique_classes]}")
+                                    logger.debug(f"Bayesian GMM unique classes: {unique_classes}")
+                                    logger.debug(f"Bayesian GMM class counts: {[(c, np.sum(classes == c)) for c in unique_classes]}")
                                     # if 'component_to_brightness_order' in locals():
-                                    #     st.write(f"Debug - Component mapping: {component_to_brightness_order}")
+                                    #     logger.debug(f"Component mapping: {component_to_brightness_order}")
                                 
                                 # Display class distribution
                                 st.markdown("#### Class Distribution Summary")
@@ -5130,7 +5136,15 @@ elif st.session_state.active_page == "Analysis":
                 pixel_size = get_global_pixel_size()
                 frame_interval = get_global_frame_interval()
                 
-                # Debug information
+                # Log session state values for debugging
+                logger.debug(f"Session state - global_pixel_size: {st.session_state.get('global_pixel_size', 'NOT FOUND')}")
+                logger.debug(f"Session state - current_pixel_size: {st.session_state.get('current_pixel_size', 'NOT FOUND')}")
+                logger.debug(f"Session state - global_frame_interval: {st.session_state.get('global_frame_interval', 'NOT FOUND')}")
+                logger.debug(f"Session state - current_frame_interval: {st.session_state.get('current_frame_interval', 'NOT FOUND')}")
+                logger.debug(f"Final pixel_size: {pixel_size}")
+                logger.debug(f"Final frame_interval: {frame_interval}")
+                
+                # Optional: Still show debug expander for user visibility
                 with st.expander("Debug: Session State Values", expanded=False):
                     st.write("global_pixel_size:", st.session_state.get('global_pixel_size', 'NOT FOUND'))
                     st.write("current_pixel_size:", st.session_state.get('current_pixel_size', 'NOT FOUND'))

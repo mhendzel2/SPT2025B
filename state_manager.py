@@ -6,6 +6,10 @@ Centralized management of session state with type safety and error checking.
 from typing import Any, Dict, Optional
 import pandas as pd
 import datetime
+from logging_config import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 # Graceful fallback if Streamlit not installed (e.g., during tests)
 try:
@@ -58,6 +62,7 @@ class StateManager:
             self.tracks = None
             self.track_df = None
             self._tracks_filename = filename
+            logger.info("Track data cleared")
             return self
         if not isinstance(tracks, pd.DataFrame):
             raise TypeError(f"tracks must be a pandas DataFrame or None, got {type(tracks)}")
@@ -70,6 +75,13 @@ class StateManager:
         # New incremental logic
         self._tracks_loaded_at = datetime.datetime.utcnow()
         self._tracks_persisted = True
+        
+        # Log track data info
+        logger.info(
+            f"Track data loaded: {len(df)} points, "
+            f"{df['track_id'].nunique() if 'track_id' in df.columns else 0} tracks, "
+            f"source: {filename or 'unknown'}"
+        )
         return self
 
     def get_track_filename(self):

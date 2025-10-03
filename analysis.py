@@ -32,7 +32,7 @@ from scipy.cluster.hierarchy import fcluster, linkage
 
 def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min_track_length=5):
     """
-    Calculate mean squared displacement for particle tracks.
+    Calculate mean squared displacement for particle tracks using optimized vectorized approach.
 
     Parameters
     ----------
@@ -72,22 +72,18 @@ def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min
             continue
 
         # Convert to physical units
-        x = track['x'].values * pixel_size
-        y = track['y'].values * pixel_size
+        x = track['x'].values.astype(float) * pixel_size
+        y = track['y'].values.astype(float) * pixel_size
         frames = track['frame'].values
 
-        # Calculate MSD for different lag times
+        # Calculate MSD for different lag times using vectorized operations (OPTIMIZED)
         for lag in range(1, min(max_lag + 1, len(track))):
-            # Calculate squared displacements
-            squared_displacements = []
-
-            for i in range(len(x) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
-                squared_displacement = dx**2 + dy**2
-                squared_displacements.append(squared_displacement)
-
-            if squared_displacements:
+            # Vectorized calculation of squared displacements
+            dx = x[lag:] - x[:-lag]
+            dy = y[lag:] - y[:-lag]
+            squared_displacements = dx**2 + dy**2
+            
+            if len(squared_displacements) > 0:
                 msd = np.mean(squared_displacements)
                 lag_time = lag * frame_interval
 

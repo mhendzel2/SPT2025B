@@ -1,185 +1,137 @@
 # SPT2025B AI Coding Agent Instructions
 
 ## Project Overview
-SPT2025B is a comprehensive Single Particle Tracking analysis platform built with Streamlit. It provides advanced particle detection, tracking, and analysis capabilities for biophysical research including microrheology, diffusion analysis, and motion classification.
+SPT2025B is a Streamlit-based Single Particle Tracking analysis platform for biophysical research. It handles particle detection, tracking, diffusion analysis, microrheology, and motion classification with 25+ analysis modules.
 
-## Core Architecture
+## Critical Architecture Patterns
 
-### State Management Pattern
-The application uses a centralized state management system:
-- **StateManager** (`state_manager.py`) - Manages session state, data persistence, and cross-component communication
-- **AnalysisManager** (`analysis_manager.py`) - Handles analysis execution and result caching
-- **Data Access Utils** (`data_access_utils.py`) - Provides consistent data access with fallback mechanisms
-
-**Critical**: Always use `get_track_data()` and `get_analysis_results()` from `data_access_utils` rather than direct session state access. The system has multiple fallback mechanisms for data retrieval.
-
-### Multi-Page Architecture
-Navigation is controlled by `st.session_state.active_page` with pages including:
-- Data Loading, Analysis, Visualization, Project Management, Report Generation
-- Each page handles its own state initialization and cleanup
-- Use `navigate_to(page_name)` helper function for page transitions
-
-## Data Loading & Format Handling
-
-### Supported Formats
-The system handles diverse file formats through specialized handlers:
-- **CSV/Excel**: Standard tracking data via `data_loader.py`
-- **Specialized formats**: MVD2 (`mvd2_handler.py`), Volocity (`volocity_handler.py`), Imaris (`special_file_handlers.py`)
-- **Image formats**: TIFF stacks, PNG, JPG via `load_image_file()`
-
-### Data Pipeline
-1. Load → `format_track_data()` → Validate → `calculate_track_statistics()`
-2. All track data must have columns: `track_id`, `frame`, `x`, `y`
-3. Coordinates can be in pixels or microns (tracked via `coordinates_in_microns` flag)
-
-## Analysis System
-
-### Core Analysis Functions
-Located in `analysis.py` with standardized signatures:
+### Data Access - ALWAYS Use Utilities
+**Never access `st.session_state` directly for track data.** Use `data_access_utils.py`:
 ```python
-def analysis_function(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, **kwargs):
+from data_access_utils import get_track_data, get_analysis_results, get_units
+
+tracks_df, has_data = get_track_data()  # Returns (DataFrame, bool)
+if not has_data:
+    st.error("No data")
+    return
+```
+The system has 3-level fallback: StateManager → primary keys (`tracks_df`, `tracks_data`) → legacy keys (`raw_tracks`, `track_data`).
+
+### Analysis Function Contract
+All analysis functions in `analysis.py` follow this signature:
+```python
+def analyze_X(tracks_df, pixel_size=1.0, frame_interval=1.0, **kwargs):
     return {
-        'success': bool,
-        'data': results_dict,
-        'summary': summary_dict,
-        'figures': plotly_figures_dict
+        'success': True/False,
+        'data': {...},           # Raw results
+        'summary': {...},        # Summary statistics
+        'figures': {...}         # Plotly figure objects
     }
 ```
+**Required DataFrame columns**: `track_id`, `frame`, `x`, `y` (z optional)
 
-### Analysis Categories
-- **Diffusion**: MSD, anomalous diffusion, confined motion
-- **Motion**: Velocity, directional persistence, motion classification  
-- **Advanced**: Microrheology, clustering, anomaly detection, changepoint detection
-- **Statistical**: Comparative analysis, population analysis
-
-### Enhanced Report Generator
-The `EnhancedSPTReportGenerator` (`enhanced_report_generator.py`) provides:
-- **Analysis Selection**: Categorized with priority levels, "Select All" functionality
-- **Batch Processing**: `generate_batch_report()` for non-Streamlit environments
-- **Multiple Exports**: JSON, HTML Interactive, PDF reports
-- **Validation**: Built-in checks for data availability and analysis prerequisites
-
-## Project Management
-
-### File-Based Projects
-Projects are stored as JSON with associated CSV data files:
-- **ProjectManager** handles CRUD operations
-- **Conditions** represent experimental groups with multiple files
-- **Batch Processing** generates reports across all conditions
-- Projects support comparative analysis and statistical testing
-
-## Testing & Validation
-
-### Test Structure
-- **Standalone Scripts**: `test_*.py` files for comprehensive functionality testing
-- **Pytest Integration**: `tests/` directory for unit tests
-- **Sample Data**: Multiple CSV files in root directory for testing different scenarios
-
-### Common Test Patterns
-```python
-# Test imports first
-from enhanced_report_generator import EnhancedSPTReportGenerator
-
-# Create sample data
-tracks_df = create_sample_track_data()
-
-# Test analysis pipeline
-generator = EnhancedSPTReportGenerator()
-result = generator._analyze_basic_statistics(tracks_df, {'pixel_size': 0.1, 'frame_interval': 0.1})
-assert result.get('success'), f"Analysis failed: {result.get('error')}"
+### State Management Hierarchy
 ```
-
-## Advanced Features
-
-### Segmentation Pipeline
-- **Traditional Methods**: Otsu, watershed, adaptive thresholding in `segmentation.py`
-- **ML Methods**: CellSAM and Cellpose in `advanced_segmentation.py` (with graceful fallbacks)
-- **Enhanced Detection**: CNN-based particle detection with size filtering
-
-### External Integrations
-- **MD Simulation**: Integration with molecular dynamics data (`md_integration.py`)
-- **Tracking Libraries**: btrack, DeepTrack support (`track.py`)
-- **Scientific Libraries**: Extensive use of scikit-learn, scipy, plotly
+StateManager (state_manager.py)
+    ↓ manages
+st.session_state
+    ↓ accessed via
+data_access_utils.py (use this)
+```
+Use `get_state_manager()` singleton for centralized state operations.
 
 ## Development Workflows
 
-### Adding New Analysis
-1. Implement in `analysis.py` following standard return format
-2. Add visualization function returning plotly figure
-3. Register in `EnhancedSPTReportGenerator.available_analyses`
-4. Add test in appropriate test file
-5. Update constants and configuration as needed
+### Running the Application
+```powershell
+# Standard startup
+streamlit run app.py --server.port 5000
 
-### Error Handling
-- Use `enhanced_error_handling.py` for statistical validation
-- Always provide fallback mechanisms for optional dependencies
-- Return structured error responses: `{'success': False, 'error': 'description'}`
-
-### Performance Considerations
-- Large datasets are handled via chunking and progress bars
-- Use `st.cache_data` for expensive computations
-- Optimize with vectorized operations (numpy/pandas)
-
-## Configuration & Constants
-
-### Key Files
-- `constants.py`: All magic numbers, default parameters, session state keys
-- `config.toml`: User-editable configuration parameters
-- `requirements.txt`: Comprehensive dependency list with version constraints
-
-### Units & Conversions
-- Consistent unit handling via `unit_converter.py`
-- Default: 0.1 μm pixels, 0.1 s frame intervals
-- Use `get_current_units()` for analysis parameter passing
-
-## Common Patterns
-
-### Session State Access
-```python
-# Preferred - robust access
-tracks_df, has_data = get_track_data()
-if not has_data:
-    st.error("No track data available")
-    return
-
-# Analysis results
-analysis_results = get_analysis_results()
+# Via batch script (Windows)
+.\start.bat  # Sets up venv, installs deps, runs app on port 8501
 ```
 
-### Analysis Execution
-```python
-# Standard analysis pattern
-try:
-    result = analysis_function(tracks_df, **params)
-    if result.get('success'):
-        st.session_state.analysis_results[analysis_key] = result
-        display_results(result)
-    else:
-        st.error(f"Analysis failed: {result.get('error')}")
-except Exception as e:
-    st.error(f"Unexpected error: {str(e)}")
+### Testing Strategy
+```powershell
+# Run pytest suite
+python -m pytest tests/test_app_logic.py
+
+# Run standalone test scripts (no pytest needed)
+python test_functionality.py
+python test_report_generation.py
+python test_comprehensive.py
 ```
+Test files pattern: Root has standalone `test_*.py` scripts; `tests/` has pytest modules.
 
-### Visualization
-- Use plotly for interactive plots, matplotlib for static
-- All visualization functions should return figures, not display directly
-- Store figures in `st.session_state` for report generation
+### Adding New Analysis Module
+1. **Implement** in `analysis.py` with standardized return dict
+2. **Register** in `EnhancedSPTReportGenerator.available_analyses` (line ~200)
+3. **Add visualization** returning plotly figure (not displaying directly)
+4. **Test** with sample data (`Cell1_spots.csv` commonly used)
+5. **Update** `constants.py` if new thresholds/defaults needed
 
-## Special Considerations
+## File Format Handlers
+The system auto-detects formats via specialized handlers:
+- `data_loader.py`: CSV/Excel (generic tracking data)
+- `mvd2_handler.py`: MetaMorph MVD2 files
+- `volocity_handler.py`: Volocity XML exports
+- `special_file_handlers.py`: Imaris, MS2 spots formats
 
-### Dependency Management
-Many advanced features are optional - always check availability:
+After loading, all data passes through `format_track_data()` to normalize to `track_id`, `frame`, `x`, `y` schema.
+
+## Project Structure Conventions
+
+### Configuration Files
+- `constants.py`: All magic numbers, session state keys, thresholds (e.g., `DEFAULT_PIXEL_SIZE = 0.1`)
+- `config.toml`: Streamlit + user-editable parameters
+- `requirements.txt`: Dependency list with version pins
+
+### Units & Defaults
+- Default pixel size: **0.1 μm**
+- Default frame interval: **0.1 s**
+- Unit conversions centralized in `unit_converter.py`
+
+### Optional Dependencies Pattern
+Many features degrade gracefully if imports fail:
 ```python
 try:
     from sklearn.cluster import DBSCAN
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
+    DBSCAN = None
+
+# Later, check before use
+if SKLEARN_AVAILABLE:
+    clustering = DBSCAN().fit(data)
 ```
 
-### Cross-Platform Support
-- File paths use `os.path.join()` and `pathlib`
-- Shell commands in test scripts handle both Unix and Windows
-- Default configurations work across different environments
+## Report Generation
+`EnhancedSPTReportGenerator` (`enhanced_report_generator.py`) orchestrates multi-analysis reports:
+- **UI Mode**: `show_enhanced_report_generator()` for Streamlit
+- **Batch Mode**: `generate_batch_report()` for scripts/automation
+- **Exports**: JSON, HTML (interactive), PDF
+- **Selection**: Categorized analyses with priority levels, "Select All" presets
 
-This is a mature, production-ready application with extensive error handling, fallback mechanisms, and comprehensive testing. Focus on maintaining these patterns when extending functionality.
+## Common Pitfalls to Avoid
+
+1. **Don't** access `st.session_state.tracks_df` directly → use `get_track_data()`
+2. **Don't** display figures in analysis functions → return them for caller to display
+3. **Don't** assume optional dependencies exist → check `*_AVAILABLE` flags
+4. **Don't** hardcode units → use `get_units()` or `get_current_units()`
+5. **Don't** use `st.cache` → use `st.cache_data` for Streamlit >= 1.28
+
+## Key Directories
+- Root: Main modules, standalone test scripts, sample CSVs
+- `tests/`: Pytest-based unit tests
+- `spt_projects/`: JSON project files + associated CSVs
+- `cellpose/`, `segment_anything/`: Optional ML segmentation models
+- `external_simulators/`: Molecular dynamics integration adapters
+
+## Cross-Platform Notes
+- Windows batch: `start.bat` (PowerShell-based setup)
+- Unix shell: `run_tests.sh` (bash-based testing)
+- Path handling: Always use `os.path.join()` or `pathlib`
+- Temp files: Use `tempfile` module, not hardcoded paths
+
+This is a production system with robust error handling. Maintain fallback patterns and structured error responses when extending functionality.

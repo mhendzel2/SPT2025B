@@ -17,6 +17,11 @@ from special_file_handlers import load_trackmate_file, load_cropped_cell3_spots,
 from mvd2_handler import load_mvd2_file
 from volocity_handler import load_volocity_file
 from state_manager import StateManager
+from logging_config import get_logger
+from security_utils import SecureFileHandler
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 def validate_column_mapping(df, x_col, y_col, frame_col, track_id_col):
@@ -290,7 +295,7 @@ def _remove_units_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_tracks_file(file) -> pd.DataFrame:
     """
-    Load track data from various file formats.
+    Load track data from various file formats with security validation.
     
     Parameters
     ----------
@@ -302,7 +307,21 @@ def load_tracks_file(file) -> pd.DataFrame:
     pd.DataFrame
         DataFrame containing the track data
     """
-    file_extension = os.path.splitext(file.name)[1].lower()
+    try:
+        # Validate filename
+        safe_filename = SecureFileHandler.validate_filename(file.name)
+        logger.info(f"Loading track file: {safe_filename}")
+        
+        # Validate file size
+        SecureFileHandler.validate_file_size(file)
+        
+        file_extension = os.path.splitext(file.name)[1].lower()
+        logger.debug(f"File extension: {file_extension}, Size: {file.size / 1024:.1f} KB")
+        
+    except ValueError as e:
+        logger.error(f"File validation failed: {e}")
+        st.error(f"File validation failed: {e}")
+        return pd.DataFrame()
     
     # For Excel files
     if file_extension in ['.xlsx', '.xls']:
