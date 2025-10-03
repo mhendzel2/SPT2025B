@@ -59,6 +59,10 @@ from analysis_manager import AnalysisManager
 from config_manager import get_config_manager
 from channel_manager import channel_manager
 
+# Import unified settings panel and progress utilities
+from settings_panel import get_settings_panel, get_global_units
+from progress_utils import AnalysisProgress, MultiStepProgress, SimpleProgress
+
 # Import new page modules for multi-page architecture
 import importlib
 
@@ -832,45 +836,37 @@ if "pixel_size" not in st.session_state:
 if "frame_interval" not in st.session_state:
     st.session_state.frame_interval = DEFAULT_FRAME_INTERVAL
 
-# Unit settings in sidebar
-with st.sidebar.expander("Unit Settings"):
-    # Spatial units
-    st.subheader("Spatial Units")
+# Unified Settings Panel (replaces redundant unit controls)
+try:
+    settings_panel = get_settings_panel()
+    settings_panel.show_compact_sidebar()
     
-    # Use single source of truth for parameters
-    st.session_state.pixel_size = st.number_input(
-        "Pixel Size", 
-        min_value=0.001, 
-        max_value=10.0, 
-        value=st.session_state.pixel_size,
-        step=0.01,
-        key="global_pixel_size",
-        help="Size of each pixel in micrometers (μm)"
-    )
-    
-    # Temporal units
-    st.subheader("Temporal Units")
-    
-    st.session_state.frame_interval = st.number_input(
-        "Frame Interval", 
-        min_value=0.001, 
-        max_value=10.0, 
-        value=st.session_state.frame_interval,
-        step=0.01,
-        key="global_frame_interval",
-        help="Time between frames in seconds (s)"
-    )
-    # Update unit converter with session state values
+    # Sync settings with session state for backward compatibility
+    global_units = get_global_units()
+    st.session_state.pixel_size = global_units['pixel_size']
+    st.session_state.frame_interval = global_units['frame_interval']
     st.session_state.unit_converter.set_pixel_size(st.session_state.pixel_size)
     st.session_state.unit_converter.set_frame_interval(st.session_state.frame_interval)
-    
-    # Add an apply button to force update unit settings across the app 
-    if st.button("Apply Unit Settings to All Analyses"):
-        # Ensure unit converter is synchronized
+except Exception as e:
+    # Fallback to manual unit settings if settings panel fails
+    st.sidebar.warning(f"Settings panel unavailable: {e}")
+    with st.sidebar.expander("Unit Settings"):
+        st.session_state.pixel_size = st.number_input(
+            "Pixel Size (μm)", 
+            min_value=0.001, 
+            max_value=10.0, 
+            value=st.session_state.pixel_size,
+            step=0.01
+        )
+        st.session_state.frame_interval = st.number_input(
+            "Frame Interval (s)", 
+            min_value=0.001, 
+            max_value=10.0, 
+            value=st.session_state.frame_interval,
+            step=0.01
+        )
         st.session_state.unit_converter.set_pixel_size(st.session_state.pixel_size)
         st.session_state.unit_converter.set_frame_interval(st.session_state.frame_interval)
-        st.sidebar.success("Unit settings applied to all analyses!")
-        st.rerun()
 
 # Show system limits for clarity across machines
 with st.sidebar.expander("System Limits"):
