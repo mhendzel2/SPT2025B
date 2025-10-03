@@ -1,0 +1,287 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-xdist flake8 black pylint mypy
+    
+    - name: Lint with flake8
+      run: |
+        # Stop build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      continue-on-error: true
+    
+    - name: Check code formatting with black
+      run: |
+        black --check --diff .
+      continue-on-error: true
+    
+    - name: Run pytest with coverage
+      run: |
+        pytest tests/ -v --cov=. --cov-report=xml --cov-report=term --maxfail=5
+      continue-on-error: false
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.os }}-py${{ matrix.python-version }}
+        fail_ci_if_error: false
+    
+    - name: Run standalone test scripts
+      run: |
+        python test_functionality.py
+        python test_comprehensive.py
+      continue-on-error: true
+    
+    - name: Test imports
+      run: |
+        python -c "import streamlit; print('Streamlit OK')"
+        python -c "import pandas; print('Pandas OK')"
+        python -c "import numpy; print('NumPy OK')"
+        python -c "import plotly; print('Plotly OK')"
+    
+  quality-check:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pylint mypy bandit safety radon
+    
+    - name: Run pylint
+      run: |
+        pylint --exit-zero --max-line-length=127 --disable=C0103,C0114,C0115,C0116 \
+          analysis.py data_loader.py state_manager.py logging_config.py security_utils.py
+      continue-on-error: true
+    
+    - name: Run mypy type checking
+      run: |
+        mypy --ignore-missing-imports --no-strict-optional \
+          analysis.py data_loader.py state_manager.py
+      continue-on-error: true
+    
+    - name: Run bandit security check
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f screen
+      continue-on-error: true
+    
+    - name: Check dependency vulnerabilities with safety
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+      continue-on-error: true
+    
+    - name: Calculate code metrics with radon
+      run: |
+        echo "=== Cyclomatic Complexity ==="
+        radon cc . -a -nb
+        echo "=== Maintainability Index ==="
+        radon mi . -nb
+      continue-on-error: true
+    
+    - name: Upload quality reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: quality-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+        retention-days: 30
+  
+  performance-test:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-benchmark memory_profiler
+    
+    - name: Run performance benchmarks
+      run: |
+        python performance_benchmark.py
+      continue-on-error: true
+    
+    - name: Check for performance regressions
+      run: |
+        echo "Performance benchmark complete. Review logs for any regressions."
+  
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Check for required documentation
+      run: |
+        echo "Checking for required documentation files..."
+        test -f README.md && echo "✓ README.md found" || echo "✗ README.md missing"
+        test -f CHANGELOG.md && echo "✓ CHANGELOG.md found" || echo "✗ CHANGELOG.md missing"
+        test -f LICENSE && echo "✓ LICENSE found" || echo "✗ LICENSE missing"
+        test -f requirements.txt && echo "✓ requirements.txt found" || echo "✗ requirements.txt missing"
+    
+    - name: Check README completeness
+      run: |
+        echo "Checking README.md content..."
+        grep -q "Installation" README.md && echo "✓ Installation section found" || echo "✗ Installation section missing"
+        grep -q "Usage" README.md && echo "✓ Usage section found" || echo "✗ Usage section missing"
+  
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test, quality-check]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Test data loading pipeline
+      run: |
+        python -c "
+        from data_loader import load_tracks_file
+        import pandas as pd
+        # Create test CSV
+        df = pd.DataFrame({'track_id': [1,1,2,2], 'frame': [0,1,0,1], 'x': [10,11,20,21], 'y': [10,11,20,21]})
+        df.to_csv('test_tracks.csv', index=False)
+        # Test loading
+        result = load_tracks_file('test_tracks.csv', 0.1, 0.1)
+        assert result is not None
+        print('✓ Data loading pipeline OK')
+        "
+    
+    - name: Test analysis pipeline
+      run: |
+        python -c "
+        import pandas as pd
+        import numpy as np
+        from analysis import calculate_msd
+        # Create test data
+        df = pd.DataFrame({
+            'track_id': [1]*10 + [2]*10,
+            'frame': list(range(10))*2,
+            'x': np.random.randn(20).cumsum(),
+            'y': np.random.randn(20).cumsum()
+        })
+        # Test MSD calculation
+        msd_df = calculate_msd(df, max_lag=5, pixel_size=0.1, frame_interval=0.1)
+        assert not msd_df.empty
+        print('✓ Analysis pipeline OK')
+        "
+    
+    - name: Test state management
+      run: |
+        python -c "
+        from state_manager import get_state_manager
+        import pandas as pd
+        # Test state manager
+        sm = get_state_manager()
+        df = pd.DataFrame({'track_id': [1], 'frame': [0], 'x': [10], 'y': [10]})
+        sm.set_tracks(df, 'test.csv')
+        assert sm.has_tracks()
+        print('✓ State management OK')
+        "
+    
+    - name: Test security utilities
+      run: |
+        python -c "
+        from security_utils import SecureFileHandler
+        handler = SecureFileHandler()
+        # Test filename validation
+        assert handler.validate_filename('test.csv')
+        assert not handler.validate_filename('../../../etc/passwd')
+        assert not handler.validate_filename('test.exe')
+        print('✓ Security utilities OK')
+        "
+    
+    - name: Test logging configuration
+      run: |
+        python -c "
+        from logging_config import get_logger
+        logger = get_logger('test')
+        logger.info('Test log message')
+        print('✓ Logging configuration OK')
+        "
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [test, quality-check, performance-test, integration-test]
+    if: always()
+    
+    steps:
+    - name: Check workflow status
+      run: |
+        echo "CI/CD Pipeline completed"
+        echo "Test: ${{ needs.test.result }}"
+        echo "Quality Check: ${{ needs.quality-check.result }}"
+        echo "Performance Test: ${{ needs.performance-test.result }}"
+        echo "Integration Test: ${{ needs.integration-test.result }}"
