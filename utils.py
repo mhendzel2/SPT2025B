@@ -503,47 +503,21 @@ def calculate_track_statistics(tracks_df: pd.DataFrame) -> pd.DataFrame:
 
 def calculate_msd_single_track(track_data: pd.DataFrame, max_lag: int = 10) -> List[float]:
     """
+    DEPRECATED: Use msd_calculation.calculate_msd_single_track() instead.
+    
     Calculate mean squared displacement for a single track.
-
-    Parameters
-    ----------
-    track_data : pd.DataFrame
-        DataFrame containing a single track's data
-    max_lag : int
-        Maximum lag time to calculate MSD
-
-    Returns
-    -------
-    list
-        List of MSD values for each lag time
+    This function is maintained for backwards compatibility.
     """
-    n_frames = len(track_data)
-    msd_values = []
-
-    # Sort by frame
-    track_data = track_data.sort_values('frame')
-    x = track_data['x'].values
-    y = track_data['y'].values
-
-    # Calculate MSD for each lag time
-    for lag in range(max_lag + 1):
-        if lag == 0:
-            msd_values.append(0.0)  # MSD is 0 at lag 0
-        else:
-            # Calculate squared displacements for all pairs of points separated by lag
-            sd = []
-            for i in range(n_frames - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
-                sd.append(dx**2 + dy**2)
-
-            # Calculate mean of squared displacements
-            if sd:
-                msd_values.append(np.mean(sd))
-            else:
-                msd_values.append(np.nan)
-
-    return msd_values
+    from msd_calculation import calculate_msd_single_track as msd_calc
+    
+    # Convert to DataFrame format expected by new function
+    result_df = msd_calc(track_data, max_lag=max_lag)
+    
+    # Convert back to list format for compatibility
+    if result_df.empty:
+        return [np.nan] * (max_lag + 1)
+    
+    return result_df['msd'].tolist()
 
 def convert_to_excel_bytes(df: pd.DataFrame) -> bytes:
     """

@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import datetime
 from logging_config import get_logger
+from bounded_cache import get_results_cache
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -234,16 +235,31 @@ class StateManager:
         return st.session_state.get('detections', None)
 
     def get_analysis_results(self, analysis_type: str = None) -> Dict[str, Any]:
-        """Get analysis results."""
+        """Get analysis results from bounded cache."""
+        cache = get_results_cache()
+        
         if analysis_type:
-            return st.session_state.analysis_results.get(analysis_type, {})
-        return st.session_state.analysis_results
+            result = cache.get(analysis_type)
+            return result if result is not None else {}
+        
+        # Return all cached results as dict
+        return {key: cache.cache[key] for key in cache.cache.keys()}
 
     def set_analysis_results(self, analysis_type: str, results: Dict[str, Any]):
-        """Store analysis results."""
+        """Store analysis results in bounded cache with LRU eviction."""
+        cache = get_results_cache()
+        cache.set(analysis_type, results)
+        
+        # Also update session_state for backwards compatibility
         if 'analysis_results' not in st.session_state:
             st.session_state.analysis_results = {}
         st.session_state.analysis_results[analysis_type] = results
+        
+        # Log cache statistics
+        stats = cache.get_stats()
+        logger.debug(f"Analysis results cached: {analysis_type}, "
+                    f"cache size: {stats['size']}/{stats['max_items']}, "
+                    f"memory: {stats['memory_mb']:.1f}MB")
 
     def get_project_id(self) -> Optional[str]:
         """Get current project ID."""
@@ -327,8 +343,16 @@ class StateManager:
         st.session_state.analysis_results = {}
 
     def clear_analysis_results(self):
-        """Clear analysis results."""
+        """Clear analysis results from bounded cache and session state."""
+        cache = get_results_cache()
+        cache.clear()
         st.session_state.analysis_results = {}
+        logger.info("Analysis results cache cleared")
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get analysis results cache statistics."""
+        cache = get_results_cache()
+        return cache.get_stats()
 
     def get_data_summary(self) -> Dict[str, Any]:
         """Get a summary of current data state."""

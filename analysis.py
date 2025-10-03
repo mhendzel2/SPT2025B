@@ -27,75 +27,12 @@ except Exception:  # Optional dependencies
     DBSCAN = KMeans = OPTICS = GaussianMixture = KDTree = NearestNeighbors = None
 from scipy.cluster.hierarchy import fcluster, linkage
 
+# Import consolidated MSD calculation (single source of truth)
+from msd_calculation import calculate_msd, calculate_msd_ensemble, fit_msd_linear
+
 
 # --- Diffusion Analysis ---
-
-def calculate_msd(tracks_df, max_lag=20, pixel_size=1.0, frame_interval=1.0, min_track_length=5):
-    """
-    Calculate mean squared displacement for particle tracks using optimized vectorized approach.
-
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
-    max_lag : int
-        Maximum lag time to calculate MSD for
-    pixel_size : float
-        Pixel size in micrometers
-    frame_interval : float
-        Frame interval in seconds
-    min_track_length : int
-        Minimum track length to include in analysis
-
-    Returns
-    -------
-    pd.DataFrame
-        MSD data with columns 'track_id', 'lag_time', 'msd', 'n_points'
-    """
-    # Validate input
-    if tracks_df is None or tracks_df.empty:
-        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
-
-    required_columns = ['track_id', 'frame', 'x', 'y']
-    if not all(col in tracks_df.columns for col in required_columns):
-        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
-
-    msd_results = []
-
-    # Group by track_id
-    for track_id, track_data in tracks_df.groupby('track_id'):
-        # Sort by frame
-        track = track_data.sort_values('frame').copy()
-
-        # Skip short tracks
-        if len(track) < min_track_length:
-            continue
-
-        # Convert to physical units
-        x = track['x'].values.astype(float) * pixel_size
-        y = track['y'].values.astype(float) * pixel_size
-        frames = track['frame'].values
-
-        # Calculate MSD for different lag times using vectorized operations (OPTIMIZED)
-        for lag in range(1, min(max_lag + 1, len(track))):
-            # Vectorized calculation of squared displacements
-            dx = x[lag:] - x[:-lag]
-            dy = y[lag:] - y[:-lag]
-            squared_displacements = dx**2 + dy**2
-            
-            if len(squared_displacements) > 0:
-                msd = np.mean(squared_displacements)
-                lag_time = lag * frame_interval
-
-                msd_results.append({
-                    'track_id': track_id,
-                    'lag_time': lag_time,
-                    'msd': msd,
-                    'n_points': len(squared_displacements)
-                })
-
-    return pd.DataFrame(msd_results)
-
+# Note: calculate_msd is now imported from msd_calculation.py (consolidated module)
 
 def calculate_velocity(tracks_df: pd.DataFrame, 
                       pixel_size: float = 1.0, 
