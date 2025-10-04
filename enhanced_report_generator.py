@@ -239,9 +239,25 @@ class EnhancedSPTReportGenerator:
         if BIOPHYSICAL_MODELS_AVAILABLE:
             self.available_analyses['polymer_physics'] = {
                 'name': 'Polymer Physics Models',
-                'description': 'Rouse dynamics, chromatin fiber analysis.',
+                'description': 'Rouse model fitting, scaling exponent analysis.',
                 'function': self._analyze_polymer_physics,
                 'visualization': self._plot_polymer_physics,
+                'category': 'Biophysical Models',
+                'priority': 4
+            }
+            self.available_analyses['energy_landscape'] = {
+                'name': 'Energy Landscape Mapping',
+                'description': 'Spatial potential energy from particle density distribution.',
+                'function': self._analyze_energy_landscape,
+                'visualization': self._plot_energy_landscape,
+                'category': 'Biophysical Models',
+                'priority': 4
+            }
+            self.available_analyses['active_transport'] = {
+                'name': 'Active Transport Detection',
+                'description': 'Directional motion segments, transport mode classification.',
+                'function': self._analyze_active_transport,
+                'visualization': self._plot_active_transport,
                 'category': 'Biophysical Models',
                 'priority': 4
             }
@@ -1029,19 +1045,56 @@ class EnhancedSPTReportGenerator:
         return _empty_fig("Intensity analysis not yet implemented.")
 
     def _analyze_polymer_physics(self, tracks_df, current_units):
-        """Full implementation for polymer physics analysis."""
+        """Enhanced polymer physics analysis with model specification."""
         try:
             from analysis import analyze_polymer_physics
+            from biophysical_models import PolymerPhysicsModel
+            import pandas as pd
 
+            # Get general polymer analysis with scaling exponent
             polymer_results = analyze_polymer_physics(
                 tracks_df,
                 pixel_size=current_units.get('pixel_size', 1.0),
                 frame_interval=current_units.get('frame_interval', 1.0)
             )
-            # Normalize structure and avoid ambiguous truth-value on DataFrames
+            
+            # Normalize structure
             if isinstance(polymer_results, dict):
                 polymer_results.setdefault('success', 'error' not in polymer_results)
-                # Some fields may be numpy arrays; ensure serializable where possible in report JSON path
+                
+                # If MSD data available, fit specific polymer models
+                if polymer_results.get('success') and 'msd_data' in polymer_results and 'lag_times' in polymer_results:
+                    try:
+                        msd_df = pd.DataFrame({
+                            'lag_time': polymer_results['lag_times'],
+                            'msd': polymer_results['msd_data']
+                        })
+                        
+                        model = PolymerPhysicsModel(
+                            msd_data=msd_df,
+                            pixel_size=current_units.get('pixel_size', 1.0),
+                            frame_interval=current_units.get('frame_interval', 1.0)
+                        )
+                        
+                        # Fit Rouse model (fixed α=0.5)
+                        rouse_fixed = model.fit_rouse_model(fit_alpha=False)
+                        
+                        # Fit power law (variable α)
+                        rouse_variable = model.fit_rouse_model(fit_alpha=True)
+                        
+                        # Add model fits to results
+                        polymer_results['fitted_models'] = {
+                            'rouse_fixed_alpha': rouse_fixed,
+                            'power_law_fit': rouse_variable,
+                            'primary_model': polymer_results.get('regime', 'Unknown')
+                        }
+                        
+                        # Add model description to summary
+                        polymer_results['model_description'] = f"Detected regime: {polymer_results.get('regime', 'Unknown')} (α={polymer_results.get('scaling_exponent', 'N/A'):.3f})"
+                        
+                    except Exception as model_error:
+                        polymer_results['model_fit_error'] = str(model_error)
+                
                 return polymer_results
             return {'success': False, 'error': 'Unexpected polymer physics result format'}
         except Exception as e:
@@ -1057,6 +1110,169 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             fig = go.Figure()
             fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+
+    def _analyze_energy_landscape(self, tracks_df, current_units):
+        """Analyze energy landscape from particle trajectories."""
+        try:
+            from biophysical_models import EnergyLandscapeMapper
+            
+            mapper = EnergyLandscapeMapper(
+                tracks_df,
+                pixel_size=current_units.get('pixel_size', 1.0),
+                temperature=300.0  # Room temperature in Kelvin
+            )
+            
+            result = mapper.map_energy_landscape(
+                resolution=30,
+                method='boltzmann',
+                smoothing=1.0,
+                normalize=True
+            )
+            
+            return result
+        except Exception as e:
+            return {'error': str(e), 'success': False}
+
+    def _plot_energy_landscape(self, result):
+        """Visualize energy landscape as heatmap."""
+        try:
+            if not result.get('success', False):
+                from visualization import _empty_fig
+                return _empty_fig(f"Energy landscape mapping failed: {result.get('error', 'Unknown error')}")
+            
+            potential_map = result.get('potential')
+            x_edges = result.get('x_edges')
+            y_edges = result.get('y_edges')
+            
+            if potential_map is None or x_edges is None or y_edges is None:
+                from visualization import _empty_fig
+                return _empty_fig("Energy landscape data incomplete")
+            
+            # Create heatmap
+            fig = go.Figure()
+            
+            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+            
+            fig.add_trace(go.Heatmap(
+                z=potential_map.T,
+                x=x_centers,
+                y=y_centers,
+                colorscale='Viridis',
+                colorbar=dict(title='Energy (kBT)'),
+                hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>Energy: %{z:.2f} kBT<extra></extra>'
+            ))
+            
+            fig.update_layout(
+                title='Energy Landscape (Boltzmann Inversion)',
+                xaxis_title='x position (μm)',
+                yaxis_title='y position (μm)',
+                height=500,
+                width=600
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {e}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+
+    def _analyze_active_transport(self, tracks_df, current_units):
+        """Analyze active transport characteristics."""
+        try:
+            from biophysical_models import ActiveTransportAnalyzer
+            
+            analyzer = ActiveTransportAnalyzer(
+                tracks_df,
+                pixel_size=current_units.get('pixel_size', 1.0),
+                frame_interval=current_units.get('frame_interval', 1.0)
+            )
+            
+            # Detect directional motion segments
+            segments_result = analyzer.detect_directional_motion_segments(
+                min_segment_length=5,
+                straightness_threshold=0.7,
+                velocity_threshold=0.05  # μm/s
+            )
+            
+            # Characterize transport modes if segments found
+            if segments_result.get('success', False) and segments_result.get('total_segments', 0) > 0:
+                modes_result = analyzer.characterize_transport_modes()
+                
+                return {
+                    'success': True,
+                    'segments': segments_result,
+                    'transport_modes': modes_result,
+                    'summary': {
+                        'total_segments': segments_result['total_segments'],
+                        'mode_fractions': modes_result.get('mode_fractions', {}),
+                        'mean_velocity': modes_result.get('mean_velocity', 0.0),
+                        'mean_straightness': modes_result.get('mean_straightness', 0.0)
+                    }
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'No directional motion segments detected with current thresholds'
+                }
+            
+        except Exception as e:
+            return {'error': str(e), 'success': False}
+
+    def _plot_active_transport(self, result):
+        """Visualize active transport mode distribution."""
+        try:
+            if not result.get('success', False):
+                from visualization import _empty_fig
+                return _empty_fig(f"Active transport detection failed: {result.get('error', 'Unknown error')}")
+            
+            transport_modes = result.get('transport_modes', {})
+            mode_fractions = transport_modes.get('mode_fractions', {})
+            
+            if not mode_fractions:
+                from visualization import _empty_fig
+                return _empty_fig("No transport modes detected")
+            
+            # Create pie chart showing mode distribution
+            fig = go.Figure()
+            
+            labels = [f"{k.replace('_', ' ').title()}" for k in mode_fractions.keys()]
+            values = list(mode_fractions.values())
+            
+            fig.add_trace(go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.3,
+                marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA']),
+                textinfo='label+percent',
+                hovertemplate='%{label}<br>Fraction: %{value:.2%}<extra></extra>'
+            ))
+            
+            # Add summary text
+            summary = result.get('summary', {})
+            mean_vel = summary.get('mean_velocity', 0)
+            mean_straight = summary.get('mean_straightness', 0)
+            total_segs = summary.get('total_segments', 0)
+            
+            fig.update_layout(
+                title=f'Transport Mode Distribution<br><sub>{total_segs} segments analyzed | Mean velocity: {mean_vel:.3f} μm/s | Mean straightness: {mean_straight:.2f}</sub>',
+                height=450,
+                showlegend=True
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {e}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
             return fig
 
     def generate_batch_report(self, tracks_df, selected_analyses, condition_name):
