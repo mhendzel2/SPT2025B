@@ -71,19 +71,68 @@ class Condition:
         c.files = list(d.get('files', []))
         return c
 
-    def pool_tracks(self) -> pd.DataFrame:
-        pooled = []
-        for f in self.files:
-            try:
-                if 'data' in f and f['data'] is not None:
-                    df = pd.read_csv(io.BytesIO(f['data']))
-                    pooled.append(df)
-                elif 'data_path' in f and f['data_path'] and os.path.exists(f['data_path']):
-                    df = pd.read_csv(f['data_path'])
-                    pooled.append(df)
-            except Exception:
-                continue
-        return pd.concat(pooled, ignore_index=True) if pooled else pd.DataFrame()
+    def pool_tracks(self, max_workers: int = 4, 
+                    show_progress: bool = True,
+                    validate: bool = True) -> Tuple[pd.DataFrame, List[Dict]]:
+        """
+        Pool tracks from all files with parallel processing.
+        
+        Parameters
+        ----------
+        max_workers : int, default 4
+            Maximum number of parallel workers
+        show_progress : bool, default True
+            Show progress bar (requires streamlit)
+        validate : bool, default True
+            Validate and deduplicate pooled data
+        
+        Returns
+        -------
+        Tuple[pd.DataFrame, List[Dict]]
+            (pooled_dataframe, list_of_errors)
+        """
+        try:
+            from batch_processing_utils import parallel_process_files, pool_dataframes_efficiently, load_file_with_retry
+            
+            # Process files in parallel
+            dataframes, errors = parallel_process_files(
+                self.files,
+                load_file_with_retry,
+                max_workers=max_workers,
+                show_progress=show_progress,
+                use_threads=True
+            )
+            
+            # Pool DataFrames efficiently
+            result = pool_dataframes_efficiently(
+                dataframes,
+                validate=validate,
+                deduplicate=True
+            )
+            
+            return result, errors
+            
+        except ImportError:
+            # Fallback to original sequential implementation
+            pooled = []
+            errors = []
+            for f in self.files:
+                try:
+                    if 'data' in f and f['data'] is not None:
+                        df = pd.read_csv(io.BytesIO(f['data']))
+                        pooled.append(df)
+                    elif 'data_path' in f and f['data_path'] and os.path.exists(f['data_path']):
+                        df = pd.read_csv(f['data_path'])
+                        pooled.append(df)
+                except Exception as e:
+                    errors.append({
+                        'file': f.get('file_name', 'unknown'),
+                        'error': str(e)
+                    })
+                    continue
+            
+            result = pd.concat(pooled, ignore_index=True) if pooled else pd.DataFrame()
+            return result, errors
 
     def compare_conditions(self, metric: str = "diffusion_coefficient", 
                           test_type: str = "auto", alpha: float = 0.05) -> Dict[str, Any]:
