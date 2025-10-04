@@ -314,9 +314,12 @@ class AdvancedBiophysicalReportExtension:
             
             fig = go.Figure()
             
+            # Handle both 'VACF' (from advanced_biophysical_metrics.py) and 'vacf' column names
+            vacf_col = 'VACF' if 'VACF' in vacf_df.columns else 'vacf'
+            
             fig.add_trace(go.Scatter(
                 x=vacf_df['lag'],
-                y=vacf_df['vacf'],
+                y=vacf_df[vacf_col],
                 mode='lines+markers',
                 marker=dict(size=8, color='steelblue'),
                 line=dict(width=2)
