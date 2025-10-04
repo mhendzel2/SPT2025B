@@ -888,22 +888,269 @@ class EnhancedSPTReportGenerator:
             return _empty_fig("Changepoint visualization unavailable")
 
     def _analyze_velocity_correlation(self, tracks_df, current_units):
-        """Placeholder for velocity correlation analysis."""
-        return {'success': True, 'message': 'Velocity correlation analysis not yet implemented.'}
+        """Analyze velocity autocorrelation function (VACF) for tracks."""
+        try:
+            from ornstein_uhlenbeck_analyzer import calculate_vacf, fit_vacf
+            
+            # Calculate VACF for all tracks
+            vacf_df = calculate_vacf(
+                tracks_df,
+                pixel_size=current_units.get('pixel_size', 1.0),
+                frame_interval=current_units.get('frame_interval', 1.0)
+            )
+            
+            if vacf_df.empty:
+                return {'success': False, 'error': 'No VACF data could be calculated'}
+            
+            # Fit exponential decay to extract persistence time
+            try:
+                fit_results_df = fit_vacf(vacf_df)
+                has_fits = not fit_results_df.empty
+            except Exception:
+                fit_results_df = pd.DataFrame()
+                has_fits = False
+            
+            # Calculate ensemble average VACF
+            ensemble_vacf = vacf_df.groupby('lag')['vacf'].mean().reset_index()
+            
+            # Calculate persistence time from ensemble VACF
+            persistence_time = None
+            if len(ensemble_vacf) > 2:
+                # Find where VACF drops to 1/e of initial value
+                initial_vacf = ensemble_vacf['vacf'].iloc[0]
+                target_vacf = initial_vacf / np.e
+                
+                # Find crossing point
+                for i in range(len(ensemble_vacf) - 1):
+                    if ensemble_vacf['vacf'].iloc[i] >= target_vacf >= ensemble_vacf['vacf'].iloc[i+1]:
+                        persistence_time = ensemble_vacf['lag'].iloc[i]
+                        break
+            
+            return {
+                'success': True,
+                'vacf_by_track': vacf_df,
+                'ensemble_vacf': ensemble_vacf,
+                'fit_results': fit_results_df if has_fits else None,
+                'persistence_time': persistence_time,
+                'summary': {
+                    'n_tracks': tracks_df['track_id'].nunique(),
+                    'persistence_time_s': persistence_time if persistence_time else np.nan,
+                    'initial_vacf': ensemble_vacf['vacf'].iloc[0] if len(ensemble_vacf) > 0 else np.nan
+                }
+            }
+        except Exception as e:
+            return {'error': str(e), 'success': False}
 
     def _plot_velocity_correlation(self, result):
-        """Placeholder for velocity correlation visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        """Visualize velocity autocorrelation function."""
+        try:
+            if not result.get('success', False):
+                from visualization import _empty_fig
+                return _empty_fig(f"Velocity correlation failed: {result.get('error', 'Unknown error')}")
+            
+            ensemble_vacf = result.get('ensemble_vacf')
+            persistence_time = result.get('persistence_time')
+            
+            if ensemble_vacf is None or ensemble_vacf.empty:
+                from visualization import _empty_fig
+                return _empty_fig("No VACF data available")
+            
+            # Create figure
+            fig = go.Figure()
+            
+            # Plot ensemble VACF
+            fig.add_trace(go.Scatter(
+                x=ensemble_vacf['lag'],
+                y=ensemble_vacf['vacf'],
+                mode='lines+markers',
+                name='Ensemble VACF',
+                line=dict(color='steelblue', width=2),
+                marker=dict(size=6)
+            ))
+            
+            # Add horizontal line at 1/e if persistence time found
+            if persistence_time is not None:
+                initial_vacf = ensemble_vacf['vacf'].iloc[0]
+                fig.add_hline(
+                    y=initial_vacf / np.e,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"τ = {persistence_time:.2f} s"
+                )
+            
+            # Add zero line
+            fig.add_hline(y=0, line_dash="dot", line_color="gray")
+            
+            fig.update_layout(
+                title='Velocity Autocorrelation Function',
+                xaxis_title='Lag Time (s)',
+                yaxis_title='VACF (μm²/s²)',
+                height=400,
+                showlegend=True
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {e}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
 
     def _analyze_particle_interactions(self, tracks_df, current_units):
-        """Placeholder for particle interaction analysis."""
-        return {'success': True, 'message': 'Particle interaction analysis not yet implemented.'}
+        """Analyze particle-particle interactions via nearest neighbor distances."""
+        try:
+            from sklearn.neighbors import NearestNeighbors
+            
+            pixel_size = current_units.get('pixel_size', 1.0)
+            frame_interval = current_units.get('frame_interval', 1.0)
+            
+            # Group by frame to analyze spatial correlations
+            frame_stats = []
+            nn_distances_all = []
+            
+            for frame_num, frame_data in tracks_df.groupby('frame'):
+                if len(frame_data) < 2:
+                    continue
+                
+                # Get positions in micrometers
+                positions = frame_data[['x', 'y']].values * pixel_size
+                
+                # Calculate nearest neighbor distances
+                if len(positions) >= 2:
+                    nn = NearestNeighbors(n_neighbors=min(2, len(positions)))
+                    nn.fit(positions)
+                    distances, indices = nn.kneighbors(positions)
+                    
+                    # First column is self (distance 0), second is nearest neighbor
+                    if distances.shape[1] > 1:
+                        nn_dist = distances[:, 1]  # Nearest neighbor distances
+                        nn_distances_all.extend(nn_dist)
+                        
+                        frame_stats.append({
+                            'frame': frame_num,
+                            'n_particles': len(positions),
+                            'mean_nn_distance': float(np.mean(nn_dist)),
+                            'median_nn_distance': float(np.median(nn_dist)),
+                            'min_nn_distance': float(np.min(nn_dist)),
+                            'density': len(positions) / (np.ptp(positions[:, 0]) * np.ptp(positions[:, 1]) + 1e-10)
+                        })
+            
+            if not frame_stats:
+                return {'success': False, 'error': 'Not enough particles in any frame for interaction analysis'}
+            
+            frame_stats_df = pd.DataFrame(frame_stats)
+            
+            # Overall statistics
+            nn_distances_all = np.array(nn_distances_all)
+            
+            # Detect potential interaction events (very close approaches)
+            interaction_threshold = np.percentile(nn_distances_all, 10)  # Bottom 10% of distances
+            n_close_approaches = np.sum(nn_distances_all < interaction_threshold)
+            
+            return {
+                'success': True,
+                'frame_stats': frame_stats_df,
+                'nn_distances': nn_distances_all,
+                'interaction_threshold': float(interaction_threshold),
+                'summary': {
+                    'n_frames_analyzed': len(frame_stats),
+                    'mean_nn_distance_um': float(np.mean(nn_distances_all)),
+                    'median_nn_distance_um': float(np.median(nn_distances_all)),
+                    'min_nn_distance_um': float(np.min(nn_distances_all)),
+                    'max_nn_distance_um': float(np.max(nn_distances_all)),
+                    'interaction_threshold_um': float(interaction_threshold),
+                    'n_close_approaches': int(n_close_approaches),
+                    'mean_particles_per_frame': float(frame_stats_df['n_particles'].mean())
+                }
+            }
+        except Exception as e:
+            return {'error': str(e), 'success': False}
 
     def _plot_particle_interactions(self, result):
-        """Placeholder for particle interaction visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Not implemented")
+        """Visualize particle interaction analysis."""
+        try:
+            if not result.get('success', False):
+                from visualization import _empty_fig
+                return _empty_fig(f"Particle interaction analysis failed: {result.get('error', 'Unknown error')}")
+            
+            nn_distances = result.get('nn_distances')
+            interaction_threshold = result.get('interaction_threshold')
+            
+            if nn_distances is None or len(nn_distances) == 0:
+                from visualization import _empty_fig
+                return _empty_fig("No nearest neighbor distance data available")
+            
+            from plotly.subplots import make_subplots
+            
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=('Nearest Neighbor Distance Distribution', 'Distance vs Time')
+            )
+            
+            # Histogram of NN distances
+            fig.add_trace(
+                go.Histogram(
+                    x=nn_distances,
+                    nbinsx=50,
+                    name='NN Distance',
+                    marker_color='steelblue',
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
+            
+            # Add interaction threshold line
+            if interaction_threshold is not None:
+                fig.add_vline(
+                    x=interaction_threshold,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text="Interaction threshold",
+                    row=1, col=1
+                )
+            
+            # Time series of mean NN distance
+            frame_stats = result.get('frame_stats')
+            if frame_stats is not None and not frame_stats.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=frame_stats['frame'],
+                        y=frame_stats['mean_nn_distance'],
+                        mode='lines+markers',
+                        name='Mean NN Distance',
+                        line=dict(color='coral', width=2),
+                        showlegend=False
+                    ),
+                    row=1, col=2
+                )
+            
+            fig.update_xaxes(title_text="Distance (um)", row=1, col=1)
+            fig.update_yaxes(title_text="Count", row=1, col=1)
+            fig.update_xaxes(title_text="Frame", row=1, col=2)
+            fig.update_yaxes(title_text="Mean NN Distance (um)", row=1, col=2)
+            
+            summary = result.get('summary', {})
+            mean_dist = summary.get('mean_nn_distance_um', 0)
+            n_interactions = summary.get('n_close_approaches', 0)
+            
+            fig.update_layout(
+                title=f'Particle Interactions Analysis<br><sub>Mean NN distance: {mean_dist:.2f} um | Close approaches: {n_interactions}</sub>',
+                height=400,
+                showlegend=False
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {e}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
 
     def _analyze_microrheology(self, tracks_df, units):
         """Analyze microrheological properties from particle tracking data."""
@@ -1036,13 +1283,129 @@ class EnhancedSPTReportGenerator:
             return fig
 
     def _analyze_intensity(self, tracks_df, current_units):
-        """Placeholder for intensity analysis."""
-        return {'success': True, 'message': 'Intensity analysis not yet implemented.'}
+        """Analyze fluorescence intensity dynamics from tracking data."""
+        try:
+            from intensity_analysis import (
+                extract_intensity_channels,
+                correlate_intensity_movement,
+                classify_intensity_behavior
+            )
+            
+            # Check if intensity data is available
+            channels = extract_intensity_channels(tracks_df)
+            
+            if not channels:
+                return {
+                    'success': False,
+                    'error': 'No intensity channels found in track data. Intensity columns required (e.g., mean_intensity_ch1).'
+                }
+            
+            # Analyze intensity-movement correlation
+            try:
+                correlation_results = correlate_intensity_movement(
+                    tracks_df,
+                    pixel_size=current_units.get('pixel_size', 1.0),
+                    frame_interval=current_units.get('frame_interval', 1.0)
+                )
+            except Exception:
+                correlation_results = None
+            
+            # Classify intensity behavior patterns
+            try:
+                behavior_results = classify_intensity_behavior(
+                    tracks_df,
+                    channels=channels
+                )
+            except Exception:
+                behavior_results = None
+            
+            # Calculate basic intensity statistics per channel
+            channel_stats = {}
+            for ch_name, ch_cols in channels.items():
+                # Use the first available intensity column for each channel
+                intensity_col = ch_cols[0]
+                if intensity_col in tracks_df.columns:
+                    channel_stats[ch_name] = {
+                        'mean': float(tracks_df[intensity_col].mean()),
+                        'median': float(tracks_df[intensity_col].median()),
+                        'std': float(tracks_df[intensity_col].std()),
+                        'min': float(tracks_df[intensity_col].min()),
+                        'max': float(tracks_df[intensity_col].max()),
+                        'column_name': intensity_col
+                    }
+            
+            return {
+                'success': True,
+                'channels': channels,
+                'channel_stats': channel_stats,
+                'correlation_results': correlation_results,
+                'behavior_results': behavior_results,
+                'summary': {
+                    'n_channels': len(channels),
+                    'n_tracks': tracks_df['track_id'].nunique(),
+                    'channels_detected': list(channels.keys())
+                }
+            }
+        except Exception as e:
+            return {'error': str(e), 'success': False}
 
     def _plot_intensity(self, result):
-        """Placeholder for intensity visualization."""
-        from visualization import _empty_fig
-        return _empty_fig("Intensity analysis not yet implemented.")
+        """Visualize intensity analysis results."""
+        try:
+            if not result.get('success', False):
+                from visualization import _empty_fig
+                return _empty_fig(f"Intensity analysis failed: {result.get('error', 'Unknown error')}")
+            
+            channel_stats = result.get('channel_stats', {})
+            
+            if not channel_stats:
+                from visualization import _empty_fig
+                return _empty_fig("No intensity statistics available")
+            
+            # Create subplots for each channel
+            from plotly.subplots import make_subplots
+            
+            n_channels = len(channel_stats)
+            fig = make_subplots(
+                rows=1, cols=n_channels,
+                subplot_titles=[f"Channel {ch.upper()}" for ch in channel_stats.keys()]
+            )
+            
+            # Plot distribution for each channel
+            for idx, (ch_name, stats) in enumerate(channel_stats.items(), 1):
+                # Create bar chart of statistics
+                metrics = ['mean', 'median', 'std']
+                values = [stats.get(m, 0) for m in metrics]
+                
+                fig.add_trace(
+                    go.Bar(
+                        x=metrics,
+                        y=values,
+                        name=ch_name,
+                        marker_color=['steelblue', 'coral', 'lightgreen'][idx-1],
+                        showlegend=False
+                    ),
+                    row=1, col=idx
+                )
+                
+                fig.update_xaxes(title_text="Metric", row=1, col=idx)
+                fig.update_yaxes(title_text="Intensity (a.u.)", row=1, col=idx)
+            
+            fig.update_layout(
+                title='Intensity Statistics by Channel',
+                height=400,
+                showlegend=False
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {e}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
 
     def _analyze_polymer_physics(self, tracks_df, current_units):
         """Enhanced polymer physics analysis with model specification."""
