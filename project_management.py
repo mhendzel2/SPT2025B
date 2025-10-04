@@ -4,7 +4,7 @@ Handles organizing and comparing multiple tracking files across different condit
 Enhanced with persistent file-based storage and robust data management.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from scipy import stats
 import os, json, uuid, datetime, io
 import pandas as pd
