@@ -98,6 +98,18 @@ try:
 except Exception:
     RHEOLOGY_MODULE_AVAILABLE = False
 
+# Import advanced biophysical metrics and statistical comparison tools
+try:
+    from batch_report_enhancements import (
+        AdvancedBiophysicalReportExtension,
+        StatisticalComparisonTools,
+        ADVANCED_METRICS_AVAILABLE as BATCH_ADVANCED_METRICS
+    )
+    BATCH_ENHANCEMENTS_AVAILABLE = True
+except ImportError:
+    BATCH_ENHANCEMENTS_AVAILABLE = False
+    BATCH_ADVANCED_METRICS = False
+
 warnings.filterwarnings('ignore')
 
 # Import data access utilities for consistent data handling
@@ -231,6 +243,25 @@ class EnhancedSPTReportGenerator:
                 'function': self._analyze_polymer_physics,
                 'visualization': self._plot_polymer_physics,
                 'category': 'Biophysical Models',
+                'priority': 4
+            }
+        
+        # Add advanced biophysical metrics if available
+        if BATCH_ENHANCEMENTS_AVAILABLE and BATCH_ADVANCED_METRICS:
+            self.available_analyses['fbm_analysis'] = {
+                'name': 'Fractional Brownian Motion (FBM)',
+                'description': 'Hurst exponent, anomalous diffusion characterization.',
+                'function': self._analyze_fbm,
+                'visualization': self._plot_fbm,
+                'category': 'Biophysical Models',
+                'priority': 4
+            }
+            self.available_analyses['advanced_metrics'] = {
+                'name': 'Advanced Metrics (TAMSD/EAMSD/NGP/VACF)',
+                'description': 'Time-averaged MSD, ergodicity breaking, non-Gaussian parameter, velocity autocorrelation.',
+                'function': self._analyze_advanced_metrics,
+                'visualization': self._plot_advanced_metrics,
+                'category': 'Advanced Statistics',
                 'priority': 4
             }
         
@@ -1698,3 +1729,43 @@ def main():
 # For direct execution
 if __name__ == "__main__":
     main()
+
+# ===== NEW: Advanced Biophysical Analysis Wrappers =====
+
+def _analyze_fbm_wrapper(self, tracks_df, current_units):
+    """Wrapper for FBM analysis."""
+    if not BATCH_ENHANCEMENTS_AVAILABLE:
+        return {'success': False, 'error': 'Batch enhancements module not available'}
+    pixel_size = current_units.get('pixel_size', 0.1)
+    frame_interval = current_units.get('frame_interval', 0.1)
+    return AdvancedBiophysicalReportExtension.analyze_fbm_ensemble(tracks_df, pixel_size, frame_interval)
+
+def _plot_fbm_wrapper(self, result):
+    """Wrapper for FBM visualization."""
+    if not BATCH_ENHANCEMENTS_AVAILABLE:
+        return None
+    return AdvancedBiophysicalReportExtension.plot_fbm_results(result)
+
+def _analyze_advanced_metrics_wrapper(self, tracks_df, current_units):
+    """Wrapper for advanced metrics analysis."""
+    if not BATCH_ENHANCEMENTS_AVAILABLE:
+        return {'success': False, 'error': 'Batch enhancements module not available'}
+    pixel_size = current_units.get('pixel_size', 0.1)
+    frame_interval = current_units.get('frame_interval', 0.1)
+    max_lag = current_units.get('max_lag', 20)
+    return AdvancedBiophysicalReportExtension.analyze_advanced_metrics_ensemble(tracks_df, pixel_size, frame_interval, max_lag)
+
+def _plot_advanced_metrics_wrapper(self, result):
+    """Wrapper for advanced metrics visualization."""
+    if not BATCH_ENHANCEMENTS_AVAILABLE:
+        return None
+    figures = AdvancedBiophysicalReportExtension.plot_advanced_metrics(result)
+    if figures:
+        return figures.get('tamsd_eamsd', list(figures.values())[0])
+    return None
+
+# Add the wrapper methods to the EnhancedSPTReportGenerator class
+EnhancedSPTReportGenerator._analyze_fbm = _analyze_fbm_wrapper
+EnhancedSPTReportGenerator._plot_fbm = _plot_fbm_wrapper
+EnhancedSPTReportGenerator._analyze_advanced_metrics = _analyze_advanced_metrics_wrapper
+EnhancedSPTReportGenerator._plot_advanced_metrics = _plot_advanced_metrics_wrapper
