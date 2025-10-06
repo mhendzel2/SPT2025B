@@ -209,6 +209,38 @@ class EnhancedSPTReportGenerator:
                 'category': 'Biophysical Models',
                 'priority': 3
             },
+            'creep_compliance': {
+                'name': 'Creep Compliance',
+                'description': 'Time-dependent deformation under constant stress, material classification.',
+                'function': self._analyze_creep_compliance,
+                'visualization': self._plot_creep_compliance,
+                'category': 'Biophysical Models',
+                'priority': 3
+            },
+            'relaxation_modulus': {
+                'name': 'Relaxation Modulus',
+                'description': 'Stress decay under constant strain, viscoelastic relaxation dynamics.',
+                'function': self._analyze_relaxation_modulus,
+                'visualization': self._plot_relaxation_modulus,
+                'category': 'Biophysical Models',
+                'priority': 3
+            },
+            'two_point_microrheology': {
+                'name': 'Two-Point Microrheology',
+                'description': 'Distance-dependent viscoelastic properties, spatial heterogeneity detection.',
+                'function': self._analyze_two_point_microrheology,
+                'visualization': self._plot_two_point_microrheology,
+                'category': 'Biophysical Models',
+                'priority': 4
+            },
+            'spatial_microrheology': {
+                'name': 'Spatial Microrheology Map',
+                'description': 'Local mechanical properties across field of view, heterogeneity quantification.',
+                'function': self._analyze_spatial_microrheology,
+                'visualization': self._plot_spatial_microrheology,
+                'category': 'Biophysical Models',
+                'priority': 4
+            },
             'intensity_analysis': {
                 'name': 'Intensity Analysis',
                 'description': 'Fluorescence intensity dynamics, photobleaching, binding events.',
@@ -1297,6 +1329,429 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             fig = go.Figure()
             fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+
+    def _analyze_creep_compliance(self, tracks_df, current_units):
+        """Analyze creep compliance J(t) - material deformation under constant stress."""
+        try:
+            from rheology import MicrorheologyAnalyzer
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            temperature = current_units.get('temperature', 298.15)
+            particle_radius = current_units.get('particle_radius', 0.5)
+            
+            analyzer = MicrorheologyAnalyzer(
+                tracks_df=tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                temperature=temperature,
+                particle_radius=particle_radius
+            )
+            
+            result = analyzer.calculate_creep_compliance()
+            result['units'] = current_units
+            return result
+            
+        except Exception as e:
+            import traceback
+            return {
+                'success': False,
+                'error': f'Creep compliance analysis failed: {str(e)}',
+                'traceback': traceback.format_exc()
+            }
+    
+    def _plot_creep_compliance(self, result):
+        """Visualize creep compliance J(t) with power-law fit."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Analysis failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            data = result.get('data', {})
+            time_lags = data.get('time_lags', [])
+            creep_compliance = data.get('creep_compliance', [])
+            fit_data = data.get('fit', {})
+            
+            fig = go.Figure()
+            
+            # Plot J(t) data
+            fig.add_trace(go.Scatter(
+                x=time_lags,
+                y=creep_compliance,
+                mode='markers',
+                name='J(t) Data',
+                marker=dict(size=6, color='blue')
+            ))
+            
+            # Plot power-law fit if available
+            if fit_data and 'J0' in fit_data and 'beta' in fit_data:
+                J0 = fit_data['J0']
+                beta = fit_data['beta']
+                fit_compliance = J0 * np.power(time_lags, beta)
+                
+                fig.add_trace(go.Scatter(
+                    x=time_lags,
+                    y=fit_compliance,
+                    mode='lines',
+                    name=f'Power-law Fit: J(t)={J0:.2e}·t^{beta:.2f}',
+                    line=dict(color='red', dash='dash')
+                ))
+            
+            fig.update_layout(
+                title='Creep Compliance J(t)',
+                xaxis_title='Time Lag (s)',
+                yaxis_title='Creep Compliance J(t) (Pa⁻¹)',
+                xaxis_type='log',
+                yaxis_type='log',
+                template='plotly_white',
+                showlegend=True
+            )
+            
+            # Add material classification annotation
+            material_type = result.get('summary', {}).get('material_classification', 'Unknown')
+            fig.add_annotation(
+                text=f'Material Type: {material_type}',
+                xref='paper', yref='paper',
+                x=0.02, y=0.98,
+                showarrow=False,
+                bgcolor='rgba(255,255,255,0.8)',
+                bordercolor='black',
+                borderwidth=1
+            )
+            
+            return fig
+            
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+    
+    def _analyze_relaxation_modulus(self, tracks_df, current_units):
+        """Analyze relaxation modulus G(t) - stress decay under constant strain."""
+        try:
+            from rheology import MicrorheologyAnalyzer
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            temperature = current_units.get('temperature', 298.15)
+            particle_radius = current_units.get('particle_radius', 0.5)
+            
+            analyzer = MicrorheologyAnalyzer(
+                tracks_df=tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                temperature=temperature,
+                particle_radius=particle_radius
+            )
+            
+            # Use approximation method for speed (frequency_domain=False)
+            result = analyzer.calculate_relaxation_modulus(frequency_domain=False)
+            result['units'] = current_units
+            return result
+            
+        except Exception as e:
+            import traceback
+            return {
+                'success': False,
+                'error': f'Relaxation modulus analysis failed: {str(e)}',
+                'traceback': traceback.format_exc()
+            }
+    
+    def _plot_relaxation_modulus(self, result):
+        """Visualize relaxation modulus G(t) with exponential decay fit."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Analysis failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            data = result.get('data', {})
+            time_lags = data.get('time_lags', [])
+            relaxation_modulus = data.get('relaxation_modulus', [])
+            fit_data = data.get('fit', {})
+            
+            fig = go.Figure()
+            
+            # Plot G(t) data
+            fig.add_trace(go.Scatter(
+                x=time_lags,
+                y=relaxation_modulus,
+                mode='markers',
+                name='G(t) Data',
+                marker=dict(size=6, color='green')
+            ))
+            
+            # Plot exponential fit if available
+            if fit_data and 'G0' in fit_data and 'tau' in fit_data:
+                G0 = fit_data['G0']
+                tau = fit_data['tau']
+                G_inf = fit_data.get('G_inf', 0)
+                fit_modulus = G0 * np.exp(-time_lags / tau) + G_inf
+                
+                fig.add_trace(go.Scatter(
+                    x=time_lags,
+                    y=fit_modulus,
+                    mode='lines',
+                    name=f'Exponential Fit: τ={tau:.3f}s',
+                    line=dict(color='orange', dash='dash')
+                ))
+            
+            fig.update_layout(
+                title='Relaxation Modulus G(t)',
+                xaxis_title='Time Lag (s)',
+                yaxis_title='Relaxation Modulus G(t) (Pa)',
+                xaxis_type='log',
+                yaxis_type='log',
+                template='plotly_white',
+                showlegend=True
+            )
+            
+            # Add relaxation time annotation
+            tau = result.get('summary', {}).get('relaxation_time', 0)
+            if tau > 0:
+                fig.add_annotation(
+                    text=f'Relaxation Time: {tau:.3f} s',
+                    xref='paper', yref='paper',
+                    x=0.02, y=0.98,
+                    showarrow=False,
+                    bgcolor='rgba(255,255,255,0.8)',
+                    bordercolor='black',
+                    borderwidth=1
+                )
+            
+            return fig
+            
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+    
+    def _analyze_two_point_microrheology(self, tracks_df, current_units):
+        """Analyze distance-dependent viscoelastic properties using particle pairs."""
+        try:
+            from rheology import MicrorheologyAnalyzer
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            temperature = current_units.get('temperature', 298.15)
+            particle_radius = current_units.get('particle_radius', 0.5)
+            
+            analyzer = MicrorheologyAnalyzer(
+                tracks_df=tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                temperature=temperature,
+                particle_radius=particle_radius
+            )
+            
+            result = analyzer.two_point_microrheology(max_distance=10.0, distance_bins=20)
+            result['units'] = current_units
+            return result
+            
+        except Exception as e:
+            import traceback
+            return {
+                'success': False,
+                'error': f'Two-point microrheology analysis failed: {str(e)}',
+                'traceback': traceback.format_exc()
+            }
+    
+    def _plot_two_point_microrheology(self, result):
+        """Visualize distance-dependent G' and G'' with correlation length."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Analysis failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            data = result.get('data', {})
+            distances = data.get('distances', [])
+            G_prime = data.get('G_prime', [])
+            G_double_prime = data.get('G_double_prime', [])
+            
+            fig = make_subplots(rows=1, cols=2, subplot_titles=["Storage Modulus G'", "Loss Modulus G''"])
+            
+            # Plot G' vs distance
+            fig.add_trace(go.Scatter(
+                x=distances,
+                y=G_prime,
+                mode='markers+lines',
+                name="G'",
+                marker=dict(size=6, color='blue'),
+                line=dict(color='blue')
+            ), row=1, col=1)
+            
+            # Plot G'' vs distance
+            fig.add_trace(go.Scatter(
+                x=distances,
+                y=G_double_prime,
+                mode='markers+lines',
+                name="G''",
+                marker=dict(size=6, color='red'),
+                line=dict(color='red')
+            ), row=1, col=2)
+            
+            fig.update_xaxes(title_text="Distance (μm)", row=1, col=1)
+            fig.update_xaxes(title_text="Distance (μm)", row=1, col=2)
+            fig.update_yaxes(title_text="G' (Pa)", row=1, col=1)
+            fig.update_yaxes(title_text="G'' (Pa)", row=1, col=2)
+            
+            fig.update_layout(
+                title_text='Two-Point Microrheology: Distance-Dependent Moduli',
+                template='plotly_white',
+                showlegend=False
+            )
+            
+            # Add correlation length annotation
+            correlation_length = result.get('summary', {}).get('correlation_length', 0)
+            if correlation_length > 0:
+                fig.add_annotation(
+                    text=f'Correlation Length: {correlation_length:.2f} μm',
+                    xref='paper', yref='paper',
+                    x=0.5, y=1.05,
+                    showarrow=False,
+                    bgcolor='rgba(255,255,255,0.9)',
+                    bordercolor='black',
+                    borderwidth=1
+                )
+            
+            return fig
+            
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+    
+    def _analyze_spatial_microrheology(self, tracks_df, current_units):
+        """Generate spatial map of local mechanical properties across field of view."""
+        try:
+            from rheology import MicrorheologyAnalyzer
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            temperature = current_units.get('temperature', 298.15)
+            particle_radius = current_units.get('particle_radius', 0.5)
+            
+            analyzer = MicrorheologyAnalyzer(
+                tracks_df=tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                temperature=temperature,
+                particle_radius=particle_radius
+            )
+            
+            result = analyzer.spatial_microrheology_map(grid_size=10, min_tracks_per_bin=3)
+            result['units'] = current_units
+            return result
+            
+        except Exception as e:
+            import traceback
+            return {
+                'success': False,
+                'error': f'Spatial microrheology analysis failed: {str(e)}',
+                'traceback': traceback.format_exc()
+            }
+    
+    def _plot_spatial_microrheology(self, result):
+        """Visualize spatial heterogeneity of mechanical properties using heatmaps."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Analysis failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            data = result.get('data', {})
+            spatial_map = data.get('spatial_map', {})
+            
+            if not spatial_map or 'G_prime' not in spatial_map:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Insufficient data for spatial mapping",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            G_prime_map = spatial_map['G_prime']
+            G_double_prime_map = spatial_map['G_double_prime']
+            viscosity_map = spatial_map['viscosity']
+            
+            fig = make_subplots(
+                rows=1, cols=3,
+                subplot_titles=["Storage Modulus G' (Pa)", "Loss Modulus G'' (Pa)", "Viscosity η (Pa·s)"],
+                specs=[[{'type': 'heatmap'}, {'type': 'heatmap'}, {'type': 'heatmap'}]]
+            )
+            
+            # G' heatmap
+            fig.add_trace(go.Heatmap(
+                z=G_prime_map,
+                colorscale='Viridis',
+                colorbar=dict(x=0.30, len=0.8)
+            ), row=1, col=1)
+            
+            # G'' heatmap
+            fig.add_trace(go.Heatmap(
+                z=G_double_prime_map,
+                colorscale='Plasma',
+                colorbar=dict(x=0.63, len=0.8)
+            ), row=1, col=2)
+            
+            # Viscosity heatmap
+            fig.add_trace(go.Heatmap(
+                z=viscosity_map,
+                colorscale='Inferno',
+                colorbar=dict(x=0.96, len=0.8)
+            ), row=1, col=3)
+            
+            fig.update_layout(
+                title_text='Spatial Microrheology: Mechanical Property Heterogeneity',
+                template='plotly_white',
+                showlegend=False,
+                height=400
+            )
+            
+            # Add heterogeneity index annotation
+            heterogeneity = result.get('summary', {}).get('heterogeneity_index', 0)
+            fig.add_annotation(
+                text=f'Heterogeneity Index: {heterogeneity:.3f}',
+                xref='paper', yref='paper',
+                x=0.5, y=1.05,
+                showarrow=False,
+                bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='black',
+                borderwidth=1
+            )
+            
+            return fig
+            
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
             return fig
 
     def _analyze_intensity(self, tracks_df, current_units):
