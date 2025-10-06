@@ -131,6 +131,12 @@ try:
 except ImportError:
     STATE_MANAGER_AVAILABLE = False
 
+try:
+    from bounded_cache import BoundedResultsCache
+    BOUNDED_CACHE_AVAILABLE = True
+except ImportError:
+    BOUNDED_CACHE_AVAILABLE = False
+
 class EnhancedSPTReportGenerator:
     """
     Comprehensive report generation system with extensive analysis capabilities.
@@ -139,6 +145,12 @@ class EnhancedSPTReportGenerator:
     def __init__(self, *args, **kwargs):
         # Initialize state manager if available (for fallback)
         self.state_manager = get_state_manager() if STATE_MANAGER_AVAILABLE else None
+        
+        # Initialize bounded cache for analysis results
+        if BOUNDED_CACHE_AVAILABLE:
+            self.results_cache = BoundedResultsCache(max_items=50, max_memory_mb=500.0)
+        else:
+            self.results_cache = None
 
         # Ensure track data available if previously loaded
         sm = get_state_manager() if STATE_MANAGER_AVAILABLE else None
@@ -1649,7 +1661,8 @@ class EnhancedSPTReportGenerator:
             'condition_name': condition_name,
             'analysis_results': {},
             'figures': {},
-            'success': True
+            'success': True,
+            'cache_stats': {'hits': 0, 'misses': 0}
         }
         
         current_units = {
@@ -1663,9 +1676,37 @@ class EnhancedSPTReportGenerator:
                 
             analysis = self.available_analyses[analysis_key]
             
+            # Check cache first if available
+            cache_key = f"{analysis_key}_{condition_name}_{hash(str(tracks_df.shape))}"
+            cached_result = None
+            
+            if self.results_cache is not None:
+                cached_result = self.results_cache.get(cache_key)
+                if cached_result is not None:
+                    results['cache_stats']['hits'] += 1
+                    results['analysis_results'][analysis_key] = cached_result
+                    
+                    # Generate visualization from cached results
+                    try:
+                        if cached_result.get('success', True) and 'error' not in cached_result:
+                            fig = analysis['visualization'](cached_result)
+                            if fig:
+                                results['figures'][analysis_key] = fig
+                    except Exception:
+                        pass  # Visualization failed, but we have cached results
+                    
+                    continue
+            
+            # Cache miss - run analysis
+            results['cache_stats']['misses'] += 1
+            
             try:
                 result = analysis['function'](tracks_df, current_units)
                 results['analysis_results'][analysis_key] = result
+                
+                # Store in cache if available
+                if self.results_cache is not None and result.get('success', True):
+                    self.results_cache.set(cache_key, result)
                 
                 if result.get('success', True) and 'error' not in result:
                     fig = analysis['visualization'](result)

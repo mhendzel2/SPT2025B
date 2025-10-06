@@ -144,6 +144,8 @@ from unit_converter import UnitConverter
 from md_integration import MDSimulation, load_md_file
 from biophysics_tab import show_advanced_biophysical_metrics, show_biophysical_models
 from simulation import show_simulation_page
+from data_quality_checker import DataQualityChecker
+from secure_file_validator import get_file_validator
 from logic import (
     calculate_population_metrics,
     perform_class_based_analysis,
@@ -3322,6 +3324,28 @@ elif st.session_state.active_page == "Data Loading":
         )
         
         if track_file is not None:
+            # Validate file before processing
+            file_validator = get_file_validator()
+            validation_result = file_validator.validate_file(track_file, file_type='track_data', check_content=True)
+            
+            if not validation_result['valid']:
+                st.error("⚠️ File validation failed!")
+                for error in validation_result['errors']:
+                    st.error(f"❌ {error}")
+                for warning in validation_result['warnings']:
+                    st.warning(f"⚠️ {warning}")
+                st.info("Please check your file and try again.")
+                st.stop()
+            
+            # Show warnings if any (but allow processing)
+            if validation_result['warnings']:
+                with st.expander("⚠️ File Validation Warnings", expanded=False):
+                    for warning in validation_result['warnings']:
+                        st.warning(warning)
+            
+            # Show file info
+            st.success(f"✅ File validation passed: {validation_result['filename']} ({validation_result['file_size'] / 1024 / 1024:.1f} MB)")
+            
             try:
                 st.session_state.tracks_data = load_tracks_file(track_file)
                 st.success(f"Track data loaded successfully: {track_file.name}")
@@ -3339,6 +3363,125 @@ elif st.session_state.active_page == "Data Loading":
                 st.write(f"Number of tracks: {st.session_state.tracks_data['track_id'].nunique()}")
                 st.write(f"Number of points: {len(st.session_state.tracks_data)}")
                 st.write(f"Average track length: {len(st.session_state.tracks_data) / st.session_state.tracks_data['track_id'].nunique():.1f} points")
+                
+                # Run automatic data quality checks
+                st.divider()
+                st.subheader("🔍 Data Quality Assessment")
+                
+                # Add option to run quality check
+                if st.button("Run Quality Check", type="primary", help="Assess the quality and reliability of loaded track data"):
+                    with st.spinner("Running comprehensive quality checks..."):
+                        quality_checker = DataQualityChecker()
+                        
+                        # Get current parameters
+                        pixel_size = st.session_state.get('current_pixel_size', st.session_state.get('pixel_size', 0.1))
+                        frame_interval = st.session_state.get('current_frame_interval', st.session_state.get('frame_interval', 0.1))
+                        
+                        # Run quality assessment
+                        quality_report = quality_checker.run_all_checks(
+                            st.session_state.tracks_data,
+                            pixel_size=pixel_size,
+                            frame_interval=frame_interval
+                        )
+                        
+                        # Store report in session state
+                        st.session_state.quality_report = quality_report
+                        
+                        # Display quality score
+                        score = quality_report.overall_score
+                        if score >= 80:
+                            score_color = "green"
+                            score_emoji = "✅"
+                        elif score >= 60:
+                            score_color = "orange"
+                            score_emoji = "⚠️"
+                        else:
+                            score_color = "red"
+                            score_emoji = "❌"
+                        
+                        st.markdown(f"### {score_emoji} Overall Quality Score: :{score_color}[{score:.1f}/100]")
+                        
+                        # Display quality summary
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Passed Checks", quality_report.passed_checks)
+                        with col2:
+                            st.metric("Warnings", quality_report.warnings)
+                        with col3:
+                            st.metric("Failed Checks", quality_report.failed_checks)
+                        
+                        # Display checks by category
+                        st.divider()
+                        st.markdown("#### Quality Check Details")
+                        
+                        # Group checks by category
+                        critical_checks = [c for c in quality_report.checks if c.category == 'critical']
+                        warning_checks = [c for c in quality_report.checks if c.category == 'warning']
+                        info_checks = [c for c in quality_report.checks if c.category == 'info']
+                        
+                        # Critical checks
+                        if critical_checks:
+                            with st.expander("🔴 Critical Issues", expanded=not all(c.passed for c in critical_checks)):
+                                for check in critical_checks:
+                                    icon = "✅" if check.passed else "❌"
+                                    st.markdown(f"{icon} **{check.check_name}**: {check.message} (Score: {check.score:.0f}/100)")
+                        
+                        # Warning checks
+                        if warning_checks:
+                            with st.expander("🟡 Warnings", expanded=False):
+                                for check in warning_checks:
+                                    icon = "✅" if check.passed else "⚠️"
+                                    st.markdown(f"{icon} **{check.check_name}**: {check.message} (Score: {check.score:.0f}/100)")
+                        
+                        # Info checks
+                        if info_checks:
+                            with st.expander("ℹ️ Information", expanded=False):
+                                for check in info_checks:
+                                    icon = "✅" if check.passed else "ℹ️"
+                                    st.markdown(f"{icon} **{check.check_name}**: {check.message} (Score: {check.score:.0f}/100)")
+                        
+                        # Display recommendations
+                        if quality_report.recommendations:
+                            st.divider()
+                            st.markdown("#### 💡 Recommendations")
+                            for i, rec in enumerate(quality_report.recommendations, 1):
+                                st.info(f"{i}. {rec}")
+                        
+                        # Display track statistics
+                        if quality_report.track_statistics:
+                            st.divider()
+                            with st.expander("📊 Detailed Track Statistics"):
+                                stats = quality_report.track_statistics
+                                stat_col1, stat_col2, stat_col3 = st.columns(3)
+                                
+                                with stat_col1:
+                                    st.metric("Total Tracks", stats.get('n_tracks', 'N/A'))
+                                    st.metric("Total Points", stats.get('n_points', 'N/A'))
+                                    st.metric("Avg Track Length", f"{stats.get('mean_track_length', 0):.1f}")
+                                
+                                with stat_col2:
+                                    st.metric("Median Track Length", f"{stats.get('median_track_length', 0):.1f}")
+                                    st.metric("Frame Range", f"{stats.get('frame_range', [0, 0])[0]} - {stats.get('frame_range', [0, 0])[1]}")
+                                    st.metric("Spatial Extent (X)", f"{stats.get('x_range', [0, 0])[1] - stats.get('x_range', [0, 0])[0]:.1f} µm")
+                                
+                                with stat_col3:
+                                    st.metric("Spatial Extent (Y)", f"{stats.get('y_range', [0, 0])[1] - stats.get('y_range', [0, 0])[0]:.1f} µm")
+                                    st.metric("Avg Displacement", f"{stats.get('mean_displacement', 0):.2f} µm/frame")
+                                    st.metric("Avg Velocity", f"{stats.get('mean_velocity', 0):.2f} µm/s")
+                
+                # Show stored quality report if available
+                elif 'quality_report' in st.session_state:
+                    score = st.session_state.quality_report.overall_score
+                    if score >= 80:
+                        score_emoji = "✅"
+                    elif score >= 60:
+                        score_emoji = "⚠️"
+                    else:
+                        score_emoji = "❌"
+                    
+                    st.info(f"{score_emoji} Quality Score: {score:.1f}/100 - Click 'Run Quality Check' to see details")
+                
+                st.divider()
                 
                 # Display Imaris metadata if available
                 if track_file.name.endswith('.ims') and 'imaris_metadata' in st.session_state and track_file.name in st.session_state.imaris_metadata:
