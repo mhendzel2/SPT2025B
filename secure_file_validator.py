@@ -39,6 +39,7 @@ class SecureFileValidator:
     """
     
     # File size limits (in bytes)
+    # Optimized for systems with 64GB+ memory
     MAX_FILE_SIZES = {
         'csv': 100 * 1024 * 1024,      # 100 MB
         'xlsx': 50 * 1024 * 1024,      # 50 MB
@@ -47,16 +48,18 @@ class SecureFileValidator:
         'xml': 50 * 1024 * 1024,       # 50 MB
         'h5': 500 * 1024 * 1024,       # 500 MB
         'hdf5': 500 * 1024 * 1024,     # 500 MB
-        'ims': 1024 * 1024 * 1024,     # 1 GB (Imaris files can be large)
-        'tif': 500 * 1024 * 1024,      # 500 MB
-        'tiff': 500 * 1024 * 1024,     # 500 MB
-        'png': 100 * 1024 * 1024,      # 100 MB
-        'jpg': 50 * 1024 * 1024,       # 50 MB
-        'jpeg': 50 * 1024 * 1024,      # 50 MB
-        'mvd2': 200 * 1024 * 1024,     # 200 MB
-        'uic': 200 * 1024 * 1024,      # 200 MB
-        'aisf': 200 * 1024 * 1024,     # 200 MB
-        'aiix': 200 * 1024 * 1024,     # 200 MB
+        'ims': 2 * 1024 * 1024 * 1024, # 2 GB (Imaris files can be large)
+        'tif': 2 * 1024 * 1024 * 1024, # 2 GB (large microscopy images)
+        'tiff': 2 * 1024 * 1024 * 1024,# 2 GB (large microscopy images)
+        'png': 500 * 1024 * 1024,      # 500 MB
+        'jpg': 100 * 1024 * 1024,      # 100 MB
+        'jpeg': 100 * 1024 * 1024,     # 100 MB
+        'nd2': 2 * 1024 * 1024 * 1024, # 2 GB (Nikon ND2 files)
+        'czi': 2 * 1024 * 1024 * 1024, # 2 GB (Zeiss CZI files)
+        'mvd2': 500 * 1024 * 1024,     # 500 MB
+        'uic': 500 * 1024 * 1024,      # 500 MB
+        'aisf': 500 * 1024 * 1024,     # 500 MB
+        'aiix': 500 * 1024 * 1024,     # 500 MB
     }
     
     # Allowed file extensions
