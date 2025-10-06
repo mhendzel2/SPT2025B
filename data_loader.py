@@ -807,6 +807,15 @@ def load_tracks_file(file) -> pd.DataFrame:
             file_stream = io.StringIO(file.getvalue().decode("utf-8"))
             tracks_df = load_trackmate_xml_file(file_stream)
             
+            # Check if we got any data
+            if tracks_df is None or tracks_df.empty:
+                st.warning("⚠️ No track data found in TrackMate XML file")
+                st.info("💡 Possible reasons:")
+                st.info("- File may not contain tracked particles")
+                st.info("- Track data may be in an unsupported format")
+                st.info("- Try exporting tracks from TrackMate in CSV format instead")
+                raise ValueError("No track or spot data found in TrackMate XML file")
+            
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
 
@@ -817,7 +826,17 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             return standardized_df
             
+        except ValueError as e:
+            # Re-raise validation errors with original message
+            raise
         except Exception as e:
+            st.error("❌ Error loading TrackMate XML file")
+            st.info("💡 Suggestions:")
+            st.info("- Verify this is a valid TrackMate XML export")
+            st.info("- Check that the file contains track data")
+            st.info("- Try exporting as CSV from TrackMate instead")
+            if st.checkbox("Show detailed XML error"):
+                st.code(str(e))
             raise ValueError(f"Error loading TrackMate XML file: {str(e)}")
     
     # For JSON files

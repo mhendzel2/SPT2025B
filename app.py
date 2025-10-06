@@ -746,7 +746,7 @@ def get_active_tracks():
 # Define navigation function
 def navigate_to(page):
     st.session_state.active_page = page
-    st.rerun()
+    # Note: st.rerun() not needed here - Streamlit automatically reruns after callback
 
 # Initialize the centralized state and analysis managers
 state_manager = get_state_manager()
@@ -781,7 +781,7 @@ if "current_project" not in st.session_state:
 if "confirm_delete" not in st.session_state:
     st.session_state.confirm_delete = False
 if "confirm_delete_condition" not in st.session_state:
-    st.session_state.confirm_delete_condition = False
+    st.session_state.confirm_delete_condition = {}
 if "confirm_delete_file" not in st.session_state:
     st.session_state.confirm_delete_file = False
 
@@ -1692,6 +1692,7 @@ elif st.session_state.active_page == "Project Management":
                             st.warning(f"Failed to add {uf.name}: {e}")
                     pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
                     st.success("Files added.")
+                    st.rerun()
 
                 # Show files and remove option
                 if cond.files:
@@ -1717,7 +1718,7 @@ elif st.session_state.active_page == "Project Management":
                         if cols[2].button("Remove", key=f"rm_{cond.id}_{f.get('id')}"):
                             pmgr.remove_file_from_project(proj, cond.id, f.get('id'))
                             pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
-                            st.experimental_rerun()
+                            st.rerun()
 
                 # Pool and preview
                 if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
@@ -2285,34 +2286,6 @@ elif st.session_state.active_page == "Image Processing":
         else:
             # Handle multichannel images
             mask_image_data = st.session_state.mask_images
-
-    # Tab 3: Advanced Segmentation
-    with img_tabs[2]:
-        st.subheader("Advanced Segmentation Methods")
-        
-        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
-            st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
-            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
-        else:
-            if ADVANCED_SEGMENTATION_AVAILABLE:
-                # Call the integration function from advanced_segmentation module
-                integrate_advanced_segmentation_with_app()
-            else:
-                st.error("Advanced segmentation module not available.")
-                st.info("Please install required packages to use advanced segmentation features.")
-                
-                with st.expander("Installation Instructions"):
-                    st.markdown("""
-                    ### Required packages:
-                    
-                    ```
-                    pip install torch torchvision segment-anything cellpose opencv-python
-                    ```
-                    """)
-    
-    # Tab 4: Export Results (moved from position 3 to 4)
-    with img_tabs[3]:
-        # ... existing code for export tab ...
             
             # Check different multichannel scenarios
             multichannel_detected = False
@@ -3134,8 +3107,32 @@ Lower values provide faster comparison but may miss fine differences between met
                         except Exception as e:
                             st.error(f"Error assigning density classes: {str(e)}")
     
-    # Tab 3: Export Results
+    # Tab 3: Advanced Segmentation
     with img_tabs[2]:
+        st.subheader("Advanced Segmentation Methods")
+        
+        if 'mask_images' not in st.session_state or st.session_state.mask_images is None:
+            st.warning("Upload mask images in the Data Loading tab first to use advanced segmentation.")
+            st.info("Go to Data Loading → 'Images for Mask Generation' to upload images for processing.")
+        else:
+            if ADVANCED_SEGMENTATION_AVAILABLE:
+                # Call the integration function from advanced_segmentation module
+                integrate_advanced_segmentation_with_app()
+            else:
+                st.error("Advanced segmentation module not available.")
+                st.info("Please install required packages to use advanced segmentation features.")
+                
+                with st.expander("Installation Instructions"):
+                    st.markdown("""
+                    ### Required packages:
+                    
+                    ```
+                    pip install torch torchvision segment-anything cellpose opencv-python
+                    ```
+                    """)
+    
+    # Tab 4: Export Results
+    with img_tabs[3]:
         st.subheader("Export Results")
         
         if 'nucleus_mask' in st.session_state and st.session_state.nucleus_mask is not None:
@@ -4651,6 +4648,27 @@ Dilation expands detected particles to restore size after erosion."""
             
             # Display current frame
             display_image = st.session_state.image_data[frame_idx].copy()
+            
+            # Handle 3D images (z-stacks or timelapses incorrectly loaded as single frame)
+            if len(display_image.shape) == 3:
+                # Check if third dimension is too large to be channels
+                if display_image.shape[2] > 4:
+                    # Likely a z-stack loaded incorrectly - take max projection
+                    display_image = np.max(display_image, axis=2)
+                    st.info(f"⚠️ 3D stack detected ({display_image.shape[2]} slices). Showing max projection.")
+                elif display_image.shape[2] == 3 or display_image.shape[2] == 4:
+                    # Valid RGB or RGBA image - keep as is
+                    pass
+                elif display_image.shape[2] == 2:
+                    # Two channels - take first channel
+                    display_image = display_image[:, :, 0]
+                else:
+                    # Single channel with extra dimension
+                    display_image = display_image.squeeze()
+            
+            # Ensure 2D for grayscale or keep 3D for RGB
+            if len(display_image.shape) > 2 and display_image.shape[2] not in [3, 4]:
+                display_image = display_image[:, :, 0] if display_image.shape[2] > 0 else display_image.squeeze()
             
             # Normalize image data to 0-255 range for display
             if display_image.dtype != np.uint8:
