@@ -119,8 +119,108 @@ class PolymerPhysicsModel:
         }
 
     def analyze_fractal_dimension(self):
-        """Placeholder for fractal dimension analysis."""
-        return {'success': True, 'message': 'Fractal dimension analysis not yet implemented.'}
+        """
+        Calculate fractal dimension of MSD trajectory using box-counting method.
+        
+        Fractal dimension (Df) characterizes the space-filling property:
+        - Df = 1: Straight line (ballistic)
+        - Df ≈ 1.5: Anomalous diffusion
+        - Df = 2: Space-filling (Brownian motion)
+        
+        Returns:
+            dict: Contains success status, fractal dimension value, and interpretation
+        """
+        if self.msd_data is None or self.msd_data.empty:
+            return {'success': False, 'error': 'MSD data not available for fractal dimension analysis'}
+        
+        try:
+            # Extract lag time and MSD values
+            lag_time = self.msd_data['lag_time'].values
+            msd = self.msd_data['msd'].values
+            
+            # Filter valid data
+            valid_indices = (lag_time > 0) & (msd > 0) & np.isfinite(lag_time) & np.isfinite(msd)
+            if not np.any(valid_indices):
+                return {'success': False, 'error': 'No valid data for fractal dimension analysis'}
+            
+            lag_time = lag_time[valid_indices]
+            msd = msd[valid_indices]
+            
+            if len(lag_time) < 5:
+                return {'success': False, 'error': 'Insufficient data points for fractal dimension calculation'}
+            
+            # Use box-counting method on log-log space
+            # For MSD data, we analyze the trajectory in (log(t), log(MSD)) space
+            log_t = np.log(lag_time)
+            log_msd = np.log(msd)
+            
+            # Calculate bounding box
+            t_min, t_max = np.min(log_t), np.max(log_t)
+            msd_min, msd_max = np.min(log_msd), np.max(log_msd)
+            
+            range_t = t_max - t_min
+            range_msd = msd_max - msd_min
+            max_range = max(range_t, range_msd)
+            
+            if max_range == 0:
+                return {'success': False, 'error': 'MSD data has no variation'}
+            
+            # Use logarithmically spaced scales
+            n_scales = 10
+            scales = np.logspace(np.log10(max_range/50), np.log10(max_range/2), n_scales)
+            
+            counts = []
+            valid_scales = []
+            
+            for scale in scales:
+                # Assign each point to a box
+                box_indices = set()
+                for lt, lm in zip(log_t, log_msd):
+                    ix = int((lt - t_min) / scale)
+                    iy = int((lm - msd_min) / scale)
+                    box_indices.add((ix, iy))
+                
+                n_boxes = len(box_indices)
+                if n_boxes > 0:
+                    counts.append(n_boxes)
+                    valid_scales.append(scale)
+            
+            if len(counts) < 3:
+                return {'success': False, 'error': 'Insufficient scale range for fractal dimension calculation'}
+            
+            # Fit log(N) = -Df * log(ε) + c
+            log_scales = np.log(valid_scales)
+            log_counts = np.log(counts)
+            
+            # Linear regression
+            coeffs = np.polyfit(log_scales, log_counts, 1)
+            Df = -coeffs[0]  # Negative of slope
+            
+            # Clamp to reasonable range for 2D trajectories
+            Df = float(np.clip(Df, 1.0, 2.0))
+            
+            # Interpret the result
+            if Df < 1.2:
+                interpretation = "Nearly ballistic/directed motion"
+            elif Df < 1.5:
+                interpretation = "Sub-diffusive motion"
+            elif Df < 1.7:
+                interpretation = "Normal diffusion (Brownian-like)"
+            else:
+                interpretation = "Super-diffusive or confined motion"
+            
+            return {
+                'success': True,
+                'fractal_dimension': Df,
+                'interpretation': interpretation,
+                'n_points': len(lag_time),
+                'parameters': {
+                    'Df': Df
+                }
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Fractal dimension calculation failed: {str(e)}'}
 
     def analyze_polymer_dynamics(self, tracks_df=None):
         """Analyze polymer dynamics from tracking data."""
