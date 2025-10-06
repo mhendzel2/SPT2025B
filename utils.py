@@ -396,13 +396,14 @@ def format_track_data(tracks_df: pd.DataFrame) -> pd.DataFrame:
     # Define a comprehensive column mapping
     column_mapping = {
         'TRACK_ID': 'track_id', 'Track_ID': 'track_id', 'TrackID': 'track_id',
-        'track_ID': 'track_id', 'Track': 'track_id', 'particle': 'track_id',
-        'trajectory': 'track_id', 'id': 'track_id',
+        'Track ID': 'track_id', 'track_ID': 'track_id', 'Track': 'track_id', 
+        'particle': 'track_id', 'trajectory': 'track_id', 'id': 'track_id',
         'FRAME': 'frame', 'Frame': 'frame', 'Time': 'frame', 'time': 'frame',
-        't': 'frame', 'timepoint': 'frame',
+        't': 'frame', 'T': 'frame', 'timepoint': 'frame',
         'POSITION_X': 'x', 'Position_X': 'x', 'Pos_X': 'x', 'X': 'x',
         'POSITION_Y': 'y', 'Position_Y': 'y', 'Pos_Y': 'y', 'Y': 'y',
         'POSITION_Z': 'z', 'Position_Z': 'z', 'Pos_Z': 'z', 'Z': 'z',
+        'POSITION_T': 'frame', 'Position_T': 'frame', 'Pos_T': 'frame',
         'Quality': 'quality', 'QUALITY': 'quality',
         'SNR': 'snr', 'snr': 'snr',
         'Intensity': 'intensity', 'intensity': 'intensity',
