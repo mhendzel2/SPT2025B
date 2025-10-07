@@ -796,20 +796,42 @@ if 'all_detections' not in st.session_state:
 
 # Load sample data option in sidebar
 with st.sidebar.expander("Sample Data"):
-    if st.button("Load Sample Data"):
-        try:
-            sample_file_path = "sample_data/sample_tracks.csv"
-            if os.path.exists(sample_file_path):
-                st.session_state.tracks_data = pd.read_csv(sample_file_path)
-                # Format to standard format
-                st.session_state.tracks_data = format_track_data(st.session_state.tracks_data)
-                # Calculate track statistics
-                st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
-                st.sidebar.success("Sample data loaded successfully!")
-            else:
-                st.sidebar.warning("Sample data file not found.")
-        except Exception as e:
-            st.sidebar.error(f"Error loading sample data: {str(e)}")
+    # Scan for available sample datasets
+    sample_data_dir = "sample data"
+    sample_datasets = {}
+    
+    if os.path.exists(sample_data_dir):
+        for subdir in os.listdir(sample_data_dir):
+            subdir_path = os.path.join(sample_data_dir, subdir)
+            if os.path.isdir(subdir_path):
+                csv_files = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
+                for csv_file in csv_files:
+                    display_name = f"{subdir}/{csv_file}"
+                    sample_datasets[display_name] = os.path.join(subdir_path, csv_file)
+    
+    if sample_datasets:
+        selected_sample = st.selectbox(
+            "Select Sample Dataset",
+            options=list(sample_datasets.keys()),
+            help="Choose from available sample datasets in the repository"
+        )
+        
+        if st.button("Load Selected Sample"):
+            try:
+                sample_file_path = sample_datasets[selected_sample]
+                if os.path.exists(sample_file_path):
+                    st.session_state.tracks_data = pd.read_csv(sample_file_path)
+                    # Format to standard format
+                    st.session_state.tracks_data = format_track_data(st.session_state.tracks_data)
+                    # Calculate track statistics
+                    st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
+                    st.sidebar.success(f"Loaded: {selected_sample}")
+                else:
+                    st.sidebar.warning("Sample data file not found.")
+            except Exception as e:
+                st.sidebar.error(f"Error loading sample data: {str(e)}")
+    else:
+        st.sidebar.info("No sample data found in 'sample data' folder")
 
 # Display data status in sidebar
 with st.sidebar.expander("Data Status"):
@@ -1581,18 +1603,30 @@ elif st.session_state.active_page == "Home":
             st.rerun()
         elif quick_links == "Load sample data":
             try:
-                sample_file_path = "sample_data/sample_tracks.csv"
-                if os.path.exists(sample_file_path):
+                # Load first available sample dataset
+                sample_data_dir = "sample data"
+                sample_file_path = None
+                
+                if os.path.exists(sample_data_dir):
+                    for subdir in os.listdir(sample_data_dir):
+                        subdir_path = os.path.join(sample_data_dir, subdir)
+                        if os.path.isdir(subdir_path):
+                            csv_files = [f for f in os.listdir(subdir_path) if f.endswith('.csv')]
+                            if csv_files:
+                                sample_file_path = os.path.join(subdir_path, csv_files[0])
+                                break
+                
+                if sample_file_path and os.path.exists(sample_file_path):
                     st.session_state.tracks_data = pd.read_csv(sample_file_path)
                     # Format to standard format
                     st.session_state.tracks_data = format_track_data(st.session_state.tracks_data)
                     # Calculate track statistics
                     st.session_state.track_statistics = calculate_track_statistics(st.session_state.tracks_data)
-                    st.success("Sample data loaded successfully!")
+                    st.success(f"Sample data loaded: {os.path.basename(sample_file_path)}")
                     st.session_state.active_page = "Analysis"
                     st.rerun()
                 else:
-                    st.warning("Sample data file not found.")
+                    st.warning("Sample data file not found. Check 'sample data' folder.")
             except Exception as e:
                 st.error(f"Error loading sample data: {str(e)}")
         elif quick_links == "Comparative analysis":
