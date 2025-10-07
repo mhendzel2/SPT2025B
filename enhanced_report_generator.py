@@ -1577,7 +1577,7 @@ class EnhancedSPTReportGenerator:
         """Analyze creep compliance J(t) - material deformation under constant stress."""
         try:
             from rheology import MicrorheologyAnalyzer
-            from analysis import calculate_msd
+            from msd_calculation import calculate_msd_ensemble
             
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
@@ -1592,13 +1592,11 @@ class EnhancedSPTReportGenerator:
                 temperature_K=temperature_K
             )
             
-            # Calculate MSD first
-            msd_result = calculate_msd(tracks_df, pixel_size=pixel_size, frame_interval=frame_interval)
+            # Calculate ensemble MSD
+            msd_df = calculate_msd_ensemble(tracks_df, max_lag=20, pixel_size=pixel_size, frame_interval=frame_interval)
             
-            if not isinstance(msd_result, dict) or 'ensemble_msd' not in msd_result:
+            if msd_df.empty or 'msd' not in msd_df.columns:
                 return {'success': False, 'error': 'Failed to calculate MSD'}
-            
-            msd_df = msd_result['ensemble_msd']
             
             # Calculate creep compliance from MSD
             # J(t) = πa * MSD(t) / (4*kB*T) for 2D tracking
@@ -1706,7 +1704,7 @@ class EnhancedSPTReportGenerator:
         """Analyze relaxation modulus G(t) - stress decay under constant strain."""
         try:
             from rheology import MicrorheologyAnalyzer
-            from analysis import calculate_msd
+            from msd_calculation import calculate_msd_ensemble
             
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
@@ -1721,13 +1719,11 @@ class EnhancedSPTReportGenerator:
                 temperature_K=temperature_K
             )
             
-            # Calculate MSD first
-            msd_result = calculate_msd(tracks_df, pixel_size=pixel_size, frame_interval=frame_interval)
+            # Calculate ensemble MSD
+            msd_df = calculate_msd_ensemble(tracks_df, max_lag=20, pixel_size=pixel_size, frame_interval=frame_interval)
             
-            if not isinstance(msd_result, dict) or 'ensemble_msd' not in msd_result:
+            if msd_df.empty or 'msd' not in msd_df.columns:
                 return {'success': False, 'error': 'Failed to calculate MSD'}
-            
-            msd_df = msd_result['ensemble_msd']
             
             # Calculate relaxation modulus approximation
             # G(t) ≈ kB*T / (πa * MSD(t)) for 2D
@@ -2332,32 +2328,59 @@ class EnhancedSPTReportGenerator:
                 frame_interval=current_units.get('frame_interval', 1.0)
             )
             
-            # Detect directional motion segments
-            segments_result = analyzer.detect_directional_motion_segments(
-                min_segment_length=5,
-                straightness_threshold=0.7,
-                velocity_threshold=0.05  # μm/s
-            )
+            # Adaptive threshold detection: progressively relax thresholds until segments are found
+            # Start with strict thresholds, then progressively relax if nothing is detected
+            threshold_levels = [
+                {'velocity': 0.05, 'straightness': 0.7, 'segment_length': 5, 'level': 'strict'},
+                {'velocity': 0.03, 'straightness': 0.6, 'segment_length': 4, 'level': 'moderate'},
+                {'velocity': 0.02, 'straightness': 0.5, 'segment_length': 3, 'level': 'relaxed'},
+                {'velocity': 0.01, 'straightness': 0.4, 'segment_length': 3, 'level': 'minimal'}
+            ]
+            
+            segments_result = None
+            thresholds_used = None
+            
+            # Try each threshold level until we find segments
+            for threshold_set in threshold_levels:
+                segments_result = analyzer.detect_directional_motion_segments(
+                    min_segment_length=threshold_set['segment_length'],
+                    straightness_threshold=threshold_set['straightness'],
+                    velocity_threshold=threshold_set['velocity']
+                )
+                
+                if segments_result.get('success', False) and segments_result.get('total_segments', 0) > 0:
+                    thresholds_used = threshold_set
+                    break
             
             # Characterize transport modes if segments found
-            if segments_result.get('success', False) and segments_result.get('total_segments', 0) > 0:
+            if segments_result and segments_result.get('success', False) and segments_result.get('total_segments', 0) > 0:
                 modes_result = analyzer.characterize_transport_modes()
                 
                 return {
                     'success': True,
                     'segments': segments_result,
                     'transport_modes': modes_result,
+                    'thresholds_used': thresholds_used,
                     'summary': {
                         'total_segments': segments_result['total_segments'],
                         'mode_fractions': modes_result.get('mode_fractions', {}),
                         'mean_velocity': modes_result.get('mean_velocity', 0.0),
-                        'mean_straightness': modes_result.get('mean_straightness', 0.0)
+                        'mean_straightness': modes_result.get('mean_straightness', 0.0),
+                        'threshold_level': thresholds_used['level']
                     }
                 }
             else:
+                # Even minimal thresholds found nothing - data is genuinely purely diffusive
                 return {
-                    'success': False,
-                    'error': 'No directional motion segments detected with current thresholds'
+                    'success': True,  # Not an error - just no active transport present
+                    'no_active_transport': True,
+                    'message': 'No directional motion detected - data appears to be purely diffusive/confined',
+                    'summary': {
+                        'total_segments': 0,
+                        'mode_fractions': {'diffusive': 1.0},
+                        'mean_velocity': 0.0,
+                        'mean_straightness': 0.0
+                    }
                 }
             
         except Exception as e:
@@ -2369,6 +2392,27 @@ class EnhancedSPTReportGenerator:
             if not result.get('success', False):
                 from visualization import _empty_fig
                 return _empty_fig(f"Active transport detection failed: {result.get('error', 'Unknown error')}")
+            
+            # Handle case where no active transport was detected (purely diffusive data)
+            if result.get('no_active_transport', False):
+                from visualization import _empty_fig
+                fig = _empty_fig(result.get('message', 'No active transport detected'))
+                fig.update_layout(
+                    title='Active Transport Analysis<br><sub>No directional motion detected - data is purely diffusive/confined</sub>',
+                    annotations=[
+                        dict(
+                            text='✓ Analysis completed successfully<br>Result: 100% diffusive motion<br><br>This is expected for:<br>• Confined nuclear particles<br>• Chromatin-bound proteins<br>• Slow diffusion in crowded environments',
+                            showarrow=False,
+                            xref='paper',
+                            yref='paper',
+                            x=0.5,
+                            y=0.5,
+                            font=dict(size=14, color='green'),
+                            align='center'
+                        )
+                    ]
+                )
+                return fig
             
             transport_modes = result.get('transport_modes', {})
             mode_fractions = transport_modes.get('mode_fractions', {})
@@ -2392,14 +2436,22 @@ class EnhancedSPTReportGenerator:
                 hovertemplate='%{label}<br>Fraction: %{value:.2%}<extra></extra>'
             ))
             
-            # Add summary text
+            # Add summary text with threshold level info
             summary = result.get('summary', {})
             mean_vel = summary.get('mean_velocity', 0)
             mean_straight = summary.get('mean_straightness', 0)
             total_segs = summary.get('total_segments', 0)
+            threshold_level = summary.get('threshold_level', 'unknown')
+            
+            # Add threshold info if adaptive thresholds were used
+            thresholds_used = result.get('thresholds_used', {})
+            if thresholds_used:
+                threshold_info = f"<br><sub>Thresholds: {threshold_level} (v≥{thresholds_used['velocity']:.3f} μm/s, s≥{thresholds_used['straightness']:.2f})</sub>"
+            else:
+                threshold_info = ""
             
             fig.update_layout(
-                title=f'Transport Mode Distribution<br><sub>{total_segs} segments analyzed | Mean velocity: {mean_vel:.3f} μm/s | Mean straightness: {mean_straight:.2f}</sub>',
+                title=f'Transport Mode Distribution<br><sub>{total_segs} segments analyzed | Mean velocity: {mean_vel:.3f} μm/s | Mean straightness: {mean_straight:.2f}</sub>{threshold_info}',
                 height=450,
                 showlegend=True
             )
@@ -3007,7 +3059,12 @@ class EnhancedSPTReportGenerator:
                 return {'success': False, 'error': 'DDMAnalyzer module not available'}
             
             if image_stack is None:
-                return {'success': False, 'error': 'DDM analysis requires image stack data. Please provide image_stack parameter.'}
+                # This is expected for track-based data - DDM requires raw images
+                return {
+                    'success': True,  # Not an error - just not applicable
+                    'not_applicable': True,
+                    'message': 'DDM analysis requires time-series image stack data (e.g., TIFF series, ND2, AVI). Track-based CSV/Excel files are not compatible. If you have image data, please load it directly in the DDM Analysis tab.'
+                }
             
             analyzer = DDMAnalyzer(pixel_size=pixel_size, frame_interval=frame_interval)
             
@@ -3033,6 +3090,31 @@ class EnhancedSPTReportGenerator:
     def _plot_ddm(self, result: Dict[str, Any]) -> go.Figure:
         """Visualize DDM analysis results."""
         try:
+            # Handle "not applicable" case (track-based data without images)
+            if result.get('not_applicable', False):
+                from visualization import _empty_fig
+                fig = _empty_fig(result.get('message', 'DDM not applicable'))
+                fig.update_layout(
+                    title='DDM Tracking-Free Rheology<br><sub>Analysis Not Applicable</sub>',
+                    annotations=[
+                        dict(
+                            text='✓ Track-based data detected<br><br>' + 
+                                 'DDM (Differential Dynamic Microscopy) requires:<br>' +
+                                 '• Time-series image stacks (TIFF, ND2, AVI, etc.)<br>' +
+                                 '• Not compatible with CSV/Excel track files<br><br>' +
+                                 'To use DDM: Load image data in the DDM Analysis tab',
+                            showarrow=False,
+                            xref='paper',
+                            yref='paper',
+                            x=0.5,
+                            y=0.5,
+                            font=dict(size=14, color='blue'),
+                            align='center'
+                        )
+                    ]
+                )
+                return fig
+            
             if not result.get('success', False):
                 fig = go.Figure()
                 fig.add_annotation(text=f"Analysis failed: {result.get('error', 'Unknown error')}", 
@@ -3144,10 +3226,13 @@ class EnhancedSPTReportGenerator:
             if not IHMM_BLUR_AVAILABLE:
                 return {'success': False, 'error': 'iHMMBlurAnalyzer module not available'}
             
+            # iHMMBlurAnalyzer uses dt (frame interval) and sigma_loc (localization uncertainty)
+            # Note: The class does NOT accept max_states parameter - it auto-discovers states
             analyzer = iHMMBlurAnalyzer(
-                pixel_size=pixel_size,
-                frame_interval=frame_interval,
-                max_states=10
+                dt=frame_interval,
+                sigma_loc=pixel_size * 0.1,  # Assume 10% pixel localization uncertainty
+                alpha=1.0,  # HDP concentration for state persistence
+                gamma=1.0   # HDP concentration for new state creation
             )
             
             # Run iHMM segmentation
@@ -3559,12 +3644,27 @@ class EnhancedSPTReportGenerator:
             try:
                 html_bytes = self._export_html_report(config, current_units)
                 if html_bytes:
+                    # Create download button
                     st.download_button(
                         "🌐 Download HTML Report",
                         data=html_bytes,
                         file_name=f"spt_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
                         mime="text/html"
                     )
+                    
+                    # Add helpful info about opening the report
+                    with st.expander("ℹ️ How to view HTML report"):
+                        st.info(
+                            "**After downloading:**\n\n"
+                            "1. Open your Downloads folder\n"
+                            "2. Double-click the `.html` file\n"
+                            "3. It will open in your default web browser\n\n"
+                            "**Features:**\n"
+                            "- Fully interactive Plotly visualizations\n"
+                            "- All analysis results included\n"
+                            "- Works offline (no internet needed)\n"
+                            "- Self-contained (includes all images)"
+                        )
             except Exception as e:
                 st.info(f"HTML export unavailable: {e}")
 
@@ -4641,13 +4741,18 @@ class EnhancedSPTReportGenerator:
             import analysis
             
             # Calculate MSD
-            msd_result = calculate_msd_ensemble(tracks_df, pixel_size, frame_interval)
+            msd_df = calculate_msd_ensemble(tracks_df, max_lag=20, pixel_size=pixel_size, frame_interval=frame_interval)
             
-            if not msd_result.get('success', False):
+            # Check if MSD calculation was successful
+            if msd_df is None or (hasattr(msd_df, 'empty') and msd_df.empty) or 'msd' not in msd_df.columns:
                 return {'success': False, 'error': 'MSD calculation failed'}
             
-            lag_times = np.array(msd_result['lag_times'])
-            msd = np.array(msd_result['msd'])
+            lag_times = msd_df['lag_time'].values
+            msd = msd_df['msd'].values
+            
+            # Validate that we have data (msd is numpy array, check length)
+            if len(msd) == 0 or len(lag_times) == 0:
+                return {'success': False, 'error': 'MSD calculation returned empty data'}
             
             # Fit models
             linear_fit = analysis.fit_msd_linear(lag_times, msd)
@@ -4655,7 +4760,7 @@ class EnhancedSPTReportGenerator:
             
             results = {
                 'success': True,
-                'msd_data': {'lag_times': lag_times, 'msd': msd}
+                'msd_data': {'lag_times': lag_times.tolist(), 'msd': msd.tolist()}
             }
             
             # Validate linear fit
@@ -4682,8 +4787,10 @@ class EnhancedSPTReportGenerator:
                 # Simple diffusion coefficient estimation
                 return np.mean(data) / 4  # For 2D
             
+            # Use first 10 points, ensure integer indexing
+            n_points = min(10, len(msd))
             msd_bootstrap = bootstrap_confidence_interval(
-                msd[:min(10, len(msd))],  # Use first 10 points
+                msd[:n_points],
                 calc_D,
                 n_bootstrap=500,
                 confidence_level=0.95

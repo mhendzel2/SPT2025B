@@ -91,7 +91,7 @@ echo ========================================
 echo.
 echo To run the application:
 echo 1. Activate environment: spt_env\Scripts\activate
-echo 2. Run application: streamlit run app_enhanced_comprehensive.py
+echo 2. Run application: streamlit run app.py
 echo 3. Open browser to: http://localhost:8501
 echo.
 echo Press any key to start the application now...
@@ -99,6 +99,6 @@ pause
 
 echo.
 echo Starting SPT Analysis Platform...
-streamlit run app_enhanced_comprehensive.py --server.port 8501
+streamlit run app.py --server.port 8501
 
 pause
