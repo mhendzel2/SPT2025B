@@ -196,12 +196,18 @@ def calculate_confinement_metrics(tracks_df: pd.DataFrame, pixel_size: float = 0
 def compare_diffusion_coefficients(D_md: float, D_spt: float,
                                    tracks_md: pd.DataFrame, tracks_spt: pd.DataFrame,
                                    pixel_size: float = 0.1,
-                                   frame_interval: float = 0.1) -> Dict[str, Any]:
+                                   frame_interval: float = 0.1,
+                                   n_bootstrap: int = 1000) -> Dict[str, Any]:
     """
     Statistical comparison of diffusion coefficients.
     
     Uses bootstrap resampling to estimate confidence intervals and
     performs hypothesis testing.
+    
+    Parameters
+    ----------
+    n_bootstrap : int
+        Number of bootstrap iterations (default: 1000)
     
     Returns
     -------
@@ -215,7 +221,6 @@ def compare_diffusion_coefficients(D_md: float, D_spt: float,
         'significant': whether difference is significant (p < 0.05)
     """
     # Bootstrap resampling
-    n_bootstrap = 1000
     md_bootstrap = []
     spt_bootstrap = []
     
@@ -536,7 +541,8 @@ def plot_compartment_comparison(compartment_results: List[CompartmentComparison]
 
 def compare_md_with_spt(tracks_md: pd.DataFrame, tracks_spt: pd.DataFrame,
                        pixel_size: float = 0.1, frame_interval: float = 0.1,
-                       analyze_compartments: bool = True) -> Dict[str, Any]:
+                       analyze_compartments: bool = True,
+                       n_bootstrap: int = 1000) -> Dict[str, Any]:
     """
     Comprehensive comparison of MD simulation with experimental SPT data.
     
@@ -552,6 +558,8 @@ def compare_md_with_spt(tracks_md: pd.DataFrame, tracks_spt: pd.DataFrame,
         Frame interval in seconds
     analyze_compartments : bool
         Whether to perform compartment-specific analysis
+    n_bootstrap : int
+        Number of bootstrap iterations (default: 1000)
         
     Returns
     -------
@@ -569,7 +577,8 @@ def compare_md_with_spt(tracks_md: pd.DataFrame, tracks_spt: pd.DataFrame,
             'pixel_size': pixel_size,
             'frame_interval': frame_interval,
             'n_tracks_md': len(tracks_md['track_id'].unique()),
-            'n_tracks_spt': len(tracks_spt['track_id'].unique())
+            'n_tracks_spt': len(tracks_spt['track_id'].unique()),
+            'n_bootstrap': n_bootstrap
         }
     }
     
@@ -583,7 +592,7 @@ def compare_md_with_spt(tracks_md: pd.DataFrame, tracks_spt: pd.DataFrame,
     
     # Statistical comparison
     diff_comparison = compare_diffusion_coefficients(
-        D_md, D_spt, tracks_md, tracks_spt, pixel_size, frame_interval
+        D_md, D_spt, tracks_md, tracks_spt, pixel_size, frame_interval, n_bootstrap
     )
     results['statistical_test'] = diff_comparison
     
