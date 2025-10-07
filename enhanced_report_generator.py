@@ -4249,15 +4249,48 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'success': False, 'error': f'ML classification failed: {str(e)}'}
     
-    def _plot_ml_classification(self, result: Dict[str, Any]) -> List[go.Figure]:
+    def _plot_ml_classification(self, result: Dict[str, Any]) -> go.Figure:
         """Visualize ML classification results"""
-        figures = []
-        
         if not result.get('success', False):
-            return figures
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Analysis failed: {result.get('error', 'Unknown error')}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+            return fig
         
         try:
             from sklearn.decomposition import PCA
+            
+            # Determine number of subplots based on available data
+            has_feature_importance = 'feature_importance' in result and result['feature_importance'] is not None
+            n_plots = 3 if has_feature_importance else 2
+            
+            # Create subplots
+            if n_plots == 3:
+                fig = make_subplots(
+                    rows=2, cols=2,
+                    subplot_titles=(
+                        'PCA Projection of Motion Classes',
+                        'Track Distribution by Class',
+                        'Top 10 Feature Importances',
+                        ''
+                    ),
+                    specs=[[{'type': 'scatter'}, {'type': 'bar'}],
+                           [{'type': 'bar', 'colspan': 2}, None]],
+                    vertical_spacing=0.12,
+                    horizontal_spacing=0.1
+                )
+            else:
+                fig = make_subplots(
+                    rows=1, cols=2,
+                    subplot_titles=(
+                        'PCA Projection of Motion Classes',
+                        'Track Distribution by Class'
+                    ),
+                    specs=[[{'type': 'scatter'}, {'type': 'bar'}]],
+                    horizontal_spacing=0.15
+                )
             
             # 1. PCA projection with class colors
             features = result['features']
@@ -4267,7 +4300,6 @@ class EnhancedSPTReportGenerator:
                 pca = PCA(n_components=2)
                 features_2d = pca.fit_transform(features)
                 
-                fig = go.Figure()
                 for class_id in np.unique(labels):
                     mask = labels == class_id
                     fig.add_trace(go.Scatter(
@@ -4275,59 +4307,59 @@ class EnhancedSPTReportGenerator:
                         y=features_2d[mask, 1],
                         mode='markers',
                         name=f'Class {class_id}',
-                        marker=dict(size=8, opacity=0.7)
-                    ))
+                        marker=dict(size=8, opacity=0.7),
+                        showlegend=True
+                    ), row=1, col=1)
                 
-                fig.update_layout(
-                    title='Motion Classes - PCA Projection',
-                    xaxis_title=f'PC1 ({pca.explained_variance_ratio_[0]:.1%})',
-                    yaxis_title=f'PC2 ({pca.explained_variance_ratio_[1]:.1%})',
-                    template='plotly_white'
-                )
-                figures.append(fig)
+                fig.update_xaxes(title_text=f'PC1 ({pca.explained_variance_ratio_[0]:.1%})', row=1, col=1)
+                fig.update_yaxes(title_text=f'PC2 ({pca.explained_variance_ratio_[1]:.1%})', row=1, col=1)
             
             # 2. Class distribution
             class_stats = result['class_statistics']
             class_names = list(class_stats.keys())
             n_tracks = [class_stats[c]['n_tracks'] for c in class_names]
             
-            fig = go.Figure(data=[
-                go.Bar(x=class_names, y=n_tracks,
-                      marker_color='steelblue')
-            ])
-            fig.update_layout(
-                title='Track Distribution by Motion Class',
-                xaxis_title='Motion Class',
-                yaxis_title='Number of Tracks',
-                template='plotly_white'
-            )
-            figures.append(fig)
+            fig.add_trace(go.Bar(
+                x=class_names, 
+                y=n_tracks,
+                marker_color='steelblue',
+                showlegend=False
+            ), row=1, col=2)
+            
+            fig.update_xaxes(title_text='Motion Class', row=1, col=2)
+            fig.update_yaxes(title_text='Number of Tracks', row=1, col=2)
             
             # 3. Feature importance (if available)
-            if 'feature_importance' in result and result['feature_importance'] is not None:
+            if has_feature_importance:
                 feat_imp = result['feature_importance']
                 sorted_features = sorted(feat_imp.items(), key=lambda x: x[1], reverse=True)[:10]
                 
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=[f[1] for f in sorted_features],
-                        y=[f[0] for f in sorted_features],
-                        orientation='h',
-                        marker_color='coral'
-                    )
-                ])
-                fig.update_layout(
-                    title='Top 10 Feature Importances',
-                    xaxis_title='Importance',
-                    yaxis_title='Feature',
-                    template='plotly_white'
-                )
-                figures.append(fig)
+                fig.add_trace(go.Bar(
+                    x=[f[1] for f in sorted_features],
+                    y=[f[0] for f in sorted_features],
+                    orientation='h',
+                    marker_color='coral',
+                    showlegend=False
+                ), row=2, col=1)
+                
+                fig.update_xaxes(title_text='Importance', row=2, col=1)
+                fig.update_yaxes(title_text='Feature', row=2, col=1)
+            
+            fig.update_layout(
+                title_text='ML Motion Classification Results',
+                height=600 if has_feature_importance else 400,
+                showlegend=True,
+                template='plotly_white'
+            )
         
         except Exception as e:
-            pass  # Silently fail visualization
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
         
-        return figures
+        return fig
     
     # ==================== MD SIMULATION COMPARISON ====================
     
