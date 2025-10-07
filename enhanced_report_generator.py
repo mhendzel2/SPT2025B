@@ -4737,8 +4737,7 @@ class EnhancedSPTReportGenerator:
             frame_interval = current_units.get('frame_interval', 0.1)
             
             from advanced_statistical_tests import validate_model_fit, bootstrap_confidence_interval
-            from msd_calculation import calculate_msd_ensemble
-            import analysis
+            from msd_calculation import calculate_msd_ensemble, fit_msd_linear
             
             # Calculate MSD
             msd_df = calculate_msd_ensemble(tracks_df, max_lag=20, pixel_size=pixel_size, frame_interval=frame_interval)
@@ -4754,9 +4753,23 @@ class EnhancedSPTReportGenerator:
             if len(msd) == 0 or len(lag_times) == 0:
                 return {'success': False, 'error': 'MSD calculation returned empty data'}
             
-            # Fit models
-            linear_fit = analysis.fit_msd_linear(lag_times, msd)
-            anomalous_fit = analysis.fit_msd_anomalous(lag_times, msd)
+            # Fit models - pass DataFrame to fit functions
+            linear_fit = fit_msd_linear(msd_df, max_points=None)
+            
+            # For anomalous fit, create a simple power law fit
+            from scipy.optimize import curve_fit
+            try:
+                def power_law(t, D, alpha):
+                    return D * (t ** alpha)
+                
+                popt, _ = curve_fit(power_law, lag_times, msd, p0=[0.1, 1.0], bounds=([0, 0], [np.inf, 2]))
+                anomalous_fit = {
+                    'success': True,
+                    'D': popt[0],
+                    'alpha': popt[1]
+                }
+            except Exception:
+                anomalous_fit = {'success': False}
             
             results = {
                 'success': True,
@@ -4764,16 +4777,17 @@ class EnhancedSPTReportGenerator:
             }
             
             # Validate linear fit
-            if linear_fit.get('success', False):
-                predicted_linear = linear_fit['D'] * lag_times
+            if linear_fit and 'D' in linear_fit and not np.isnan(linear_fit['D']):
+                predicted_linear = linear_fit['slope'] * lag_times + linear_fit.get('intercept', 0)
                 validation_linear = validate_model_fit(msd, predicted_linear, n_params=1)
                 results['linear_fit'] = {
                     'D': linear_fit['D'],
+                    'r_squared': linear_fit.get('r_squared', 0),
                     'validation': validation_linear
                 }
             
             # Validate anomalous fit  
-            if anomalous_fit.get('success', False):
+            if anomalous_fit and anomalous_fit.get('success', False):
                 predicted_anomalous = anomalous_fit['D'] * (lag_times ** anomalous_fit['alpha'])
                 validation_anomalous = validate_model_fit(msd, predicted_anomalous, n_params=2)
                 results['anomalous_fit'] = {
@@ -4799,7 +4813,9 @@ class EnhancedSPTReportGenerator:
             results['bootstrap_D'] = msd_bootstrap
             
             return results
-        
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
