@@ -3235,8 +3235,8 @@ class EnhancedSPTReportGenerator:
                 gamma=1.0   # HDP concentration for new state creation
             )
             
-            # Run iHMM segmentation
-            result = analyzer.segment_trajectories(tracks_df)
+            # Run iHMM segmentation using batch_analyze for multiple tracks
+            result = analyzer.batch_analyze(tracks_df)
             
             return result
             
