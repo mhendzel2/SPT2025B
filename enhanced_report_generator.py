@@ -360,6 +360,36 @@ class EnhancedSPTReportGenerator:
             'priority': 3
         }
         
+        # Add track quality assessment
+        self.available_analyses['track_quality'] = {
+            'name': 'Track Quality Assessment',
+            'description': 'Comprehensive quality metrics including SNR, localization precision, completeness, and quality scoring.',
+            'function': self._analyze_track_quality,
+            'visualization': self._plot_track_quality,
+            'category': 'Quality Control',
+            'priority': 2
+        }
+        
+        # Add statistical validation
+        self.available_analyses['statistical_validation'] = {
+            'name': 'Statistical Validation',
+            'description': 'Rigorous statistical tests for model fitting including goodness-of-fit, bootstrap confidence intervals, and model selection.',
+            'function': self._analyze_statistical_validation,
+            'visualization': self._plot_statistical_validation,
+            'category': 'Statistics',
+            'priority': 3
+        }
+        
+        # Add enhanced visualizations
+        self.available_analyses['enhanced_viz'] = {
+            'name': 'Enhanced Visualizations',
+            'description': 'Publication-ready interactive plots, density heatmaps, and multi-panel figures.',
+            'function': self._create_enhanced_visualizations,
+            'visualization': self._show_enhanced_visualizations,
+            'category': 'Visualization',
+            'priority': 3
+        }
+        
         self.report_results = {}
         self.report_figures = {}
         self.metadata = {}
@@ -3133,6 +3163,420 @@ class EnhancedSPTReportGenerator:
         
         except Exception as e:
             pass  # Silently fail visualization
+        
+        return figures
+    
+    # ==================== TRACK QUALITY ASSESSMENT ====================
+    
+    def _analyze_track_quality(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Analyze track quality metrics."""
+        try:
+            from track_quality_metrics import assess_track_quality
+            
+            # Run comprehensive quality assessment
+            result = assess_track_quality(
+                tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                intensity_column='intensity' if 'intensity' in tracks_df.columns else None,
+                apply_filtering=False
+            )
+            
+            if result['success']:
+                return {
+                    'success': True,
+                    'summary': result['summary'],
+                    'completeness': result['completeness'],
+                    'quality_scores': result['quality_scores'],
+                    'smoothness': result['smoothness'],
+                    'snr': result.get('snr'),
+                    'localization_precision': result.get('localization_precision'),
+                    'n_tracks': result['n_tracks_input']
+                }
+            else:
+                return {'success': False, 'error': result.get('error', 'Unknown error')}
+        
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _plot_track_quality(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Visualize track quality metrics."""
+        figures = []
+        
+        try:
+            if not result.get('success', False):
+                return figures
+            
+            # 1. Quality score distribution
+            if 'quality_scores' in result:
+                quality_df = result['quality_scores']
+                
+                fig = go.Figure()
+                fig.add_trace(go.Histogram(
+                    x=quality_df['quality_score'],
+                    nbinsx=30,
+                    name='Quality Score',
+                    marker_color='steelblue'
+                ))
+                
+                # Add threshold lines
+                fig.add_vline(x=0.5, line_dash="dash", line_color="orange", 
+                            annotation_text="Min Threshold")
+                fig.add_vline(x=0.7, line_dash="dash", line_color="green",
+                            annotation_text="Good Threshold")
+                
+                fig.update_layout(
+                    title='Track Quality Score Distribution',
+                    xaxis_title='Quality Score (0-1)',
+                    yaxis_title='Count',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 2. Track length vs completeness
+            if 'completeness' in result:
+                comp_df = result['completeness']
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=comp_df['track_length'],
+                    y=comp_df['completeness'],
+                    mode='markers',
+                    marker=dict(
+                        size=8,
+                        color=comp_df['completeness'],
+                        colorscale='Viridis',
+                        colorbar=dict(title="Completeness"),
+                        showscale=True
+                    ),
+                    text=[f"Track {tid}" for tid in comp_df['track_id']],
+                    hovertemplate='Track %{text}<br>Length: %{x}<br>Completeness: %{y:.2f}<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    title='Track Length vs Completeness',
+                    xaxis_title='Track Length (frames)',
+                    yaxis_title='Completeness Ratio',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 3. Quality component breakdown
+            if 'quality_scores' in result:
+                quality_df = result['quality_scores']
+                
+                # Calculate means of each component
+                components = {
+                    'Length': quality_df['length_score'].mean(),
+                    'Completeness': quality_df['completeness_score'].mean(),
+                    'SNR': quality_df['snr_score'].mean(),
+                    'Precision': quality_df['precision_score'].mean(),
+                    'Smoothness': quality_df['smoothness_score'].mean()
+                }
+                
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=list(components.keys()),
+                        y=list(components.values()),
+                        marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+                    )
+                ])
+                
+                fig.update_layout(
+                    title='Average Quality Component Scores',
+                    xaxis_title='Component',
+                    yaxis_title='Average Score (0-1)',
+                    yaxis_range=[0, 1],
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 4. Summary statistics table
+            if 'summary' in result:
+                summary = result['summary']
+                
+                # Create summary text
+                summary_text = f"""
+                <b>Track Quality Summary</b><br><br>
+                <b>Total Tracks:</b> {result['n_tracks']}<br>
+                <b>Mean Track Length:</b> {summary['track_length']['mean']:.1f} frames<br>
+                <b>Mean Completeness:</b> {summary['completeness']['mean']:.2%}<br>
+                <b>Tracks ≥70% Complete:</b> {summary['completeness']['tracks_above_70pct']}<br>
+                <b>Mean Quality Score:</b> {summary['quality_score']['mean']:.3f}<br>
+                <b>High Quality Tracks (≥0.7):</b> {summary['quality_score']['tracks_above_0.7']}
+                """
+                
+                if 'snr' in summary:
+                    summary_text += f"<br><b>Mean SNR:</b> {summary['snr']['mean']:.2f}"
+                
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=summary_text,
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5,
+                    showarrow=False,
+                    font=dict(size=14),
+                    align="left"
+                )
+                
+                fig.update_layout(
+                    title='Quality Assessment Summary',
+                    xaxis=dict(visible=False),
+                    yaxis=dict(visible=False),
+                    template='plotly_white',
+                    height=400
+                )
+                figures.append(fig)
+        
+        except Exception as e:
+            pass
+        
+        return figures
+    
+    # ==================== STATISTICAL VALIDATION ====================
+    
+    def _analyze_statistical_validation(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Perform statistical validation of MSD fitting."""
+        try:
+            from advanced_statistical_tests import validate_model_fit, bootstrap_confidence_interval
+            from msd_calculation import calculate_msd_ensemble
+            import analysis
+            
+            # Calculate MSD
+            msd_result = calculate_msd_ensemble(tracks_df, pixel_size, frame_interval)
+            
+            if not msd_result.get('success', False):
+                return {'success': False, 'error': 'MSD calculation failed'}
+            
+            lag_times = np.array(msd_result['lag_times'])
+            msd = np.array(msd_result['msd'])
+            
+            # Fit models
+            linear_fit = analysis.fit_msd_linear(lag_times, msd)
+            anomalous_fit = analysis.fit_msd_anomalous(lag_times, msd)
+            
+            results = {
+                'success': True,
+                'msd_data': {'lag_times': lag_times, 'msd': msd}
+            }
+            
+            # Validate linear fit
+            if linear_fit.get('success', False):
+                predicted_linear = linear_fit['D'] * lag_times
+                validation_linear = validate_model_fit(msd, predicted_linear, n_params=1)
+                results['linear_fit'] = {
+                    'D': linear_fit['D'],
+                    'validation': validation_linear
+                }
+            
+            # Validate anomalous fit  
+            if anomalous_fit.get('success', False):
+                predicted_anomalous = anomalous_fit['D'] * (lag_times ** anomalous_fit['alpha'])
+                validation_anomalous = validate_model_fit(msd, predicted_anomalous, n_params=2)
+                results['anomalous_fit'] = {
+                    'D': anomalous_fit['D'],
+                    'alpha': anomalous_fit['alpha'],
+                    'validation': validation_anomalous
+                }
+            
+            # Bootstrap confidence intervals for diffusion coefficient
+            def calc_D(data):
+                # Simple diffusion coefficient estimation
+                return np.mean(data) / 4  # For 2D
+            
+            msd_bootstrap = bootstrap_confidence_interval(
+                msd[:min(10, len(msd))],  # Use first 10 points
+                calc_D,
+                n_bootstrap=500,
+                confidence_level=0.95
+            )
+            
+            results['bootstrap_D'] = msd_bootstrap
+            
+            return results
+        
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _plot_statistical_validation(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Visualize statistical validation results."""
+        figures = []
+        
+        try:
+            if not result.get('success', False):
+                return figures
+            
+            # 1. Model comparison plot
+            if 'msd_data' in result:
+                msd_data = result['msd_data']
+                lag_times = msd_data['lag_times']
+                msd = msd_data['msd']
+                
+                fig = go.Figure()
+                
+                # Observed MSD
+                fig.add_trace(go.Scatter(
+                    x=lag_times,
+                    y=msd,
+                    mode='markers',
+                    name='Observed',
+                    marker=dict(size=8, color='black')
+                ))
+                
+                # Linear fit
+                if 'linear_fit' in result:
+                    linear_fit = result['linear_fit']
+                    predicted = linear_fit['D'] * lag_times
+                    r2 = linear_fit['validation']['residual_analysis']['r_squared']
+                    
+                    fig.add_trace(go.Scatter(
+                        x=lag_times,
+                        y=predicted,
+                        mode='lines',
+                        name=f'Linear (R²={r2:.3f})',
+                        line=dict(color='blue', dash='dash')
+                    ))
+                
+                # Anomalous fit
+                if 'anomalous_fit' in result:
+                    anom_fit = result['anomalous_fit']
+                    predicted = anom_fit['D'] * (lag_times ** anom_fit['alpha'])
+                    r2 = anom_fit['validation']['residual_analysis']['r_squared']
+                    
+                    fig.add_trace(go.Scatter(
+                        x=lag_times,
+                        y=predicted,
+                        mode='lines',
+                        name=f'Anomalous α={anom_fit["alpha"]:.2f} (R²={r2:.3f})',
+                        line=dict(color='red', dash='dot')
+                    ))
+                
+                fig.update_layout(
+                    title='MSD Model Fitting with Statistical Validation',
+                    xaxis_title='Lag Time (s)',
+                    yaxis_title='MSD (μm²)',
+                    xaxis_type='log',
+                    yaxis_type='log',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 2. Residual analysis
+            if 'linear_fit' in result:
+                validation = result['linear_fit']['validation']
+                residuals = validation['residual_analysis']['standardized_residuals']
+                
+                fig = make_subplots(
+                    rows=1, cols=2,
+                    subplot_titles=('Residual Distribution', 'Q-Q Plot')
+                )
+                
+                # Histogram of residuals
+                fig.add_trace(
+                    go.Histogram(x=residuals, nbinsx=30, name='Residuals', marker_color='steelblue'),
+                    row=1, col=1
+                )
+                
+                # Q-Q plot
+                import scipy.stats as stats_scipy
+                theoretical_quantiles = stats_scipy.norm.ppf(np.linspace(0.01, 0.99, len(residuals)))
+                sample_quantiles = np.sort(residuals)
+                
+                fig.add_trace(
+                    go.Scatter(x=theoretical_quantiles, y=sample_quantiles, 
+                             mode='markers', name='Q-Q', marker=dict(color='red')),
+                    row=1, col=2
+                )
+                fig.add_trace(
+                    go.Scatter(x=[-3, 3], y=[-3, 3], mode='lines', 
+                             line=dict(color='black', dash='dash'), name='Identity', showlegend=False),
+                    row=1, col=2
+                )
+                
+                fig.update_xaxes(title_text='Standardized Residuals', row=1, col=1)
+                fig.update_xaxes(title_text='Theoretical Quantiles', row=1, col=2)
+                fig.update_yaxes(title_text='Frequency', row=1, col=1)
+                fig.update_yaxes(title_text='Sample Quantiles', row=1, col=2)
+                
+                fig.update_layout(
+                    title='Residual Analysis for Model Validation',
+                    template='plotly_white',
+                    showlegend=False
+                )
+                figures.append(fig)
+            
+            # 3. Bootstrap confidence intervals
+            if 'bootstrap_D' in result:
+                bootstrap_data = result['bootstrap_D']
+                
+                fig = go.Figure()
+                
+                # Distribution
+                fig.add_trace(go.Histogram(
+                    x=bootstrap_data['bootstrap_distribution'],
+                    nbinsx=50,
+                    name='Bootstrap Distribution',
+                    marker_color='lightblue'
+                ))
+                
+                # Confidence interval
+                fig.add_vline(x=bootstrap_data['ci_lower'], line_dash="dash", 
+                            line_color="red", annotation_text="95% CI Lower")
+                fig.add_vline(x=bootstrap_data['ci_upper'], line_dash="dash",
+                            line_color="red", annotation_text="95% CI Upper")
+                fig.add_vline(x=bootstrap_data['point_estimate'], line_color="black",
+                            line_width=2, annotation_text="Estimate")
+                
+                fig.update_layout(
+                    title='Bootstrap Confidence Interval for Diffusion Coefficient',
+                    xaxis_title='D (μm²/s)',
+                    yaxis_title='Frequency',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+        
+        except Exception as e:
+            pass
+        
+        return figures
+    
+    # ==================== ENHANCED VISUALIZATIONS ====================
+    
+    def _create_enhanced_visualizations(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Create enhanced visualizations."""
+        try:
+            from enhanced_visualization import create_comprehensive_visualization
+            
+            figures_dict = create_comprehensive_visualization(
+                tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                max_tracks_display=50
+            )
+            
+            return {
+                'success': True,
+                'figures': figures_dict
+            }
+        
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _show_enhanced_visualizations(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Show enhanced visualizations."""
+        figures = []
+        
+        try:
+            if result.get('success', False) and 'figures' in result:
+                figures_dict = result['figures']
+                
+                # Add all generated figures
+                for key, fig in figures_dict.items():
+                    if fig is not None:
+                        figures.append(fig)
+        
+        except Exception as e:
+            pass
         
         return figures
 
