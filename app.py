@@ -7802,47 +7802,90 @@ elif st.session_state.active_page == "Advanced Analysis":
                 with model_tabs[0]:
                     st.header("Polymer Physics Model")
                     
+                    # Model selection
+                    st.subheader("Model Selection")
+                    polymer_model_type = st.selectbox(
+                        "Select Polymer Model",
+                        ["Rouse (α = 0.5)", "Zimm (α = 2/3)", "Reptation (α = 0.25-0.5)", "Auto-fit α"],
+                        index=3,
+                        help="Choose which polymer physics model to fit"
+                    )
+                    
                     # Parameters
                     st.subheader("Model Parameters")
                     
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        persistence_length = st.number_input(
-                            "Persistence Length (nm)",
-                            min_value=1.0,
-                            max_value=1000.0,
-                            value=50.0,
-                            step=1.0,
-                            help="Persistence length in nanometers"
-                        )
-                        
-                        contour_length = st.number_input(
-                            "Contour Length (nm)",
-                            min_value=10.0,
-                            max_value=10000.0,
-                            value=1000.0,
-                            step=10.0,
-                            help="Contour length in nanometers"
-                        )
+                        if "Reptation" in polymer_model_type:
+                            tube_diameter = st.number_input(
+                                "Tube Diameter (nm)",
+                                min_value=10.0,
+                                max_value=500.0,
+                                value=100.0,
+                                step=10.0,
+                                help="Tube diameter for reptation model"
+                            )
+                            
+                            contour_length = st.number_input(
+                                "Contour Length (nm)",
+                                min_value=100.0,
+                                max_value=10000.0,
+                                value=1000.0,
+                                step=100.0,
+                                help="Polymer contour length in nanometers"
+                            )
+                        elif "Zimm" in polymer_model_type:
+                            solvent_viscosity = st.number_input(
+                                "Solvent Viscosity (mPa·s)",
+                                min_value=0.1,
+                                max_value=10.0,
+                                value=1.0,
+                                step=0.1,
+                                help="Solvent viscosity (1.0 = water at 25°C)"
+                            )
+                            
+                            hydrodynamic_radius = st.number_input(
+                                "Hydrodynamic Radius (nm)",
+                                min_value=1.0,
+                                max_value=100.0,
+                                value=5.0,
+                                step=1.0,
+                                help="Hydrodynamic radius of polymer segment"
+                            )
+                        else:
+                            persistence_length = st.number_input(
+                                "Persistence Length (nm)",
+                                min_value=1.0,
+                                max_value=1000.0,
+                                value=50.0,
+                                step=1.0,
+                                help="Persistence length in nanometers"
+                            )
+                            
+                            contour_length = st.number_input(
+                                "Contour Length (nm)",
+                                min_value=10.0,
+                                max_value=10000.0,
+                                value=1000.0,
+                                step=10.0,
+                                help="Contour length in nanometers"
+                            )
                         
                     with col2:
-                        pixel_size = st.number_input(
-                            "Pixel Size (nm)",
-                            min_value=1.0,
-                            max_value=1000.0,
-                            value=100.0,
-                            step=1.0,
-                            key="polymer_pixel_size",
-                            help="Pixel size in nanometers"
+                        temperature = st.number_input(
+                            "Temperature (K)",
+                            min_value=250.0,
+                            max_value=350.0,
+                            value=300.0,
+                            step=5.0,
+                            help="Temperature in Kelvin"
                         )
                         
-                        time_window = st.slider(
-                            "Time Window (frames)",
-                            min_value=3,
-                            max_value=20,
-                            value=10,
-                            help="Size of sliding time window in frames"
+                        fit_alpha = st.checkbox(
+                            "Fit α exponent",
+                            value=True if "Auto-fit" in polymer_model_type else False,
+                            help="If checked, fit the scaling exponent α. Otherwise use theoretical value."
                         )
                     
                     # Run analysis on button click
@@ -7868,45 +7911,85 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         frame_interval=frame_interval_s
                                     )
                                     
-                                    if msd_results['success'] and 'ensemble_msd' in msd_results:
+                                    # Handle different return types from calculate_msd
+                                    if isinstance(msd_results, dict):
+                                        if not msd_results.get('success'):
+                                            st.error(f"MSD calculation failed: {msd_results.get('error')}")
+                                        else:
+                                            msd_df = msd_results.get('ensemble_msd')
+                                    else:
+                                        # Direct DataFrame return
+                                        msd_df = msd_results
+                                    
+                                    if msd_df is not None and not (isinstance(msd_df, pd.DataFrame) and msd_df.empty):
                                         polymer_model = PolymerPhysicsModel(
-                                            msd_data=msd_results['ensemble_msd'],
+                                            msd_data=msd_df,
                                             pixel_size=pixel_size_um,
                                             frame_interval=frame_interval_s
                                         )
                                         
-                                        # Fit Rouse model
-                                        rouse_results = polymer_model.fit_rouse_model(fit_alpha=True)
+                                        # Select and fit appropriate model
+                                        if "Reptation" in polymer_model_type:
+                                            model_results = polymer_model.fit_reptation_model(
+                                                temperature=temperature,
+                                                tube_diameter=tube_diameter * 1e-9,  # Convert nm to m
+                                                contour_length=contour_length * 1e-9  # Convert nm to m
+                                            )
+                                            model_name = "Reptation"
+                                        elif "Zimm" in polymer_model_type:
+                                            model_results = polymer_model.fit_zimm_model(
+                                                fit_alpha=fit_alpha,
+                                                solvent_viscosity=solvent_viscosity * 0.001,  # Convert mPa·s to Pa·s
+                                                hydrodynamic_radius=hydrodynamic_radius * 1e-9,  # Convert nm to m
+                                                temperature=temperature
+                                            )
+                                            model_name = "Zimm"
+                                        else:  # Rouse or Auto-fit
+                                            model_results = polymer_model.fit_rouse_model(fit_alpha=fit_alpha)
+                                            model_name = "Rouse"
                                         
-                                        if rouse_results.get('success'):
-                                            st.success("✓ Polymer physics analysis completed")
+                                        if model_results.get('success'):
+                                            st.success(f"✓ {model_name} model analysis completed")
                                             
                                             # Display results
+                                            params = model_results.get('parameters', {})
+                                            
+                                            # Show model-specific interpretation
+                                            if 'interpretation' in model_results:
+                                                st.info(f"**Interpretation**: {model_results['interpretation']}")
+                                            elif 'regime' in params:
+                                                st.info(f"**Regime**: {params['regime']}")
+                                            
                                             col1, col2 = st.columns(2)
-                                            params = rouse_results.get('parameters', {})
                                             with col1:
                                                 if 'alpha' in params:
                                                     st.metric("Alpha (Exponent)", f"{params['alpha']:.3f}")
                                                 if 'K_rouse' in params:
-                                                    st.metric("K (Rouse Coeff.)", f"{params['K_rouse']:.6f}")
+                                                    st.metric("K (Rouse)", f"{params['K_rouse']:.6f}")
+                                                if 'K_zimm' in params:
+                                                    st.metric("K (Zimm)", f"{params['K_zimm']:.6f}")
+                                                if 'K_reptation' in params:
+                                                    st.metric("K (Reptation)", f"{params['K_reptation']:.6f}")
                                             with col2:
-                                                if 'D_eff' in params:
-                                                    st.metric("D_eff (μm²/s)", f"{params['D_eff']:.6f}")
-                                                if 'r_squared' in rouse_results:
-                                                    st.metric("R²", f"{rouse_results['r_squared']:.4f}")
+                                                if 'D_zimm_theory' in params:
+                                                    st.metric("D (Zimm Theory)", f"{params['D_zimm_theory']:.3e} m²/s")
+                                                if 'tube_diameter_estimated' in params:
+                                                    st.metric("Tube Diameter (Est.)", f"{params['tube_diameter_estimated']*1e9:.1f} nm")
+                                                if 'reptation_time' in params and params['reptation_time']:
+                                                    st.metric("Reptation Time", f"{params['reptation_time']:.3e} s")
                                             
                                             # Store results
                                             if 'analysis_results' not in st.session_state:
                                                 st.session_state.analysis_results = {}
-                                            st.session_state.analysis_results['polymer_physics'] = rouse_results
+                                            st.session_state.analysis_results['polymer_physics'] = model_results
+                                            st.session_state.analysis_results['polymer_model_type'] = model_name
                                             
                                             # Show fitted curve if available
-                                            if 'fitted_curve' in rouse_results:
+                                            if 'fitted_curve' in model_results:
                                                 st.subheader("Model Fit")
                                                 fig = go.Figure()
                                                 
                                                 # Original MSD
-                                                msd_df = msd_results['ensemble_msd']
                                                 fig.add_trace(go.Scatter(
                                                     x=msd_df['lag_time'],
                                                     y=msd_df['msd'],
@@ -7916,24 +7999,24 @@ elif st.session_state.active_page == "Advanced Analysis":
                                                 ))
                                                 
                                                 # Fitted curve
-                                                fit_data = rouse_results['fitted_curve']
+                                                fit_data = model_results['fitted_curve']
                                                 fig.add_trace(go.Scatter(
                                                     x=fit_data['lag_time'],
                                                     y=fit_data['msd_fit'],
                                                     mode='lines',
-                                                    name='Rouse Model Fit',
+                                                    name=f'{model_name} Model Fit',
                                                     line=dict(color='red', width=2)
                                                 ))
                                                 
                                                 fig.update_layout(
-                                                    title="Rouse Model Fit to MSD",
+                                                    title=f"{model_name} Model Fit to MSD",
                                                     xaxis_title="Lag Time (s)",
                                                     yaxis_title="MSD (μm²)",
                                                     hovermode='closest'
                                                 )
                                                 st.plotly_chart(fig, use_container_width=True)
                                         else:
-                                            st.error(f"Polymer analysis failed: {rouse_results.get('error', 'Unknown error')}")
+                                            st.error(f"Polymer analysis failed: {model_results.get('error', 'Unknown error')}")
                                     else:
                                         st.error("MSD calculation failed. Cannot proceed with polymer analysis.")
                             except Exception as e:

@@ -118,6 +118,218 @@ class PolymerPhysicsModel:
             'parameters': params
         }
 
+    def fit_zimm_model(self, fit_alpha=False, solvent_viscosity=0.001, 
+                       hydrodynamic_radius=5e-9, temperature=300.0):
+        """
+        Fits the Zimm model to the provided MSD data.
+        The Zimm model includes hydrodynamic interactions: MSD ~ t^(2/3).
+        
+        Parameters
+        ----------
+        fit_alpha : bool
+            If True, fit alpha exponent. If False, use theoretical value (0.667)
+        solvent_viscosity : float
+            Solvent viscosity in Pa·s (default: 0.001 for water at 25°C)
+        hydrodynamic_radius : float
+            Hydrodynamic radius in meters (default: 5 nm)
+        temperature : float
+            Temperature in Kelvin (default: 300 K)
+            
+        Returns
+        -------
+        dict
+            Results with success status, parameters, and fitted curve
+        """
+        if self.msd_data is None or self.msd_data.empty:
+            return {'success': False, 'error': 'MSD data not available'}
+
+        lag_time = self.msd_data['lag_time'].values
+        msd = self.msd_data['msd'].values
+
+        # Filter valid data
+        valid_indices = (lag_time > 0) & (msd > 0)
+        if not np.any(valid_indices):
+            return {'success': False, 'error': 'No positive lag time and MSD data available for fitting.'}
+
+        lag_time = lag_time[valid_indices]
+        msd = msd[valid_indices]
+
+        log_lag_time = np.log(lag_time)
+        log_msd = np.log(msd)
+
+        params = {}
+        kB = 1.38e-23  # Boltzmann constant (J/K)
+
+        if fit_alpha:
+            # Fit for both alpha and K
+            try:
+                if len(log_lag_time) < 2:
+                    return {'success': False, 'error': 'Not enough data points to fit model.'}
+                p = np.polyfit(log_lag_time, log_msd, 1)
+                alpha = p[0]
+                log_K = p[1]
+                K = np.exp(log_K)
+                params['alpha'] = alpha
+                params['K_zimm'] = K
+            except np.linalg.LinAlgError as e:
+                return {'success': False, 'error': f'Failed to fit model: {e}'}
+        else:
+            # Theoretical Zimm exponent
+            alpha = 2.0/3.0
+            
+            # Calculate K from hydrodynamic theory
+            # MSD = (kB*T)/(3*pi*eta*Rh) * t^(2/3) * prefactor
+            with np.errstate(divide='ignore', invalid='ignore'):
+                K_values = msd / (lag_time ** alpha)
+            
+            K = np.nanmean(K_values[np.isfinite(K_values)])
+            
+            if np.isnan(K):
+                return {'success': False, 'error': 'Could not determine a valid K_zimm parameter.'}
+            
+            params['alpha'] = alpha
+            params['K_zimm'] = K
+            
+            # Theoretical diffusion coefficient
+            D_zimm = (kB * temperature) / (6 * np.pi * solvent_viscosity * hydrodynamic_radius)
+            params['D_zimm_theory'] = D_zimm
+
+        # Calculate fitted curve
+        fitted_curve = {
+            'lag_time': lag_time,
+            'msd_fit': params.get('K_zimm', 0) * (lag_time ** params['alpha'])
+        }
+
+        return {
+            'success': True,
+            'parameters': params,
+            'fitted_curve': fitted_curve,
+            'model': 'Zimm'
+        }
+
+    def fit_reptation_model(self, temperature=300.0, tube_diameter=100e-9, 
+                           contour_length=1000e-9):
+        """
+        Fits the reptation model (de Gennes) to the provided MSD data.
+        Reptation describes polymer motion in entangled networks.
+        
+        Early time: MSD ~ t^0.25 (Rouse-like within tube)
+        Late time: MSD ~ t^0.5 (tube escape, reptation)
+        
+        Parameters
+        ----------
+        temperature : float
+            Temperature in Kelvin (default: 300 K)
+        tube_diameter : float
+            Tube diameter in meters (default: 100 nm)
+        contour_length : float
+            Polymer contour length in meters (default: 1000 nm)
+            
+        Returns
+        -------
+        dict
+            Results with success status, parameters, and regime classification
+        """
+        if self.msd_data is None or self.msd_data.empty:
+            return {'success': False, 'error': 'MSD data not available'}
+
+        lag_time = self.msd_data['lag_time'].values
+        msd = self.msd_data['msd'].values
+
+        # Filter valid data
+        valid_indices = (lag_time > 0) & (msd > 0)
+        if not np.any(valid_indices):
+            return {'success': False, 'error': 'No positive lag time and MSD data available for fitting.'}
+
+        lag_time = lag_time[valid_indices]
+        msd = msd[valid_indices]
+
+        # Fit log-log to determine exponent
+        log_lag_time = np.log(lag_time)
+        log_msd = np.log(msd)
+
+        try:
+            if len(log_lag_time) < 2:
+                return {'success': False, 'error': 'Not enough data points to fit model.'}
+            
+            # Fit overall exponent
+            p = np.polyfit(log_lag_time, log_msd, 1)
+            alpha = p[0]
+            log_K = p[1]
+            K = np.exp(log_K)
+            
+            # Classify regime based on alpha
+            if alpha < 0.35:
+                regime = "Early reptation (Rouse-like, confined)"
+                regime_phase = "early"
+            elif alpha < 0.6:
+                regime = "Transition to tube escape"
+                regime_phase = "transition"
+            else:
+                regime = "Late reptation (tube escape)"
+                regime_phase = "late"
+            
+            # Estimate tube parameters from MSD
+            # Tube diameter ≈ sqrt(MSD_plateau) (confinement)
+            # Find plateau if present (where d(log MSD)/d(log t) is minimal)
+            if len(msd) > 5:
+                # Look for minimal slope region
+                window = 3
+                slopes = []
+                for i in range(window, len(log_lag_time) - window):
+                    local_slope = np.polyfit(
+                        log_lag_time[i-window:i+window],
+                        log_msd[i-window:i+window],
+                        1
+                    )[0]
+                    slopes.append(local_slope)
+                
+                if slopes:
+                    min_slope_idx = np.argmin(slopes) + window
+                    tube_diameter_estimated = np.sqrt(msd[min_slope_idx])
+                else:
+                    tube_diameter_estimated = tube_diameter
+            else:
+                tube_diameter_estimated = tube_diameter
+            
+            # Reptation time (tau_rep)
+            kB = 1.38e-23  # Boltzmann constant
+            # tau_rep ~ L^3 / (d^2 * D_local) where L is contour length, d is tube diameter
+            # Rough estimate
+            D_local = K / 4  # Approximate local diffusion coefficient
+            if D_local > 0 and tube_diameter > 0:
+                tau_rep = (contour_length**3) / (tube_diameter**2 * D_local)
+            else:
+                tau_rep = None
+            
+            params = {
+                'alpha': alpha,
+                'K_reptation': K,
+                'regime': regime,
+                'regime_phase': regime_phase,
+                'tube_diameter_estimated': tube_diameter_estimated,
+                'tube_diameter_input': tube_diameter,
+                'contour_length': contour_length,
+                'reptation_time': tau_rep
+            }
+            
+            # Calculate fitted curve
+            fitted_curve = {
+                'lag_time': lag_time,
+                'msd_fit': K * (lag_time ** alpha)
+            }
+            
+            return {
+                'success': True,
+                'parameters': params,
+                'fitted_curve': fitted_curve,
+                'model': 'Reptation',
+                'interpretation': f"{regime} (α={alpha:.3f})"
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Reptation fit failed: {str(e)}'}
+
     def analyze_fractal_dimension(self):
         """
         Calculate fractal dimension of MSD trajectory using box-counting method.
