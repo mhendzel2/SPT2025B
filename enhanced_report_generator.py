@@ -1638,10 +1638,38 @@ class EnhancedSPTReportGenerator:
                 )
                 return fig
             
-            data = result.get('data', {})
-            time_lags = data.get('time_lags', [])
-            creep_compliance = data.get('creep_compliance', [])
-            fit_data = data.get('fit', {})
+            import numpy as np
+            
+            # Data can be at top level or nested under 'data' key
+            if 'data' in result:
+                data = result['data']
+                time_lags = data.get('time_lags', [])
+                creep_compliance = data.get('creep_compliance', [])
+            else:
+                # Top-level data (simplified analysis)
+                time_lags = result.get('time', [])
+                creep_compliance = result.get('creep_compliance', [])
+            
+            # Convert arrays if they're numpy arrays or strings
+            if isinstance(time_lags, np.ndarray):
+                time_lags = time_lags.tolist() if len(time_lags) > 0 else []
+            elif isinstance(time_lags, str):
+                time_lags = []
+                
+            if isinstance(creep_compliance, np.ndarray):
+                creep_compliance = creep_compliance.tolist() if len(creep_compliance) > 0 else []
+            elif isinstance(creep_compliance, str):
+                creep_compliance = []
+            
+            if not time_lags or not creep_compliance:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="No creep compliance data available",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            fit_data = result.get('fit', {}) if 'data' in result else {}
             
             fig = go.Figure()
             
@@ -1766,10 +1794,38 @@ class EnhancedSPTReportGenerator:
                 )
                 return fig
             
-            data = result.get('data', {})
-            time_lags = data.get('time_lags', [])
-            relaxation_modulus = data.get('relaxation_modulus', [])
-            fit_data = data.get('fit', {})
+            import numpy as np
+            
+            # Data can be at top level or nested under 'data' key
+            if 'data' in result:
+                data = result['data']
+                time_lags = data.get('time_lags', [])
+                relaxation_modulus = data.get('relaxation_modulus', [])
+            else:
+                # Top-level data (simplified analysis)
+                time_lags = result.get('time', [])
+                relaxation_modulus = result.get('relaxation_modulus', [])
+            
+            # Convert arrays if they're numpy arrays or strings
+            if isinstance(time_lags, np.ndarray):
+                time_lags = time_lags.tolist() if len(time_lags) > 0 else []
+            elif isinstance(time_lags, str):
+                time_lags = []
+                
+            if isinstance(relaxation_modulus, np.ndarray):
+                relaxation_modulus = relaxation_modulus.tolist() if len(relaxation_modulus) > 0 else []
+            elif isinstance(relaxation_modulus, str):
+                relaxation_modulus = []
+            
+            if not time_lags or not relaxation_modulus:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="No relaxation modulus data available",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            fit_data = result.get('fit', {}) if 'data' in result else {}
             
             fig = go.Figure()
             
@@ -1834,6 +1890,7 @@ class EnhancedSPTReportGenerator:
         """Analyze distance-dependent viscoelastic properties using particle pairs."""
         try:
             from rheology import MicrorheologyAnalyzer
+            import numpy as np
             
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
@@ -1848,12 +1905,17 @@ class EnhancedSPTReportGenerator:
                 temperature_K=temperature_K
             )
             
-            # Simplified two-point analysis (placeholder)
-            result = {
-                'success': True,
-                'message': 'Two-point microrheology analysis - simplified version',
-                'units': current_units
-            }
+            # Call the actual two-point microrheology method
+            result = analyzer.two_point_microrheology(
+                tracks_df,
+                pixel_size_um=pixel_size,
+                frame_interval_s=frame_interval,
+                distance_bins_um=np.linspace(0.5, 10, 15),  # 15 distance bins from 0.5 to 10 μm
+                max_lag=10
+            )
+            
+            # Add units to result
+            result['units'] = current_units
             
             return result
             
@@ -1876,10 +1938,29 @@ class EnhancedSPTReportGenerator:
                 )
                 return fig
             
+            import numpy as np
+            
+            # Get data from result
             data = result.get('data', {})
             distances = data.get('distances', [])
             G_prime = data.get('G_prime', [])
             G_double_prime = data.get('G_double_prime', [])
+            
+            # Convert if numpy arrays
+            if isinstance(distances, np.ndarray):
+                distances = distances.tolist() if len(distances) > 0 else []
+            if isinstance(G_prime, np.ndarray):
+                G_prime = G_prime.tolist() if len(G_prime) > 0 else []
+            if isinstance(G_double_prime, np.ndarray):
+                G_double_prime = G_double_prime.tolist() if len(G_double_prime) > 0 else []
+            
+            if not distances or not G_prime or not G_double_prime:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Insufficient particle pairs for two-point microrheology analysis.\nNeed multiple tracks at various distances.",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
             
             fig = make_subplots(rows=1, cols=2, subplot_titles=["Storage Modulus G'", "Loss Modulus G''"])
             

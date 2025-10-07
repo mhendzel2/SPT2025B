@@ -2327,7 +2327,7 @@ def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis")
     Parameters
     ----------
     motion_analysis_results : dict
-        Results dictionary from analyze_motion_models function
+        Results dictionary from analyze_motion function
     title : str
         Title for the plot
         
@@ -2339,8 +2339,58 @@ def plot_motion_analysis(motion_analysis_results, title="Motion Model Analysis")
     import matplotlib.pyplot as plt
     import seaborn as sns
     import numpy as np
+    import pandas as pd
     
-    # Create summary dataframe for model classification
+    # Check for track_results (new structure from analyze_motion)
+    if 'track_results' in motion_analysis_results:
+        track_results_df = motion_analysis_results['track_results']
+        
+        # Check if DataFrame is empty or doesn't have motion_type
+        if track_results_df.empty or 'motion_type' not in track_results_df.columns:
+            fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+            ax.text(0.5, 0.5, "No motion classification data available", 
+                    horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
+            return fig
+        
+        # Count occurrences of each motion type
+        motion_type_counts = track_results_df['motion_type'].value_counts().to_dict()
+        
+        # Create subplot figure
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        
+        # Add pie chart for motion classification
+        motion_labels = list(motion_type_counts.keys())
+        motion_values = list(motion_type_counts.values())
+        
+        motion_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        axes[0].pie(motion_values, labels=motion_labels, autopct='%1.1f%%', 
+                   colors=motion_colors[:len(motion_labels)],
+                   wedgeprops={'edgecolor': 'w'})
+        axes[0].set_title("Motion Type Classification")
+        
+        # Add boxplot for speeds or diffusion if available
+        if 'mean_speed' in track_results_df.columns:
+            sns.boxplot(x='motion_type', y='mean_speed', data=track_results_df, ax=axes[1])
+            axes[1].set_title("Speed Distribution by Motion Type")
+            axes[1].set_xlabel("Motion Type")
+            axes[1].set_ylabel("Mean Speed (μm/s)")
+            axes[1].tick_params(axis='x', rotation=45)
+        elif 'alpha' in track_results_df.columns:
+            sns.boxplot(x='motion_type', y='alpha', data=track_results_df, ax=axes[1])
+            axes[1].set_title("Diffusion Exponent (α) by Motion Type")
+            axes[1].set_xlabel("Motion Type")
+            axes[1].set_ylabel("α")
+            axes[1].tick_params(axis='x', rotation=45)
+        else:
+            axes[1].text(0.5, 0.5, "No quantitative metrics available", 
+                        horizontalalignment='center', verticalalignment='center',
+                        transform=axes[1].transAxes)
+        
+        plt.suptitle(title)
+        plt.tight_layout()
+        return fig
+    
+    # Fallback: check for old structure with 'classifications'
     if 'classifications' not in motion_analysis_results:
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         ax.text(0.5, 0.5, "No motion analysis data available", 
