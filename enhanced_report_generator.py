@@ -2072,21 +2072,28 @@ class EnhancedSPTReportGenerator:
                     'error': 'No intensity channels found in track data. Intensity columns required (e.g., mean_intensity_ch1).'
                 }
             
-            # Analyze intensity-movement correlation
+            # Analyze intensity-movement correlation for first available channel
+            correlation_results = None
             try:
+                # Use first available intensity column from first channel
+                first_channel_cols = list(channels.values())[0] if channels else []
+                intensity_col = first_channel_cols[0] if first_channel_cols else 'intensity'
                 correlation_results = correlate_intensity_movement(
                     tracks_df,
-                    pixel_size=current_units.get('pixel_size', 1.0),
-                    frame_interval=current_units.get('frame_interval', 1.0)
+                    intensity_column=intensity_col
                 )
             except Exception:
                 correlation_results = None
             
-            # Classify intensity behavior patterns
+            # Classify intensity behavior patterns for first available channel
+            behavior_results = None
             try:
+                # Use first available intensity column from first channel
+                first_channel_cols = list(channels.values())[0] if channels else []
+                intensity_col = first_channel_cols[0] if first_channel_cols else 'intensity'
                 behavior_results = classify_intensity_behavior(
                     tracks_df,
-                    channels=channels
+                    intensity_column=intensity_col
                 )
             except Exception:
                 behavior_results = None
