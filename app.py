@@ -7795,7 +7795,9 @@ elif st.session_state.active_page == "Advanced Analysis":
                 model_tabs = st.tabs([
                     "Polymer Physics", 
                     "Active Transport", 
-                    "Energy Landscape"
+                    "Energy Landscape",
+                    "Percolation Analysis",
+                    "CTRW & FBM"
                 ])
                 
                 # Polymer Physics Model
@@ -7887,6 +7889,36 @@ elif st.session_state.active_page == "Advanced Analysis":
                             value=True if "Auto-fit" in polymer_model_type else False,
                             help="If checked, fit the scaling exponent α. Otherwise use theoretical value."
                         )
+                    
+                    # Additional analyses
+                    st.subheader("Additional Analyses")
+                    col3, col4 = st.columns(2)
+                    
+                    with col3:
+                        calculate_fractal = st.checkbox(
+                            "Calculate Fractal Dimension",
+                            value=True,
+                            help="Analyze trajectory fractal dimension (Df) using box-counting"
+                        )
+                        
+                        apply_crowding = st.checkbox(
+                            "Correct for Macromolecular Crowding",
+                            value=False,
+                            help="Apply crowding corrections to estimate free diffusion coefficient"
+                        )
+                    
+                    with col4:
+                        if apply_crowding:
+                            phi_crowding = st.slider(
+                                "Crowding Volume Fraction (φ)",
+                                min_value=0.1,
+                                max_value=0.5,
+                                value=0.3,
+                                step=0.05,
+                                help="Typical nuclear: 0.2-0.4"
+                            )
+                        else:
+                            phi_crowding = 0.3
                     
                     # Run analysis on button click
                     if st.button("Run Polymer Physics Analysis"):
@@ -8015,6 +8047,64 @@ elif st.session_state.active_page == "Advanced Analysis":
                                                     hovermode='closest'
                                                 )
                                                 st.plotly_chart(fig, use_container_width=True)
+                                            
+                                            # Fractal Dimension Analysis
+                                            if calculate_fractal:
+                                                st.subheader("Fractal Dimension Analysis")
+                                                try:
+                                                    fractal_results = polymer_model.analyze_fractal_dimension()
+                                                    
+                                                    if fractal_results.get('success'):
+                                                        Df = fractal_results.get('fractal_dimension', 0)
+                                                        
+                                                        col_f1, col_f2 = st.columns(2)
+                                                        with col_f1:
+                                                            st.metric("Fractal Dimension (Df)", f"{Df:.3f}")
+                                                        with col_f2:
+                                                            st.info(fractal_results.get('interpretation', ''))
+                                                        
+                                                        # Store results
+                                                        st.session_state.analysis_results['fractal_dimension'] = fractal_results
+                                                    else:
+                                                        st.warning(f"Fractal dimension calculation: {fractal_results.get('error', 'Unknown error')}")
+                                                except Exception as e:
+                                                    st.warning(f"Could not calculate fractal dimension: {str(e)}")
+                                            
+                                            # Crowding Correction
+                                            if apply_crowding and 'alpha' in params:
+                                                st.subheader("Macromolecular Crowding Correction")
+                                                try:
+                                                    # Extract D from fitted model
+                                                    if 'D_eff' in params:
+                                                        D_measured = params['D_eff']
+                                                    elif 'K_rouse' in params:
+                                                        # Estimate D from K: MSD = K*t^alpha => D ~ K/(4*t^(alpha-1))
+                                                        D_measured = params['K_rouse'] / (4.0 * frame_interval_s**(params['alpha']-1))
+                                                    else:
+                                                        D_measured = 0.1  # Default guess
+                                                    
+                                                    crowding_results = polymer_model.correct_for_crowding(
+                                                        D_measured=D_measured,
+                                                        phi_crowding=phi_crowding
+                                                    )
+                                                    
+                                                    if crowding_results.get('success'):
+                                                        col_c1, col_c2, col_c3 = st.columns(3)
+                                                        with col_c1:
+                                                            st.metric("D (Measured)", f"{crowding_results['D_measured']:.3e} μm²/s")
+                                                        with col_c2:
+                                                            st.metric("D (Free)", f"{crowding_results['D_free']:.3e} μm²/s")
+                                                        with col_c3:
+                                                            st.metric("Crowding Factor", f"{crowding_results['crowding_factor']:.2%}")
+                                                        
+                                                        st.info(crowding_results.get('interpretation', ''))
+                                                        
+                                                        # Store results
+                                                        st.session_state.analysis_results['crowding_correction'] = crowding_results
+                                                    else:
+                                                        st.warning(f"Crowding correction failed: {crowding_results.get('error')}")
+                                                except Exception as e:
+                                                    st.warning(f"Could not apply crowding correction: {str(e)}")
                                         else:
                                             st.error(f"Polymer analysis failed: {model_results.get('error', 'Unknown error')}")
                                     else:
@@ -8376,6 +8466,403 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 st.error(f"Error in energy landscape mapping: {str(e)}")
                                 import traceback
                                 st.text(traceback.format_exc())
+                
+                # Percolation Analysis
+                with model_tabs[3]:
+                    st.header("Percolation Analysis")
+                    st.write("Analyze connectivity and phase transitions in particle distributions.")
+                    
+                    # Parameters
+                    st.subheader("Analysis Parameters")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        percolation_method = st.selectbox(
+                            "Estimation Method",
+                            ["Connectivity", "Density", "MSD Transition"],
+                            help="Method for estimating percolation threshold"
+                        )
+                        
+                        distance_threshold = st.number_input(
+                            "Connection Distance (μm)",
+                            min_value=0.01,
+                            max_value=10.0,
+                            value=0.5,
+                            step=0.1,
+                            help="Distance below which particles are considered connected (auto if None)"
+                        )
+                        
+                        use_auto_distance = st.checkbox(
+                            "Auto-estimate distance",
+                            value=True,
+                            help="Automatically estimate connection distance from data"
+                        )
+                    
+                    with col2:
+                        show_network = st.checkbox(
+                            "Show Connection Network",
+                            value=True,
+                            help="Visualize connectivity network"
+                        )
+                        
+                        color_by = st.selectbox(
+                            "Color Nodes By",
+                            ["Cluster", "Degree"],
+                            help="Node coloring scheme"
+                        )
+                    
+                    if st.button("Run Percolation Analysis"):
+                        with st.spinner("Analyzing percolation properties..."):
+                            try:
+                                from percolation_analyzer import PercolationAnalyzer
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    units = get_units()
+                                    pixel_size_um = units.get('pixel_size', 0.1)
+                                    
+                                    analyzer = PercolationAnalyzer(tracks_df, pixel_size=pixel_size_um)
+                                    
+                                    # Estimate percolation threshold
+                                    st.subheader("Percolation Threshold Estimation")
+                                    
+                                    method_map = {
+                                        "Connectivity": "connectivity",
+                                        "Density": "density",
+                                        "MSD Transition": "msd_transition"
+                                    }
+                                    
+                                    dist_threshold = None if use_auto_distance else distance_threshold
+                                    
+                                    threshold_results = analyzer.estimate_percolation_threshold(
+                                        method=method_map[percolation_method],
+                                        distance_threshold=dist_threshold
+                                    )
+                                    
+                                    # Display results
+                                    if threshold_results['is_percolating']:
+                                        st.success("✓ System is PERCOLATING (above threshold)")
+                                    else:
+                                        st.warning("System is NOT percolating (below threshold)")
+                                    
+                                    col_p1, col_p2, col_p3 = st.columns(3)
+                                    with col_p1:
+                                        st.metric("Density", f"{threshold_results['density']:.2f} particles/μm²")
+                                    with col_p2:
+                                        st.metric("P(percolation)", f"{threshold_results['percolation_probability']:.2f}")
+                                    with col_p3:
+                                        st.metric("Confidence", threshold_results['confidence'].upper())
+                                    
+                                    # Connectivity network analysis
+                                    st.subheader("Connectivity Network")
+                                    
+                                    network_results = analyzer.analyze_connectivity_network(
+                                        distance_threshold=dist_threshold
+                                    )
+                                    
+                                    col_n1, col_n2, col_n3, col_n4 = st.columns(4)
+                                    with col_n1:
+                                        st.metric("Nodes", network_results['num_nodes'])
+                                    with col_n2:
+                                        st.metric("Edges", network_results['num_edges'])
+                                    with col_n3:
+                                        st.metric("Clusters", network_results['num_clusters'])
+                                    with col_n4:
+                                        st.metric("Largest Cluster", network_results['largest_cluster_size'])
+                                    
+                                    if network_results['spanning_cluster']:
+                                        st.success("✓ Spanning cluster detected!")
+                                    
+                                    # Cluster size distribution
+                                    st.subheader("Cluster Size Distribution")
+                                    
+                                    cluster_dist = analyzer.calculate_cluster_size_distribution(
+                                        distance_threshold=dist_threshold
+                                    )
+                                    
+                                    if not np.isnan(cluster_dist['tau_exponent']):
+                                        st.info(f"Power-law exponent τ = {cluster_dist['tau_exponent']:.2f} " +
+                                               f"(Theory: 2D={cluster_dist['theoretical_tau_2d']}, " +
+                                               f"3D={cluster_dist['theoretical_tau_3d']})")
+                                    
+                                    # Plot cluster size distribution
+                                    fig_dist = go.Figure()
+                                    fig_dist.add_trace(go.Scatter(
+                                        x=cluster_dist['cluster_sizes'],
+                                        y=cluster_dist['probabilities'],
+                                        mode='markers',
+                                        name='Data',
+                                        marker=dict(size=8, color='blue')
+                                    ))
+                                    
+                                    fig_dist.update_layout(
+                                        title="Cluster Size Distribution",
+                                        xaxis_title="Cluster Size (s)",
+                                        yaxis_title="Probability P(s)",
+                                        xaxis_type="log",
+                                        yaxis_type="log",
+                                        hovermode='closest'
+                                    )
+                                    st.plotly_chart(fig_dist, use_container_width=True)
+                                    
+                                    # Visualize network
+                                    if show_network:
+                                        st.subheader("Connectivity Network Visualization")
+                                        
+                                        fig_network = analyzer.visualize_percolation_map(
+                                            distance_threshold=dist_threshold,
+                                            show_connections=True,
+                                            color_by=color_by.lower()
+                                        )
+                                        st.plotly_chart(fig_network, use_container_width=True)
+                                    
+                                    # Store results
+                                    if 'analysis_results' not in st.session_state:
+                                        st.session_state.analysis_results = {}
+                                    st.session_state.analysis_results['percolation'] = {
+                                        'threshold': threshold_results,
+                                        'network': network_results,
+                                        'cluster_distribution': cluster_dist
+                                    }
+                            
+                            except Exception as e:
+                                st.error(f"Error in percolation analysis: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
+                
+                # CTRW & FBM Analysis
+                with model_tabs[4]:
+                    st.header("CTRW & Fractional Brownian Motion")
+                    st.write("Analyze Continuous Time Random Walk properties and Fractional Brownian Motion.")
+                    
+                    analysis_type = st.radio(
+                        "Analysis Type",
+                        ["CTRW Analysis", "FBM Fitting"],
+                        horizontal=True
+                    )
+                    
+                    if analysis_type == "CTRW Analysis":
+                        st.subheader("Continuous Time Random Walk Analysis")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            min_pause_threshold = st.number_input(
+                                "Pause Threshold (μm)",
+                                min_value=0.001,
+                                max_value=1.0,
+                                value=0.01,
+                                step=0.01,
+                                format="%.3f",
+                                help="Minimum displacement considered as movement"
+                            )
+                        
+                        with col2:
+                            fit_distribution = st.selectbox(
+                                "Distribution Type",
+                                ["Auto", "Exponential", "Power-law"],
+                                help="Type of distribution to fit"
+                            )
+                        
+                        if st.button("Run CTRW Analysis"):
+                            with st.spinner("Analyzing CTRW properties..."):
+                                try:
+                                    from advanced_diffusion_models import CTRWAnalyzer
+                                    
+                                    # Get track data
+                                    tracks_df, has_data = get_track_data()
+                                    if not has_data:
+                                        st.error("No track data available")
+                                    else:
+                                        units = get_units()
+                                        pixel_size_um = units.get('pixel_size', 0.1)
+                                        frame_interval_s = units.get('frame_interval', 0.1)
+                                        
+                                        analyzer = CTRWAnalyzer(tracks_df, pixel_size_um, frame_interval_s)
+                                        
+                                        # Waiting time analysis
+                                        st.subheader("Waiting Time Distribution")
+                                        
+                                        wait_results = analyzer.analyze_waiting_time_distribution(
+                                            min_pause_threshold=min_pause_threshold,
+                                            fit_distribution=fit_distribution.lower()
+                                        )
+                                        
+                                        col_w1, col_w2, col_w3 = st.columns(3)
+                                        with col_w1:
+                                            st.metric("Distribution Type", wait_results['distribution_type'].capitalize())
+                                        with col_w2:
+                                            st.metric("Mean Wait Time", f"{wait_results['mean_waiting_time']:.3f} s")
+                                        with col_w3:
+                                            if not np.isnan(wait_results['alpha_exponent']):
+                                                st.metric("Power-law α", f"{wait_results['alpha_exponent']:.2f}")
+                                        
+                                        if wait_results['is_heavy_tailed']:
+                                            st.warning("⚠ Heavy-tailed distribution detected (α < 3) → CTRW behavior")
+                                        
+                                        # Plot waiting time distribution
+                                        if len(wait_results['waiting_times']) > 0:
+                                            fig_wait = go.Figure()
+                                            
+                                            # Histogram
+                                            fig_wait.add_trace(go.Histogram(
+                                                x=wait_results['waiting_times'],
+                                                nbinsx=50,
+                                                name='Waiting Times',
+                                                histnorm='probability'
+                                            ))
+                                            
+                                            fig_wait.update_layout(
+                                                title="Waiting Time Distribution",
+                                                xaxis_title="Waiting Time (s)",
+                                                yaxis_title="Probability",
+                                                hovermode='closest'
+                                            )
+                                            st.plotly_chart(fig_wait, use_container_width=True)
+                                        
+                                        # Jump length analysis
+                                        st.subheader("Jump Length Distribution")
+                                        
+                                        jump_results = analyzer.analyze_jump_length_distribution(
+                                            fit_distribution=fit_distribution.lower()
+                                        )
+                                        
+                                        col_j1, col_j2, col_j3 = st.columns(3)
+                                        with col_j1:
+                                            st.metric("Distribution Type", jump_results['distribution_type'].capitalize())
+                                        with col_j2:
+                                            st.metric("Mean Jump Length", f"{jump_results['mean_jump_length']:.3f} μm")
+                                        with col_j3:
+                                            if not np.isnan(jump_results['levy_exponent']):
+                                                st.metric("Levy β", f"{jump_results['levy_exponent']:.2f}")
+                                        
+                                        if jump_results['is_levy_flight']:
+                                            st.warning("⚠ Levy flight detected (0 < β < 2)")
+                                        
+                                        # Plot jump length distribution
+                                        if len(jump_results['jump_lengths']) > 0:
+                                            fig_jump = go.Figure()
+                                            
+                                            fig_jump.add_trace(go.Histogram(
+                                                x=jump_results['jump_lengths'],
+                                                nbinsx=50,
+                                                name='Jump Lengths',
+                                                histnorm='probability'
+                                            ))
+                                            
+                                            fig_jump.update_layout(
+                                                title="Jump Length Distribution",
+                                                xaxis_title="Jump Length (μm)",
+                                                yaxis_title="Probability",
+                                                hovermode='closest'
+                                            )
+                                            st.plotly_chart(fig_jump, use_container_width=True)
+                                        
+                                        # Ergodicity test
+                                        st.subheader("Ergodicity Test")
+                                        
+                                        ergodicity_results = analyzer.test_ergodicity(n_segments=4)
+                                        
+                                        if ergodicity_results['is_ergodic']:
+                                            st.success("✓ System is ERGODIC")
+                                        else:
+                                            st.warning("⚠ System is NON-ERGODIC (aging detected)")
+                                        
+                                        col_e1, col_e2 = st.columns(2)
+                                        with col_e1:
+                                            st.metric("EB Parameter", f"{ergodicity_results['ergodicity_breaking_parameter']:.3f}")
+                                        with col_e2:
+                                            st.metric("Aging Coefficient", f"{ergodicity_results['aging_coefficient']:.3f}")
+                                        
+                                        # Coupling analysis
+                                        st.subheader("Wait-Jump Coupling")
+                                        
+                                        coupling_results = analyzer.analyze_coupling(
+                                            min_pause_threshold=min_pause_threshold
+                                        )
+                                        
+                                        if coupling_results['is_coupled']:
+                                            st.warning(f"⚠ Coupling detected (r={coupling_results['correlation_coefficient']:.2f}, p={coupling_results['p_value']:.3f})")
+                                        else:
+                                            st.info(f"No significant coupling (r={coupling_results['correlation_coefficient']:.2f}, p={coupling_results['p_value']:.3f})")
+                                        
+                                        # Store results
+                                        if 'analysis_results' not in st.session_state:
+                                            st.session_state.analysis_results = {}
+                                        st.session_state.analysis_results['ctrw'] = {
+                                            'waiting_times': wait_results,
+                                            'jump_lengths': jump_results,
+                                            'ergodicity': ergodicity_results,
+                                            'coupling': coupling_results
+                                        }
+                                
+                                except Exception as e:
+                                    st.error(f"Error in CTRW analysis: {str(e)}")
+                                    import traceback
+                                    st.text(traceback.format_exc())
+                    
+                    else:  # FBM Fitting
+                        st.subheader("Fractional Brownian Motion Fitting")
+                        
+                        st.write("Fit FBM model to characterize long-range correlations via Hurst exponent.")
+                        
+                        if st.button("Fit FBM Model"):
+                            with st.spinner("Fitting FBM model..."):
+                                try:
+                                    from advanced_diffusion_models import fit_fbm_model
+                                    
+                                    # Get track data
+                                    tracks_df, has_data = get_track_data()
+                                    if not has_data:
+                                        st.error("No track data available")
+                                    else:
+                                        units = get_units()
+                                        pixel_size_um = units.get('pixel_size', 0.1)
+                                        frame_interval_s = units.get('frame_interval', 0.1)
+                                        
+                                        fbm_results = fit_fbm_model(
+                                            tracks_df,
+                                            pixel_size=pixel_size_um,
+                                            frame_interval=frame_interval_s
+                                        )
+                                        
+                                        if fbm_results.get('success'):
+                                            st.success("✓ FBM model fitted successfully")
+                                            
+                                            col_f1, col_f2, col_f3 = st.columns(3)
+                                            with col_f1:
+                                                st.metric("Hurst Exponent (H)", f"{fbm_results['hurst_exponent']:.3f}")
+                                            with col_f2:
+                                                st.metric("Diffusion Coeff.", f"{fbm_results['diffusion_coefficient']:.3e} μm²/s")
+                                            with col_f3:
+                                                st.metric("R²", f"{fbm_results['r_squared']:.3f}")
+                                            
+                                            st.info(f"**{fbm_results['persistence_type']}**: {fbm_results['interpretation']}")
+                                            
+                                            # Interpretation guide
+                                            with st.expander("Hurst Exponent Interpretation"):
+                                                st.write("""
+                                                - **H = 0.5**: Standard Brownian motion (no memory)
+                                                - **H < 0.5**: Anti-persistent (motion reverses, negative correlation)
+                                                - **H > 0.5**: Persistent (motion continues, positive correlation)
+                                                - **MSD scaling**: MSD ~ t^(2H)
+                                                """)
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['fbm'] = fbm_results
+                                        else:
+                                            st.error(f"FBM fitting failed: {fbm_results.get('error', 'Unknown error')}")
+                                
+                                except Exception as e:
+                                    st.error(f"Error in FBM fitting: {str(e)}")
+                                    import traceback
+                                    st.text(traceback.format_exc())
             else:
                 st.warning("Biophysical models module is not available. Make sure the appropriate files are in the correct location.")
         

@@ -449,6 +449,208 @@ class PolymerPhysicsModel:
         
         # ...existing code...
         # Continue with analysis using tracks_df
+    
+    def correct_for_crowding(
+        self,
+        D_measured: float,
+        phi_crowding: float = 0.3,
+        obstacle_shape: str = 'spherical'
+    ) -> Dict:
+        """
+        Correct measured diffusion coefficient for macromolecular crowding effects.
+        
+        The nucleus is a crowded environment with volume fraction φ ≈ 0.2-0.4.
+        Crowding reduces effective diffusion coefficient.
+        
+        Parameters:
+        -----------
+        D_measured : float
+            Measured diffusion coefficient (μm²/s) in crowded environment
+        phi_crowding : float
+            Volume fraction occupied by obstacles (0-1)
+            Typical nuclear values: 0.2-0.4
+        obstacle_shape : str
+            'spherical' or 'rod-like' (affects scaling)
+        
+        Returns:
+        --------
+        dict with keys:
+            - 'D_free': float (diffusion in dilute solution)
+            - 'D_measured': float (input value)
+            - 'crowding_factor': float (D_measured / D_free)
+            - 'phi_crowding': float
+            - 'effective_viscosity_ratio': float
+        
+        Reference:
+        - Minton (2001): "The Influence of Macromolecular Crowding"
+        """
+        # Scaling factor depends on obstacle shape
+        if obstacle_shape == 'spherical':
+            alpha = 1.5  # Hard spheres
+        elif obstacle_shape == 'rod-like':
+            alpha = 2.0  # Rod-like obstacles
+        else:
+            alpha = 1.5  # Default
+        
+        # Scaled particle theory: D_eff = D_free * exp(-α*φ)
+        D_free = D_measured / np.exp(-alpha * phi_crowding)
+        
+        crowding_factor = D_measured / D_free
+        
+        # Effective viscosity ratio (Stokes-Einstein: D ~ 1/η)
+        viscosity_ratio = D_free / D_measured
+        
+        # Interpretation
+        if phi_crowding < 0.2:
+            crowding_level = "Low crowding"
+        elif phi_crowding < 0.35:
+            crowding_level = "Moderate crowding (typical nuclear)"
+        else:
+            crowding_level = "High crowding"
+        
+        return {
+            'success': True,
+            'D_free': D_free,
+            'D_measured': D_measured,
+            'crowding_factor': crowding_factor,
+            'phi_crowding': phi_crowding,
+            'effective_viscosity_ratio': viscosity_ratio,
+            'crowding_level': crowding_level,
+            'interpretation': f"{crowding_level}: Diffusion reduced to {crowding_factor*100:.1f}% of free value"
+        }
+    
+    def calculate_local_diffusion_map(
+        self,
+        tracks_df: pd.DataFrame,
+        grid_resolution: int = 20,
+        window_size: int = 5,
+        min_points: int = 5
+    ) -> Dict:
+        """
+        Calculate spatially-resolved diffusion coefficient D(x,y).
+        
+        Divides space into grid and calculates local D from tracks passing
+        through each cell.
+        
+        Parameters:
+        -----------
+        tracks_df : pd.DataFrame
+            Track data with columns: track_id, frame, x, y
+        grid_resolution : int
+            Number of grid cells in each direction
+        window_size : int
+            Number of frames for local MSD calculation
+        min_points : int
+            Minimum number of displacements required per cell
+        
+        Returns:
+        --------
+        dict with keys:
+            - 'D_map': 2D array of D values (μm²/s)
+            - 'x_coords': array of x coordinates (μm)
+            - 'y_coords': array of y coordinates (μm)
+            - 'confidence_map': R² values for each fit
+            - 'count_map': Number of measurements per cell
+        """
+        # Convert to physical units
+        tracks_df = tracks_df.copy()
+        tracks_df['x_um'] = tracks_df['x'] * self.pixel_size
+        tracks_df['y_um'] = tracks_df['y'] * self.pixel_size
+        tracks_df['time_s'] = tracks_df['frame'] * self.frame_interval
+        
+        # Define grid
+        x_min, x_max = tracks_df['x_um'].min(), tracks_df['x_um'].max()
+        y_min, y_max = tracks_df['y_um'].min(), tracks_df['y_um'].max()
+        
+        x_edges = np.linspace(x_min, x_max, grid_resolution + 1)
+        y_edges = np.linspace(y_min, y_max, grid_resolution + 1)
+        
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        
+        # Initialize output maps
+        D_map = np.full((grid_resolution, grid_resolution), np.nan)
+        confidence_map = np.full((grid_resolution, grid_resolution), np.nan)
+        count_map = np.zeros((grid_resolution, grid_resolution), dtype=int)
+        
+        # Calculate local D for each grid cell
+        for i in range(grid_resolution):
+            for j in range(grid_resolution):
+                # Find tracks in this cell
+                in_cell = (
+                    (tracks_df['x_um'] >= x_edges[i]) &
+                    (tracks_df['x_um'] < x_edges[i+1]) &
+                    (tracks_df['y_um'] >= y_edges[j]) &
+                    (tracks_df['y_um'] < y_edges[j+1])
+                )
+                
+                cell_tracks = tracks_df[in_cell]
+                
+                if len(cell_tracks) < min_points:
+                    continue
+                
+                # Calculate local displacements
+                displacements_squared = []
+                time_lags = []
+                
+                for track_id in cell_tracks['track_id'].unique():
+                    track = cell_tracks[cell_tracks['track_id'] == track_id].sort_values('frame')
+                    
+                    if len(track) < 2:
+                        continue
+                    
+                    # Calculate displacements up to window_size
+                    for lag in range(1, min(window_size + 1, len(track))):
+                        dx = track['x_um'].values[lag:] - track['x_um'].values[:-lag]
+                        dy = track['y_um'].values[lag:] - track['y_um'].values[:-lag]
+                        dt = track['time_s'].values[lag:] - track['time_s'].values[:-lag]
+                        
+                        r_squared = dx**2 + dy**2
+                        
+                        displacements_squared.extend(r_squared)
+                        time_lags.extend(dt)
+                
+                if len(displacements_squared) < min_points:
+                    continue
+                
+                count_map[j, i] = len(displacements_squared)
+                
+                # Fit D: <r²> = 4*D*t (2D)
+                try:
+                    from scipy.stats import linregress
+                    
+                    time_lags = np.array(time_lags)
+                    displacements_squared = np.array(displacements_squared)
+                    
+                    # Remove outliers (optional)
+                    valid = displacements_squared < np.percentile(displacements_squared, 95)
+                    
+                    if np.sum(valid) < min_points:
+                        continue
+                    
+                    slope, intercept, r_value, p_value, std_err = linregress(
+                        time_lags[valid],
+                        displacements_squared[valid]
+                    )
+                    
+                    D_local = slope / 4.0  # 2D: <r²> = 4*D*t
+                    
+                    # Store results
+                    D_map[j, i] = D_local
+                    confidence_map[j, i] = r_value**2
+                    
+                except Exception as e:
+                    continue
+        
+        return {
+            'success': True,
+            'D_map': D_map,
+            'x_coords': x_centers,
+            'y_coords': y_centers,
+            'confidence_map': confidence_map,
+            'count_map': count_map,
+            'grid_resolution': grid_resolution
+        }
 
 class EnergyLandscapeMapper:
     """
