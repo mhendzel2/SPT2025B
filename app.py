@@ -58,6 +58,7 @@ from state_manager import get_state_manager
 from analysis_manager import AnalysisManager
 from config_manager import get_config_manager
 from channel_manager import channel_manager
+from data_access_utils import get_track_data, get_units
 
 # Import unified settings panel and progress utilities
 from settings_panel import get_settings_panel, get_global_units
@@ -7847,46 +7848,98 @@ elif st.session_state.active_page == "Advanced Analysis":
                     # Run analysis on button click
                     if st.button("Run Polymer Physics Analysis"):
                         with st.spinner("Running polymer physics analysis..."):
-                            # Run polymer physics analysis
-                                if st.button("Analyze Polymer Dynamics", type="primary"):
-                                    with st.spinner("Running polymer physics analysis..."):
-                                        from biophysical_models import PolymerPhysicsModel
+                            try:
+                                from biophysical_models import PolymerPhysicsModel
+                                from analysis import calculate_msd
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    units = get_units()
+                                    pixel_size_um = units.get('pixel_size', 0.1)
+                                    frame_interval_s = units.get('frame_interval', 0.1)
+                                    
+                                    # Calculate MSD first
+                                    msd_results = calculate_msd(
+                                        tracks_df,
+                                        pixel_size=pixel_size_um,
+                                        frame_interval=frame_interval_s
+                                    )
+                                    
+                                    if msd_results['success'] and 'ensemble_msd' in msd_results:
+                                        polymer_model = PolymerPhysicsModel(
+                                            msd_data=msd_results['ensemble_msd'],
+                                            pixel_size=pixel_size_um,
+                                            frame_interval=frame_interval_s
+                                        )
                                         
-                                        # Calculate MSD first
-                                        msd_results = calculate_msd(
-                                            st.session_state.tracks_data,
-                                             pixel_size=pixel_size,
-                                            frame_interval=frame_interval
-                                       )
+                                        # Fit Rouse model
+                                        rouse_results = polymer_model.fit_rouse_model(fit_alpha=True)
                                         
-                                        if msd_results['success'] and 'ensemble_msd' in msd_results:
-                                            polymer_model = PolymerPhysicsModel()
-                                            time_lags = msd_results['ensemble_msd']['lag_time_s'].values
-                                            msd_values = msd_results['ensemble_msd']['msd_um2'].values
+                                        if rouse_results.get('success'):
+                                            st.success("✓ Polymer physics analysis completed")
                                             
-                                            # Fit Rouse model
-                                            rouse_results = polymer_model.fit_rouse_model_to_msd(
-                                                time_lags, msd_values, fit_alpha_exponent=True
-                                            )
-                                            
-                                            if rouse_results['success']:
-                                                st.success("✓ Polymer physics analysis completed")
-                                                
-                                                # Display results
-                                                col1, col2 = st.columns(2)
-                                                with col1:
-                                                    st.metric("D_macro (μm²/s)", f"{rouse_results['params']['D_macro']:.6f}")
-                                                    st.metric("Gamma", f"{rouse_results['params']['Gamma']:.6f}")
-                                                with col2:
-                                                    st.metric("Alpha", f"{rouse_results['params']['alpha']:.3f}")
+                                            # Display results
+                                            col1, col2 = st.columns(2)
+                                            params = rouse_results.get('parameters', {})
+                                            with col1:
+                                                if 'alpha' in params:
+                                                    st.metric("Alpha (Exponent)", f"{params['alpha']:.3f}")
+                                                if 'K_rouse' in params:
+                                                    st.metric("K (Rouse Coeff.)", f"{params['K_rouse']:.6f}")
+                                            with col2:
+                                                if 'D_eff' in params:
+                                                    st.metric("D_eff (μm²/s)", f"{params['D_eff']:.6f}")
+                                                if 'r_squared' in rouse_results:
                                                     st.metric("R²", f"{rouse_results['r_squared']:.4f}")
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['polymer_physics'] = rouse_results
+                                            
+                                            # Show fitted curve if available
+                                            if 'fitted_curve' in rouse_results:
+                                                st.subheader("Model Fit")
+                                                fig = go.Figure()
                                                 
-                                                # Store results
-                                                st.session_state.analysis_results['polymer_physics'] = rouse_results
-                                            else:
-                                                st.error(f"Polymer analysis failed: {rouse_results.get('error', 'Unknown error')}")
+                                                # Original MSD
+                                                msd_df = msd_results['ensemble_msd']
+                                                fig.add_trace(go.Scatter(
+                                                    x=msd_df['lag_time'],
+                                                    y=msd_df['msd'],
+                                                    mode='markers',
+                                                    name='Measured MSD',
+                                                    marker=dict(size=8, color='blue')
+                                                ))
+                                                
+                                                # Fitted curve
+                                                fit_data = rouse_results['fitted_curve']
+                                                fig.add_trace(go.Scatter(
+                                                    x=fit_data['lag_time'],
+                                                    y=fit_data['msd_fit'],
+                                                    mode='lines',
+                                                    name='Rouse Model Fit',
+                                                    line=dict(color='red', width=2)
+                                                ))
+                                                
+                                                fig.update_layout(
+                                                    title="Rouse Model Fit to MSD",
+                                                    xaxis_title="Lag Time (s)",
+                                                    yaxis_title="MSD (μm²)",
+                                                    hovermode='closest'
+                                                )
+                                                st.plotly_chart(fig, use_container_width=True)
                                         else:
-                                            st.error("MSD calculation failed. Cannot proceed with polymer analysis.")
+                                            st.error(f"Polymer analysis failed: {rouse_results.get('error', 'Unknown error')}")
+                                    else:
+                                        st.error("MSD calculation failed. Cannot proceed with polymer analysis.")
+                            except Exception as e:
+                                st.error(f"Error in polymer physics analysis: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
                 
                 # Active Transport Model
                 with model_tabs[1]:
@@ -7895,8 +7948,177 @@ elif st.session_state.active_page == "Advanced Analysis":
                     # Parameters
                     st.subheader("Model Parameters")
                     
-                    # Implementation would go here
-                    st.text("Active Transport Analyzer would go here.")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        speed_threshold = st.number_input(
+                            "Speed Threshold (μm/s)",
+                            min_value=0.01,
+                            max_value=10.0,
+                            value=0.5,
+                            step=0.1,
+                            help="Minimum speed to classify as active transport"
+                        )
+                        
+                        straightness_threshold = st.number_input(
+                            "Straightness Threshold",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.7,
+                            step=0.05,
+                            help="Minimum straightness (0-1) for directed motion"
+                        )
+                    
+                    with col2:
+                        min_track_length = st.number_input(
+                            "Minimum Track Length",
+                            min_value=5,
+                            max_value=100,
+                            value=10,
+                            step=1,
+                            help="Minimum number of frames for analysis"
+                        )
+                        
+                        velocity_window = st.number_input(
+                            "Velocity Window (frames)",
+                            min_value=2,
+                            max_value=20,
+                            value=5,
+                            step=1,
+                            help="Window size for velocity calculations"
+                        )
+                    
+                    # Run analysis
+                    if st.button("Analyze Active Transport"):
+                        with st.spinner("Analyzing active transport..."):
+                            try:
+                                from biophysical_models import ActiveTransportAnalyzer
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    units = get_units()
+                                    pixel_size_um = units.get('pixel_size', 0.1)
+                                    frame_interval_s = units.get('frame_interval', 0.1)
+                                    
+                                    # Initialize analyzer
+                                    analyzer = ActiveTransportAnalyzer(
+                                        tracks_df=tracks_df,
+                                        pixel_size=pixel_size_um,
+                                        frame_interval=frame_interval_s
+                                    )
+                                    
+                                    # Detect active transport
+                                    results = analyzer.detect_active_transport(
+                                        speed_threshold=speed_threshold,
+                                        straightness_threshold=straightness_threshold,
+                                        min_track_length=min_track_length
+                                    )
+                                    
+                                    if results.get('success'):
+                                        st.success("✓ Active transport analysis completed")
+                                        
+                                        # Display summary
+                                        st.subheader("Summary")
+                                        col1, col2, col3 = st.columns(3)
+                                        
+                                        with col1:
+                                            st.metric(
+                                                "Total Tracks",
+                                                results['summary']['total_tracks']
+                                            )
+                                        with col2:
+                                            st.metric(
+                                                "Active Tracks",
+                                                results['summary']['active_tracks']
+                                            )
+                                        with col3:
+                                            active_pct = (results['summary']['active_tracks'] / 
+                                                        results['summary']['total_tracks'] * 100)
+                                            st.metric(
+                                                "Active %",
+                                                f"{active_pct:.1f}%"
+                                            )
+                                        
+                                        # Display statistics
+                                        if 'statistics' in results:
+                                            st.subheader("Active Transport Statistics")
+                                            stats = results['statistics']
+                                            
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                st.metric("Mean Speed (μm/s)", 
+                                                        f"{stats.get('mean_speed', 0):.3f}")
+                                                st.metric("Mean Straightness", 
+                                                        f"{stats.get('mean_straightness', 0):.3f}")
+                                            with col2:
+                                                st.metric("Max Speed (μm/s)", 
+                                                        f"{stats.get('max_speed', 0):.3f}")
+                                                st.metric("Mean Path Length (μm)", 
+                                                        f"{stats.get('mean_path_length', 0):.2f}")
+                                        
+                                        # Store results
+                                        if 'analysis_results' not in st.session_state:
+                                            st.session_state.analysis_results = {}
+                                        st.session_state.analysis_results['active_transport'] = results
+                                        
+                                        # Show classification plot if available
+                                        if 'classified_tracks' in results:
+                                            st.subheader("Track Classification")
+                                            classified_df = results['classified_tracks']
+                                            
+                                            # Create scatter plot
+                                            fig = go.Figure()
+                                            
+                                            # Passive tracks
+                                            passive = classified_df[classified_df['is_active'] == False]
+                                            fig.add_trace(go.Scatter(
+                                                x=passive['mean_speed'],
+                                                y=passive['straightness'],
+                                                mode='markers',
+                                                name='Passive',
+                                                marker=dict(size=8, color='blue', opacity=0.6)
+                                            ))
+                                            
+                                            # Active tracks
+                                            active = classified_df[classified_df['is_active'] == True]
+                                            fig.add_trace(go.Scatter(
+                                                x=active['mean_speed'],
+                                                y=active['straightness'],
+                                                mode='markers',
+                                                name='Active',
+                                                marker=dict(size=8, color='red', opacity=0.6)
+                                            ))
+                                            
+                                            # Add threshold lines
+                                            fig.add_hline(
+                                                y=straightness_threshold,
+                                                line_dash="dash",
+                                                line_color="gray",
+                                                annotation_text="Straightness Threshold"
+                                            )
+                                            fig.add_vline(
+                                                x=speed_threshold,
+                                                line_dash="dash",
+                                                line_color="gray",
+                                                annotation_text="Speed Threshold"
+                                            )
+                                            
+                                            fig.update_layout(
+                                                title="Track Classification: Speed vs Straightness",
+                                                xaxis_title="Mean Speed (μm/s)",
+                                                yaxis_title="Straightness",
+                                                hovermode='closest'
+                                            )
+                                            st.plotly_chart(fig, use_container_width=True)
+                                    else:
+                                        st.error(f"Analysis failed: {results.get('error', 'Unknown error')}")
+                            except Exception as e:
+                                st.error(f"Error in active transport analysis: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
                 
                 # Energy Landscape Model
                 with model_tabs[2]:
@@ -7905,8 +8127,172 @@ elif st.session_state.active_page == "Advanced Analysis":
                     # Parameters
                     st.subheader("Model Parameters")
                     
-                    # Implementation would go here
-                    st.text("Energy Landscape Mapper would go here.")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        resolution = st.slider(
+                            "Grid Resolution",
+                            min_value=10,
+                            max_value=50,
+                            value=20,
+                            step=5,
+                            help="Number of bins in each dimension for energy landscape"
+                        )
+                        
+                        method = st.selectbox(
+                            "Calculation Method",
+                            ["boltzmann", "drift", "kramers"],
+                            index=0,
+                            help="Method for calculating energy landscape"
+                        )
+                    
+                    with col2:
+                        smoothing = st.slider(
+                            "Smoothing Factor",
+                            min_value=0.0,
+                            max_value=2.0,
+                            value=0.5,
+                            step=0.1,
+                            help="Gaussian smoothing applied to landscape"
+                        )
+                        
+                        temperature = st.number_input(
+                            "Temperature (K)",
+                            min_value=250.0,
+                            max_value=350.0,
+                            value=300.0,
+                            step=5.0,
+                            help="Temperature in Kelvin for energy calculations"
+                        )
+                    
+                    normalize = st.checkbox(
+                        "Normalize to kBT units",
+                        value=True,
+                        help="Express energies in units of thermal energy (kBT)"
+                    )
+                    
+                    # Run analysis
+                    if st.button("Map Energy Landscape"):
+                        with st.spinner("Mapping energy landscape..."):
+                            try:
+                                from biophysical_models import EnergyLandscapeMapper
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    units = get_units()
+                                    pixel_size_um = units.get('pixel_size', 0.1)
+                                    
+                                    # Initialize mapper
+                                    mapper = EnergyLandscapeMapper(
+                                        tracks_df=tracks_df,
+                                        pixel_size=pixel_size_um,
+                                        temperature=temperature
+                                    )
+                                    
+                                    # Map landscape
+                                    results = mapper.map_energy_landscape(
+                                        resolution=resolution,
+                                        method=method,
+                                        smoothing=smoothing,
+                                        normalize=normalize
+                                    )
+                                    
+                                    if results.get('success'):
+                                        st.success("✓ Energy landscape mapping completed")
+                                        
+                                        # Display statistics
+                                        st.subheader("Landscape Statistics")
+                                        col1, col2, col3 = st.columns(3)
+                                        
+                                        stats = results.get('statistics', {})
+                                        with col1:
+                                            st.metric(
+                                                "Min Energy",
+                                                f"{stats.get('min_energy', 0):.2f} kBT"
+                                            )
+                                        with col2:
+                                            st.metric(
+                                                "Max Energy",
+                                                f"{stats.get('max_energy', 0):.2f} kBT"
+                                            )
+                                        with col3:
+                                            st.metric(
+                                                "Energy Range",
+                                                f"{stats.get('energy_range', 0):.2f} kBT"
+                                            )
+                                        
+                                        # Store results
+                                        if 'analysis_results' not in st.session_state:
+                                            st.session_state.analysis_results = {}
+                                        st.session_state.analysis_results['energy_landscape'] = results
+                                        
+                                        # Visualize energy landscape
+                                        if 'energy_map' in results:
+                                            st.subheader("Energy Landscape")
+                                            
+                                            energy_map = results['energy_map']
+                                            x_coords = results['x_coords']
+                                            y_coords = results['y_coords']
+                                            
+                                            # Create heatmap
+                                            fig = go.Figure(data=go.Heatmap(
+                                                z=energy_map.T,
+                                                x=x_coords,
+                                                y=y_coords,
+                                                colorscale='Viridis',
+                                                colorbar=dict(
+                                                    title="Energy (kBT)" if normalize else "Energy (J)"
+                                                )
+                                            ))
+                                            
+                                            fig.update_layout(
+                                                title=f"Energy Landscape ({method} method)",
+                                                xaxis_title="X Position (μm)",
+                                                yaxis_title="Y Position (μm)",
+                                                hovermode='closest'
+                                            )
+                                            st.plotly_chart(fig, use_container_width=True)
+                                            
+                                        # Show force field if available
+                                        if 'force_field' in results:
+                                            st.subheader("Force Field")
+                                            
+                                            force_x = results['force_field']['fx']
+                                            force_y = results['force_field']['fy']
+                                            x_coords = results['x_coords']
+                                            y_coords = results['y_coords']
+                                            
+                                            # Create quiver plot (subsample for visibility)
+                                            step = max(1, resolution // 10)
+                                            fig = go.Figure()
+                                            
+                                            for i in range(0, len(x_coords), step):
+                                                for j in range(0, len(y_coords), step):
+                                                    fig.add_trace(go.Scatter(
+                                                        x=[x_coords[i], x_coords[i] + force_x[i, j] * 0.1],
+                                                        y=[y_coords[j], y_coords[j] + force_y[i, j] * 0.1],
+                                                        mode='lines',
+                                                        line=dict(color='red', width=1),
+                                                        showlegend=False,
+                                                        hoverinfo='skip'
+                                                    ))
+                                            
+                                            fig.update_layout(
+                                                title="Force Field (Negative Gradient of Energy)",
+                                                xaxis_title="X Position (μm)",
+                                                yaxis_title="Y Position (μm)",
+                                                hovermode='closest'
+                                            )
+                                            st.plotly_chart(fig, use_container_width=True)
+                                    else:
+                                        st.error(f"Mapping failed: {results.get('error', 'Unknown error')}")
+                            except Exception as e:
+                                st.error(f"Error in energy landscape mapping: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
             else:
                 st.warning("Biophysical models module is not available. Make sure the appropriate files are in the correct location.")
         

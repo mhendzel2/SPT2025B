@@ -356,14 +356,28 @@ class EnergyLandscapeMapper:
             # Analyze dwell regions
             dwell_regions = self.analyze_dwell_regions(U, x_edges, y_edges)
 
+            # Calculate statistics
+            min_energy = np.min(U)
+            max_energy = np.max(U)
+            energy_range = max_energy - min_energy
+
             # Store results
             results = {
                 'success': True,
-                'energy_landscape': U,
+                'energy_map': U,
+                'energy_landscape': U,  # Keep for backward compatibility
+                'x_coords': (x_edges[:-1] + x_edges[1:]) / 2,  # Bin centers
+                'y_coords': (y_edges[:-1] + y_edges[1:]) / 2,  # Bin centers
                 'x_edges': x_edges,
                 'y_edges': y_edges,
                 'force_field': force_field,
                 'dwell_regions': dwell_regions,
+                'statistics': {
+                    'min_energy': min_energy,
+                    'max_energy': max_energy,
+                    'energy_range': energy_range,
+                    'num_dwell_regions': len(dwell_regions) if dwell_regions else 0
+                },
                 'parameters': {
                     'method': method,
                     'resolution': resolution,
@@ -835,6 +849,95 @@ class ActiveTransportAnalyzer:
                     'frame_interval': self.frame_interval
                 }
             }
+
+    def detect_active_transport(self, speed_threshold: float = 0.5, 
+                               straightness_threshold: float = 0.7,
+                               min_track_length: int = 10) -> Dict[str, Any]:
+        """
+        Detect active transport in tracks based on speed and straightness criteria.
+
+        Parameters
+        ----------
+        speed_threshold : float
+            Minimum speed (μm/s) to classify as active transport
+        straightness_threshold : float
+            Minimum straightness (0-1) for directed motion
+        min_track_length : int
+            Minimum number of frames required for analysis
+
+        Returns
+        -------
+        Dict[str, Any]
+            Active transport detection results with summary statistics
+        """
+        # Check if we have preprocessed tracks
+        if not hasattr(self, 'track_results') or self.track_results.empty:
+            return {
+                'success': False,
+                'error': 'No track data available. Preprocessing may have failed.'
+            }
+
+        # Filter tracks by length
+        valid_tracks = self.track_results[
+            self.track_results['track_length'] >= min_track_length
+        ].copy()
+
+        if valid_tracks.empty:
+            return {
+                'success': False,
+                'error': f'No tracks meet minimum length requirement ({min_track_length} frames)'
+            }
+
+        # Classify tracks as active if they meet both criteria
+        valid_tracks['is_active'] = (
+            (valid_tracks['mean_speed'] >= speed_threshold) &
+            (valid_tracks['straightness'] >= straightness_threshold)
+        )
+
+        # Calculate summary statistics
+        total_tracks = len(valid_tracks)
+        active_tracks = valid_tracks['is_active'].sum()
+        active_fraction = active_tracks / total_tracks if total_tracks > 0 else 0
+
+        # Statistics for active tracks
+        active_data = valid_tracks[valid_tracks['is_active']]
+        
+        if not active_data.empty:
+            statistics = {
+                'mean_speed': active_data['mean_speed'].mean(),
+                'max_speed': active_data['max_speed'].max(),
+                'mean_straightness': active_data['straightness'].mean(),
+                'mean_acceleration': active_data['mean_acceleration'].mean(),
+                'mean_path_length': 0  # Will be calculated if needed
+            }
+        else:
+            statistics = {
+                'mean_speed': 0,
+                'max_speed': 0,
+                'mean_straightness': 0,
+                'mean_acceleration': 0,
+                'mean_path_length': 0
+            }
+
+        results = {
+            'success': True,
+            'summary': {
+                'total_tracks': total_tracks,
+                'active_tracks': int(active_tracks),
+                'passive_tracks': total_tracks - int(active_tracks),
+                'active_fraction': active_fraction
+            },
+            'statistics': statistics,
+            'classified_tracks': valid_tracks,
+            'parameters': {
+                'speed_threshold': speed_threshold,
+                'straightness_threshold': straightness_threshold,
+                'min_track_length': min_track_length
+            }
+        }
+
+        self.results['active_transport'] = results
+        return results
 
     def detect_directional_motion_segments(self, min_segment_length: int = 5, 
                                           straightness_threshold: float = 0.8,
