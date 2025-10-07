@@ -501,6 +501,77 @@ class EnhancedSPTReportGenerator:
             'priority': 3
         }
         
+        # === ADVANCED BIOPHYSICS 2025 FEATURES ===
+        # Percolation Analysis
+        self.available_analyses['percolation_analysis'] = {
+            'name': 'Percolation Analysis',
+            'description': 'Network connectivity, percolation threshold detection, cluster size distributions, spanning cluster identification.',
+            'function': self._analyze_percolation,
+            'visualization': self._plot_percolation,
+            'category': 'Biophysical Models',
+            'priority': 4
+        }
+        
+        # CTRW Analysis
+        self.available_analyses['ctrw_analysis'] = {
+            'name': 'Continuous Time Random Walk (CTRW)',
+            'description': 'Waiting time distributions, jump length distributions, ergodicity testing, heavy-tailed diffusion analysis.',
+            'function': self._analyze_ctrw,
+            'visualization': self._plot_ctrw,
+            'category': 'Biophysical Models',
+            'priority': 4
+        }
+        
+        # FBM Enhanced Analysis
+        self.available_analyses['fbm_enhanced'] = {
+            'name': 'Enhanced Fractional Brownian Motion',
+            'description': 'Explicit FBM fitting with Hurst exponent extraction, MSD scaling analysis, persistence detection.',
+            'function': self._analyze_fbm_enhanced,
+            'visualization': self._plot_fbm_enhanced,
+            'category': 'Biophysical Models',
+            'priority': 4
+        }
+        
+        # Crowding Corrections
+        self.available_analyses['crowding_correction'] = {
+            'name': 'Macromolecular Crowding Correction',
+            'description': 'Scaled particle theory corrections for nuclear crowding (φ=0.2-0.4), D_free estimation.',
+            'function': self._analyze_crowding,
+            'visualization': self._plot_crowding,
+            'category': 'Biophysical Models',
+            'priority': 3
+        }
+        
+        # Loop Extrusion Detection
+        self.available_analyses['loop_extrusion'] = {
+            'name': 'Loop Extrusion Detection',
+            'description': 'Periodic confinement patterns, loop size estimation, TAD/cohesin signature detection.',
+            'function': self._analyze_loop_extrusion,
+            'visualization': self._plot_loop_extrusion,
+            'category': 'Chromatin Biology',
+            'priority': 4
+        }
+        
+        # Chromosome Territory Mapping
+        self.available_analyses['territory_mapping'] = {
+            'name': 'Chromosome Territory Mapping',
+            'description': 'Spatial domain detection, inter- vs intra-territory diffusion, boundary identification.',
+            'function': self._analyze_territory_mapping,
+            'visualization': self._plot_territory_mapping,
+            'category': 'Chromatin Biology',
+            'priority': 4
+        }
+        
+        # Local Diffusion Mapping
+        self.available_analyses['local_diffusion_map'] = {
+            'name': 'Local Diffusion Coefficient Map D(x,y)',
+            'description': 'Spatially-resolved diffusion mapping, heterogeneous environment detection, grid-based D calculation.',
+            'function': self._analyze_local_diffusion_map,
+            'visualization': self._plot_local_diffusion_map,
+            'category': 'Biophysical Models',
+            'priority': 3
+        }
+        
         self.report_results = {}
         self.report_figures = {}
         self.metadata = {}
@@ -4816,3 +4887,486 @@ EnhancedSPTReportGenerator._analyze_fbm = _analyze_fbm_wrapper
 EnhancedSPTReportGenerator._plot_fbm = _plot_fbm_wrapper
 EnhancedSPTReportGenerator._analyze_advanced_metrics = _analyze_advanced_metrics_wrapper
 EnhancedSPTReportGenerator._plot_advanced_metrics = _plot_advanced_metrics_wrapper
+
+# ===== 2025 POLYMER PHYSICS EXTENSIONS =====
+
+def _analyze_percolation(self, tracks_df, current_units):
+    """Analyze percolation signatures in tracking data."""
+    try:
+        from percolation_analyzer import PercolationAnalyzer
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        analyzer = PercolationAnalyzer(tracks_df, pixel_size, frame_interval)
+        results = analyzer.analyze_percolation(comprehensive=True)
+        
+        return {
+            'success': True,
+            'percolation_detected': results['percolation_detected'],
+            'percolation_type': results['percolation_type'],
+            'threshold_density': results.get('threshold_density', 0),
+            'network_stats': results.get('network_stats', {}),
+            'cluster_stats': results.get('cluster_stats', {}),
+            'full_results': results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_percolation(self, result):
+    """Visualize percolation analysis results."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        figures = []
+        full_results = result.get('full_results', {})
+        
+        # Use the visualizer from the full results if available
+        if 'visualization' in full_results:
+            figures.append(full_results['visualization'])
+        
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_ctrw(self, tracks_df, current_units):
+    """Analyze Continuous Time Random Walk (CTRW) signatures."""
+    try:
+        from advanced_diffusion_models import CTRWAnalyzer
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        analyzer = CTRWAnalyzer(tracks_df, pixel_size, frame_interval)
+        
+        # Run all CTRW analyses
+        waiting_results = analyzer.analyze_waiting_time_distribution()
+        jump_results = analyzer.analyze_jump_length_distribution()
+        ergodicity_results = analyzer.test_ergodicity()
+        coupling_results = analyzer.analyze_coupling()
+        
+        return {
+            'success': True,
+            'waiting_times': waiting_results,
+            'jump_lengths': jump_results,
+            'ergodicity': ergodicity_results,
+            'coupling': coupling_results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_ctrw(self, result):
+    """Visualize CTRW analysis results."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        from advanced_diffusion_models import CTRWAnalyzer
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        
+        figures = []
+        
+        # Create comprehensive CTRW visualization
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Waiting Time Distribution',
+                'Jump Length Distribution',
+                'Ergodicity Parameter',
+                'Wait-Jump Coupling'
+            )
+        )
+        
+        # Waiting times
+        wait_results = result.get('waiting_times', {})
+        if 'wait_times' in wait_results:
+            times = wait_results['wait_times']
+            fig.add_trace(
+                go.Histogram(x=times, name='Wait Times', nbinsx=50),
+                row=1, col=1
+            )
+        
+        # Jump lengths
+        jump_results = result.get('jump_lengths', {})
+        if 'jump_lengths' in jump_results:
+            jumps = jump_results['jump_lengths']
+            fig.add_trace(
+                go.Histogram(x=jumps, name='Jump Lengths', nbinsx=50),
+                row=1, col=2
+            )
+        
+        fig.update_xaxes(title_text="Wait Time (s)", type="log", row=1, col=1)
+        fig.update_xaxes(title_text="Jump Length (μm)", type="log", row=1, col=2)
+        fig.update_layout(height=800, title="CTRW Analysis")
+        
+        figures.append(fig)
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_fbm_enhanced(self, tracks_df, current_units):
+    """Enhanced Fractional Brownian Motion analysis."""
+    try:
+        from advanced_diffusion_models import fit_fbm_model
+        import numpy as np
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        # Analyze each track individually
+        track_results = []
+        hurst_values = []
+        D_values = []
+        
+        for track_id in tracks_df['track_id'].unique():
+            track_data = tracks_df[tracks_df['track_id'] == track_id]
+            
+            if len(track_data) < 10:  # Need minimum track length
+                continue
+            
+            result = fit_fbm_model(track_data, pixel_size, frame_interval)
+            
+            if result.get('success', False):
+                hurst = result.get('hurst_exponent')
+                D = result.get('diffusion_coefficient')
+                
+                if hurst is not None and D is not None and not np.isnan(hurst) and not np.isnan(D):
+                    hurst_values.append(hurst)
+                    D_values.append(D)
+                    track_results.append({
+                        'track_id': track_id,
+                        'hurst_exponent': hurst,
+                        'diffusion_coefficient': D,
+                        'persistence_type': result.get('persistence_type', 'unknown'),
+                        'r_squared': result.get('r_squared', 0)
+                    })
+        
+        if len(hurst_values) == 0:
+            return {
+                'success': False,
+                'error': 'No valid FBM fits found. Tracks may be too short or have insufficient data.'
+            }
+        
+        # Aggregate statistics
+        return {
+            'success': True,
+            'n_tracks': len(tracks_df['track_id'].unique()),
+            'n_valid': len(hurst_values),
+            'hurst_mean': np.mean(hurst_values),
+            'hurst_std': np.std(hurst_values),
+            'hurst_median': np.median(hurst_values),
+            'D_mean': np.mean(D_values),
+            'D_std': np.std(D_values),
+            'D_median': np.median(D_values),
+            'track_results': track_results,
+            'hurst_values': hurst_values,
+            'D_values': D_values
+        }
+    except Exception as e:
+        import traceback
+        return {'success': False, 'error': f'{str(e)}\n{traceback.format_exc()}'}
+
+def _plot_fbm_enhanced(self, result):
+    """Visualize enhanced FBM analysis."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        import numpy as np
+        
+        figures = []
+        
+        hurst_values = result.get('hurst_values', [])
+        D_values = result.get('D_values', [])
+        
+        if len(hurst_values) == 0:
+            return []
+        
+        # Create comprehensive FBM visualization
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=('Hurst Exponent Distribution', 'Diffusion Coefficient Distribution')
+        )
+        
+        # Hurst exponent histogram
+        fig.add_trace(
+            go.Histogram(
+                x=hurst_values,
+                name='Hurst Exponent',
+                nbinsx=20,
+                marker_color='steelblue'
+            ),
+            row=1, col=1
+        )
+        
+        # Add reference line at H=0.5 (Brownian)
+        fig.add_vline(
+            x=0.5,
+            line_dash="dash",
+            line_color="red",
+            annotation_text="Brownian (H=0.5)",
+            row=1, col=1
+        )
+        
+        # Diffusion coefficient histogram
+        fig.add_trace(
+            go.Histogram(
+                x=D_values,
+                name='Diffusion Coefficient',
+                nbinsx=20,
+                marker_color='darkgreen'
+            ),
+            row=1, col=2
+        )
+        
+        fig.update_xaxes(title_text="Hurst Exponent H", row=1, col=1)
+        fig.update_xaxes(title_text="D (μm²/s)", row=1, col=2)
+        fig.update_yaxes(title_text="Count", row=1, col=1)
+        fig.update_yaxes(title_text="Count", row=1, col=2)
+        
+        fig.update_layout(
+            title=f"FBM Analysis: {result['n_valid']} valid tracks<br>" +
+                  f"H = {result['hurst_mean']:.3f} ± {result['hurst_std']:.3f}, " +
+                  f"D = {result['D_mean']:.2e} ± {result['D_std']:.2e} μm²/s",
+            height=500,
+            showlegend=False
+        )
+        
+        figures.append(fig)
+        
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_crowding(self, tracks_df, current_units):
+    """Analyze macromolecular crowding corrections."""
+    try:
+        from biophysical_models import PolymerPhysicsModel
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        model = PolymerPhysicsModel(tracks_df, pixel_size, frame_interval)
+        
+        # Calculate D_measured first
+        from analysis import calculate_msd
+        msd_result = calculate_msd(tracks_df, pixel_size=pixel_size, frame_interval=frame_interval)
+        
+        if isinstance(msd_result, dict):
+            D_measured = msd_result.get('average_D', 0.1)
+        else:
+            D_measured = 0.1
+        
+        # Test multiple crowding levels
+        phi_values = [0.2, 0.3, 0.4]
+        results = []
+        
+        for phi in phi_values:
+            crowding_result = model.correct_for_crowding(D_measured, phi_crowding=phi)
+            results.append({
+                'phi': phi,
+                'D_free': crowding_result.get('D_free', D_measured),
+                'crowding_factor': crowding_result.get('crowding_factor', 1.0)
+            })
+        
+        return {
+            'success': True,
+            'D_measured': D_measured,
+            'corrections': results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_crowding(self, result):
+    """Visualize crowding corrections."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        import plotly.graph_objects as go
+        
+        figures = []
+        corrections = result.get('corrections', [])
+        
+        if corrections:
+            phi_vals = [c['phi'] for c in corrections]
+            D_free_vals = [c['D_free'] for c in corrections]
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=phi_vals,
+                y=D_free_vals,
+                mode='lines+markers',
+                name='D_free'
+            ))
+            
+            fig.update_layout(
+                title="Crowding Correction",
+                xaxis_title="Volume Fraction φ",
+                yaxis_title="D_free (μm²/s)"
+            )
+            
+            figures.append(fig)
+        
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_loop_extrusion(self, tracks_df, current_units):
+    """Analyze loop extrusion signatures."""
+    try:
+        from loop_extrusion_detector import LoopExtrusionDetector
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        detector = LoopExtrusionDetector(tracks_df, pixel_size, frame_interval)
+        results = detector.analyze_loop_signatures(comprehensive=True)
+        
+        return {
+            'success': True,
+            'loop_detected': results['loop_extrusion_detected'],
+            'confidence': results['confidence'],
+            'loop_size_um': results['estimated_loop_size'],
+            'loop_size_nm': results.get('loop_characteristics', {}).get('estimated_loop_size_nm', 0),
+            'full_results': results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_loop_extrusion(self, result):
+    """Visualize loop extrusion analysis."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        figures = []
+        full_results = result.get('full_results', {})
+        
+        # The detector has a visualize method
+        if 'evidence' in full_results:
+            # We can create visualization from evidence
+            pass
+        
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_territory_mapping(self, tracks_df, current_units):
+    """Analyze chromosome territories."""
+    try:
+        from chromosome_territory_mapper import ChromosomeTerritoryMapper
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        
+        mapper = ChromosomeTerritoryMapper(tracks_df, pixel_size)
+        results = mapper.map_territories()
+        
+        return {
+            'success': True,
+            'num_territories': results.get('num_territories', 0),
+            'territory_stats': results.get('territory_stats', {}),
+            'diffusion_comparison': results.get('diffusion_comparison', {}),
+            'full_results': results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_territory_mapping(self, result):
+    """Visualize territory mapping results."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        figures = []
+        full_results = result.get('full_results', {})
+        
+        if 'visualization' in full_results:
+            figures.append(full_results['visualization'])
+        
+        return figures
+    except Exception as e:
+        return []
+
+def _analyze_local_diffusion_map(self, tracks_df, current_units):
+    """Analyze local diffusion coefficient map D(x,y)."""
+    try:
+        from biophysical_models import PolymerPhysicsModel
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        model = PolymerPhysicsModel(tracks_df, pixel_size, frame_interval)
+        results = model.calculate_local_diffusion_map(grid_size=10, min_points=10)
+        
+        return {
+            'success': results['success'],
+            'D_map': results.get('D_map'),
+            'confidence_map': results.get('confidence_map'),
+            'statistics': {
+                'mean_D': results.get('mean_D', 0),
+                'std_D': results.get('std_D', 0)
+            },
+            'full_results': results
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+def _plot_local_diffusion_map(self, result):
+    """Visualize local diffusion map."""
+    if not result.get('success'):
+        return []
+    
+    try:
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        figures = []
+        full_results = result.get('full_results', {})
+        
+        D_map = full_results.get('D_map')
+        if D_map is not None:
+            x_edges = full_results.get('x_edges', np.arange(D_map.shape[0] + 1))
+            y_edges = full_results.get('y_edges', np.arange(D_map.shape[1] + 1))
+            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=D_map.T,
+                x=x_centers,
+                y=y_centers,
+                colorscale='Plasma',
+                colorbar=dict(title="D (μm²/s)")
+            ))
+            
+            fig.update_layout(
+                title="Local Diffusion Coefficient Map D(x,y)",
+                xaxis_title="X Position (μm)",
+                yaxis_title="Y Position (μm)"
+            )
+            
+            figures.append(fig)
+        
+        return figures
+    except Exception as e:
+        return []
+
+# Register the new analysis methods
+EnhancedSPTReportGenerator._analyze_percolation = _analyze_percolation
+EnhancedSPTReportGenerator._plot_percolation = _plot_percolation
+EnhancedSPTReportGenerator._analyze_ctrw = _analyze_ctrw
+EnhancedSPTReportGenerator._plot_ctrw = _plot_ctrw
+EnhancedSPTReportGenerator._analyze_fbm_enhanced = _analyze_fbm_enhanced
+EnhancedSPTReportGenerator._plot_fbm_enhanced = _plot_fbm_enhanced
+EnhancedSPTReportGenerator._analyze_crowding = _analyze_crowding
+EnhancedSPTReportGenerator._plot_crowding = _plot_crowding
+EnhancedSPTReportGenerator._analyze_loop_extrusion = _analyze_loop_extrusion
+EnhancedSPTReportGenerator._plot_loop_extrusion = _plot_loop_extrusion
+EnhancedSPTReportGenerator._analyze_territory_mapping = _analyze_territory_mapping
+EnhancedSPTReportGenerator._plot_territory_mapping = _plot_territory_mapping
+EnhancedSPTReportGenerator._analyze_local_diffusion_map = _analyze_local_diffusion_map
+EnhancedSPTReportGenerator._plot_local_diffusion_map = _plot_local_diffusion_map

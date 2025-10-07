@@ -8466,6 +8466,157 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 st.error(f"Error in energy landscape mapping: {str(e)}")
                                 import traceback
                                 st.text(traceback.format_exc())
+                    
+                    # Local Diffusion Map D(x,y)
+                    st.markdown("---")
+                    st.subheader("Local Diffusion Coefficient Map D(x,y)")
+                    st.markdown("""
+                    Map spatially-resolved diffusion coefficients to identify heterogeneous diffusion environments.
+                    This complements the energy landscape by revealing local mobility variations.
+                    """)
+                    
+                    show_diffusion_map = st.checkbox(
+                        "Show Local Diffusion Map",
+                        value=False,
+                        help="Calculate and display D(x,y) map overlaid with energy landscape"
+                    )
+                    
+                    if show_diffusion_map:
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            diff_map_resolution = st.slider(
+                                "D(x,y) Grid Resolution",
+                                min_value=5,
+                                max_value=20,
+                                value=10,
+                                step=1,
+                                help="Number of grid cells in each dimension"
+                            )
+                        
+                        with col2:
+                            min_points_per_cell = st.slider(
+                                "Min Points per Cell",
+                                min_value=5,
+                                max_value=50,
+                                value=10,
+                                step=5,
+                                help="Minimum number of points required for reliable D calculation"
+                            )
+                        
+                        if st.button("Calculate Local Diffusion Map"):
+                            with st.spinner("Calculating local diffusion coefficients..."):
+                                try:
+                                    from biophysical_models import PolymerPhysicsModel
+                                    
+                                    tracks_df, has_data = get_track_data()
+                                    if not has_data:
+                                        st.error("No track data available")
+                                    else:
+                                        units = get_units()
+                                        pixel_size_um = units.get('pixel_size', 0.1)
+                                        frame_interval_s = units.get('frame_interval', 0.1)
+                                        
+                                        # Calculate D(x,y) map
+                                        model = PolymerPhysicsModel(
+                                            tracks_df=tracks_df,
+                                            pixel_size=pixel_size_um,
+                                            frame_interval=frame_interval_s
+                                        )
+                                        
+                                        diffusion_map_results = model.calculate_local_diffusion_map(
+                                            grid_size=diff_map_resolution,
+                                            min_points=min_points_per_cell
+                                        )
+                                        
+                                        if diffusion_map_results['success']:
+                                            st.success("✓ Local diffusion map calculated")
+                                            
+                                            D_map = diffusion_map_results['D_map']
+                                            confidence_map = diffusion_map_results['confidence_map']
+                                            x_edges = diffusion_map_results['x_edges']
+                                            y_edges = diffusion_map_results['y_edges']
+                                            
+                                            # Statistics
+                                            st.subheader("Diffusion Map Statistics")
+                                            col1, col2, col3, col4 = st.columns(4)
+                                            
+                                            valid_D = D_map[~np.isnan(D_map)]
+                                            if len(valid_D) > 0:
+                                                with col1:
+                                                    st.metric("Min D", f"{np.min(valid_D):.3e} μm²/s")
+                                                with col2:
+                                                    st.metric("Max D", f"{np.max(valid_D):.3e} μm²/s")
+                                                with col3:
+                                                    st.metric("Mean D", f"{np.mean(valid_D):.3e} μm²/s")
+                                                with col4:
+                                                    st.metric("Std D", f"{np.std(valid_D):.3e} μm²/s")
+                                            
+                                            # Visualize D(x,y) map
+                                            st.subheader("Diffusion Coefficient Map")
+                                            
+                                            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+                                            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+                                            
+                                            fig = go.Figure()
+                                            
+                                            # D(x,y) heatmap
+                                            fig.add_trace(go.Heatmap(
+                                                z=D_map.T,
+                                                x=x_centers,
+                                                y=y_centers,
+                                                colorscale='Plasma',
+                                                colorbar=dict(
+                                                    title="D (μm²/s)",
+                                                    x=1.15
+                                                ),
+                                                hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>D: %{z:.2e} μm²/s<extra></extra>'
+                                            ))
+                                            
+                                            fig.update_layout(
+                                                title="Local Diffusion Coefficient Map D(x,y)",
+                                                xaxis_title="X Position (μm)",
+                                                yaxis_title="Y Position (μm)",
+                                                hovermode='closest',
+                                                height=600
+                                            )
+                                            st.plotly_chart(fig, use_container_width=True)
+                                            
+                                            # Confidence map
+                                            st.subheader("Confidence Map")
+                                            st.markdown("Shows the reliability of D estimates based on number of data points per cell")
+                                            
+                                            fig_conf = go.Figure()
+                                            fig_conf.add_trace(go.Heatmap(
+                                                z=confidence_map.T,
+                                                x=x_centers,
+                                                y=y_centers,
+                                                colorscale='Greens',
+                                                colorbar=dict(title="Confidence Score"),
+                                                hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>Confidence: %{z:.2f}<extra></extra>'
+                                            ))
+                                            
+                                            fig_conf.update_layout(
+                                                title="Confidence Map",
+                                                xaxis_title="X Position (μm)",
+                                                yaxis_title="Y Position (μm)",
+                                                hovermode='closest',
+                                                height=500
+                                            )
+                                            st.plotly_chart(fig_conf, use_container_width=True)
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['local_diffusion_map'] = diffusion_map_results
+                                            
+                                        else:
+                                            st.error(f"Diffusion map calculation failed: {diffusion_map_results.get('error', 'Unknown error')}")
+                                
+                                except Exception as e:
+                                    st.error(f"Error calculating local diffusion map: {str(e)}")
+                                    import traceback
+                                    st.text(traceback.format_exc())
                 
                 # Percolation Analysis
                 with model_tabs[3]:
