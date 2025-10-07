@@ -4626,139 +4626,161 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def _plot_track_quality(self, result: Dict[str, Any]) -> List[go.Figure]:
+    def _plot_track_quality(self, result: Dict[str, Any]) -> go.Figure:
         """Visualize track quality metrics."""
-        figures = []
-        
         try:
             if not result.get('success', False):
-                return figures
+                return None
             
-            # 1. Quality score distribution
+            from plotly.subplots import make_subplots
+            import plotly.graph_objects as go
+            
+            # Create 2x2 subplot grid for all quality visualizations
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=(
+                    'Quality Score Distribution',
+                    'Track Length vs Completeness',
+                    'Quality Component Scores',
+                    'Quality Summary'
+                ),
+                specs=[
+                    [{'type': 'histogram'}, {'type': 'scatter'}],
+                    [{'type': 'bar'}, {'type': 'table'}]
+                ]
+            )
+            
+            # 1. Quality score distribution (top-left)
             if 'quality_scores' in result:
                 quality_df = result['quality_scores']
                 
-                fig = go.Figure()
-                fig.add_trace(go.Histogram(
-                    x=quality_df['quality_score'],
-                    nbinsx=30,
-                    name='Quality Score',
-                    marker_color='steelblue'
-                ))
+                fig.add_trace(
+                    go.Histogram(
+                        x=quality_df['quality_score'],
+                        nbinsx=30,
+                        name='Quality Score',
+                        marker_color='steelblue',
+                        showlegend=False
+                    ),
+                    row=1, col=1
+                )
                 
                 # Add threshold lines
                 fig.add_vline(x=0.5, line_dash="dash", line_color="orange", 
-                            annotation_text="Min Threshold")
+                            annotation_text="Min", row=1, col=1)
                 fig.add_vline(x=0.7, line_dash="dash", line_color="green",
-                            annotation_text="Good Threshold")
-                
-                fig.update_layout(
-                    title='Track Quality Score Distribution',
-                    xaxis_title='Quality Score (0-1)',
-                    yaxis_title='Count',
-                    template='plotly_white'
-                )
-                figures.append(fig)
+                            annotation_text="Good", row=1, col=1)
             
-            # 2. Track length vs completeness
+            # 2. Track length vs completeness (top-right)
             if 'completeness' in result:
                 comp_df = result['completeness']
                 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=comp_df['track_length'],
-                    y=comp_df['completeness'],
-                    mode='markers',
-                    marker=dict(
-                        size=8,
-                        color=comp_df['completeness'],
-                        colorscale='Viridis',
-                        colorbar=dict(title="Completeness"),
-                        showscale=True
+                fig.add_trace(
+                    go.Scatter(
+                        x=comp_df['track_length'],
+                        y=comp_df['completeness'],
+                        mode='markers',
+                        marker=dict(
+                            size=6,
+                            color=comp_df['completeness'],
+                            colorscale='Viridis',
+                            showscale=False
+                        ),
+                        text=[f"Track {tid}" for tid in comp_df['track_id']],
+                        hovertemplate='%{text}<br>Length: %{x}<br>Completeness: %{y:.2f}<extra></extra>',
+                        showlegend=False
                     ),
-                    text=[f"Track {tid}" for tid in comp_df['track_id']],
-                    hovertemplate='Track %{text}<br>Length: %{x}<br>Completeness: %{y:.2f}<extra></extra>'
-                ))
-                
-                fig.update_layout(
-                    title='Track Length vs Completeness',
-                    xaxis_title='Track Length (frames)',
-                    yaxis_title='Completeness Ratio',
-                    template='plotly_white'
+                    row=1, col=2
                 )
-                figures.append(fig)
             
-            # 3. Quality component breakdown
+            # 3. Quality component breakdown (bottom-left)
             if 'quality_scores' in result:
                 quality_df = result['quality_scores']
                 
-                # Calculate means of each component
                 components = {
                     'Length': quality_df['length_score'].mean(),
-                    'Completeness': quality_df['completeness_score'].mean(),
+                    'Complete': quality_df['completeness_score'].mean(),
                     'SNR': quality_df['snr_score'].mean(),
                     'Precision': quality_df['precision_score'].mean(),
-                    'Smoothness': quality_df['smoothness_score'].mean()
+                    'Smooth': quality_df['smoothness_score'].mean()
                 }
                 
-                fig = go.Figure(data=[
+                fig.add_trace(
                     go.Bar(
                         x=list(components.keys()),
                         y=list(components.values()),
-                        marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-                    )
-                ])
-                
-                fig.update_layout(
-                    title='Average Quality Component Scores',
-                    xaxis_title='Component',
-                    yaxis_title='Average Score (0-1)',
-                    yaxis_range=[0, 1],
-                    template='plotly_white'
+                        marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'],
+                        showlegend=False
+                    ),
+                    row=2, col=1
                 )
-                figures.append(fig)
             
-            # 4. Summary statistics table
+            # 4. Summary table (bottom-right)
             if 'summary' in result:
                 summary = result['summary']
                 
-                # Create summary text
-                summary_text = f"""
-                <b>Track Quality Summary</b><br><br>
-                <b>Total Tracks:</b> {result['n_tracks']}<br>
-                <b>Mean Track Length:</b> {summary['track_length']['mean']:.1f} frames<br>
-                <b>Mean Completeness:</b> {summary['completeness']['mean']:.2%}<br>
-                <b>Tracks ≥70% Complete:</b> {summary['completeness']['tracks_above_70pct']}<br>
-                <b>Mean Quality Score:</b> {summary['quality_score']['mean']:.3f}<br>
-                <b>High Quality Tracks (≥0.7):</b> {summary['quality_score']['tracks_above_0.7']}
-                """
+                # Create summary table
+                summary_data = [
+                    ['Total Tracks', result['n_tracks']],
+                    ['Mean Length', f"{summary['track_length']['mean']:.1f} frames"],
+                    ['Mean Complete', f"{summary['completeness']['mean']:.1%}"],
+                    ['≥70% Complete', summary['completeness']['tracks_above_70pct']],
+                    ['Mean Quality', f"{summary['quality_score']['mean']:.3f}"],
+                    ['High Quality', summary['quality_score']['tracks_above_0.7']]
+                ]
                 
                 if 'snr' in summary:
-                    summary_text += f"<br><b>Mean SNR:</b> {summary['snr']['mean']:.2f}"
+                    summary_data.append(['Mean SNR', f"{summary['snr']['mean']:.2f}"])
                 
-                fig = go.Figure()
-                fig.add_annotation(
-                    text=summary_text,
-                    xref="paper", yref="paper",
-                    x=0.5, y=0.5,
-                    showarrow=False,
-                    font=dict(size=14),
-                    align="left"
+                fig.add_trace(
+                    go.Table(
+                        header=dict(
+                            values=['Metric', 'Value'],
+                            fill_color='paleturquoise',
+                            align='left',
+                            font=dict(size=12)
+                        ),
+                        cells=dict(
+                            values=[[row[0] for row in summary_data], 
+                                   [row[1] for row in summary_data]],
+                            fill_color='lavender',
+                            align='left',
+                            font=dict(size=11)
+                        )
+                    ),
+                    row=2, col=2
                 )
-                
-                fig.update_layout(
-                    title='Quality Assessment Summary',
-                    xaxis=dict(visible=False),
-                    yaxis=dict(visible=False),
-                    template='plotly_white',
-                    height=400
-                )
-                figures.append(fig)
-        
+            
+            # Update axes labels
+            fig.update_xaxes(title_text="Quality Score", row=1, col=1)
+            fig.update_yaxes(title_text="Count", row=1, col=1)
+            
+            fig.update_xaxes(title_text="Track Length (frames)", row=1, col=2)
+            fig.update_yaxes(title_text="Completeness", row=1, col=2)
+            
+            fig.update_xaxes(title_text="Component", row=2, col=1)
+            fig.update_yaxes(title_text="Score", range=[0, 1], row=2, col=1)
+            
+            # Update layout
+            fig.update_layout(
+                title='Track Quality Assessment',
+                height=900,
+                showlegend=False
+            )
+            
+            return fig  # Return single figure with 2x2 subplots
+            
         except Exception as e:
-            pass
-        
-        return figures
+            # Return error figure
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Error creating visualization: {str(e)}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                showarrow=False,
+                font=dict(size=14, color="red")
+            )
+            return fig
     
     # ==================== STATISTICAL VALIDATION ====================
     
@@ -5219,14 +5241,12 @@ def _analyze_ctrw(self, tracks_df, current_units):
 def _plot_ctrw(self, result):
     """Visualize CTRW analysis results."""
     if not result.get('success'):
-        return []
+        return None
     
     try:
         from advanced_diffusion_models import CTRWAnalyzer
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
-        
-        figures = []
         
         # Create comprehensive CTRW visualization
         fig = make_subplots(
@@ -5261,10 +5281,9 @@ def _plot_ctrw(self, result):
         fig.update_xaxes(title_text="Jump Length (μm)", type="log", row=1, col=2)
         fig.update_layout(height=800, title="CTRW Analysis")
         
-        figures.append(fig)
-        return figures
+        return fig  # Return single figure with subplots, not list
     except Exception as e:
-        return []
+        return None
 
 def _analyze_fbm_enhanced(self, tracks_df, current_units):
     """Enhanced Fractional Brownian Motion analysis."""
@@ -5331,20 +5350,18 @@ def _analyze_fbm_enhanced(self, tracks_df, current_units):
 def _plot_fbm_enhanced(self, result):
     """Visualize enhanced FBM analysis."""
     if not result.get('success'):
-        return []
+        return None
     
     try:
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
         import numpy as np
         
-        figures = []
-        
         hurst_values = result.get('hurst_values', [])
         D_values = result.get('D_values', [])
         
         if len(hurst_values) == 0:
-            return []
+            return None
         
         # Create comprehensive FBM visualization
         fig = make_subplots(
@@ -5396,11 +5413,9 @@ def _plot_fbm_enhanced(self, result):
             showlegend=False
         )
         
-        figures.append(fig)
-        
-        return figures
+        return fig  # Return single figure with subplots, not list
     except Exception as e:
-        return []
+        return None
 
 def _analyze_crowding(self, tracks_df, current_units):
     """Analyze macromolecular crowding corrections."""
@@ -5444,37 +5459,36 @@ def _analyze_crowding(self, tracks_df, current_units):
 def _plot_crowding(self, result):
     """Visualize crowding corrections."""
     if not result.get('success'):
-        return []
+        return None
     
     try:
         import plotly.graph_objects as go
         
-        figures = []
         corrections = result.get('corrections', [])
         
-        if corrections:
-            phi_vals = [c['phi'] for c in corrections]
-            D_free_vals = [c['D_free'] for c in corrections]
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=phi_vals,
-                y=D_free_vals,
-                mode='lines+markers',
-                name='D_free'
-            ))
-            
-            fig.update_layout(
-                title="Crowding Correction",
-                xaxis_title="Volume Fraction φ",
-                yaxis_title="D_free (μm²/s)"
-            )
-            
-            figures.append(fig)
+        if not corrections:
+            return None
         
-        return figures
+        phi_vals = [c['phi'] for c in corrections]
+        D_free_vals = [c['D_free'] for c in corrections]
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=phi_vals,
+            y=D_free_vals,
+            mode='lines+markers',
+            name='D_free'
+        ))
+        
+        fig.update_layout(
+            title="Crowding Correction",
+            xaxis_title="Volume Fraction φ",
+            yaxis_title="D_free (μm²/s)"
+        )
+        
+        return fig  # Return single figure, not list
     except Exception as e:
-        return []
+        return None
 
 def _analyze_loop_extrusion(self, tracks_df, current_units):
     """Analyze loop extrusion signatures."""
@@ -5586,41 +5600,40 @@ def _analyze_local_diffusion_map(self, tracks_df, current_units):
 def _plot_local_diffusion_map(self, result):
     """Visualize local diffusion map."""
     if not result.get('success'):
-        return []
+        return None
     
     try:
         import plotly.graph_objects as go
         import numpy as np
         
-        figures = []
         full_results = result.get('full_results', {})
         
         D_map = full_results.get('D_map')
-        if D_map is not None:
-            x_edges = full_results.get('x_edges', np.arange(D_map.shape[0] + 1))
-            y_edges = full_results.get('y_edges', np.arange(D_map.shape[1] + 1))
-            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
-            
-            fig = go.Figure(data=go.Heatmap(
-                z=D_map.T,
-                x=x_centers,
-                y=y_centers,
-                colorscale='Plasma',
-                colorbar=dict(title="D (μm²/s)")
-            ))
-            
-            fig.update_layout(
-                title="Local Diffusion Coefficient Map D(x,y)",
-                xaxis_title="X Position (μm)",
-                yaxis_title="Y Position (μm)"
-            )
-            
-            figures.append(fig)
+        if D_map is None:
+            return None
         
-        return figures
+        x_edges = full_results.get('x_edges', np.arange(D_map.shape[0] + 1))
+        y_edges = full_results.get('y_edges', np.arange(D_map.shape[1] + 1))
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        
+        fig = go.Figure(data=go.Heatmap(
+            z=D_map.T,
+            x=x_centers,
+            y=y_centers,
+            colorscale='Plasma',
+            colorbar=dict(title="D (μm²/s)")
+        ))
+        
+        fig.update_layout(
+            title="Local Diffusion Coefficient Map D(x,y)",
+            xaxis_title="X Position (μm)",
+            yaxis_title="Y Position (μm)"
+        )
+        
+        return fig  # Return single figure, not list
     except Exception as e:
-        return []
+        return None
 
 # Register the new analysis methods
 EnhancedSPTReportGenerator._analyze_percolation = _analyze_percolation
