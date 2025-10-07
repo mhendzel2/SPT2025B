@@ -25,113 +25,109 @@ class SampleDataManager:
         self._load_available_datasets()
     
     def _load_available_datasets(self):
-        """Load information about available sample datasets."""
+        """Load information about available sample datasets by scanning directories."""
         if not self.sample_data_dir.exists():
             return
-            
-        # Define dataset descriptions
-        dataset_info = {
-            "Cell1_spots.csv": {
-                "name": "Cell1 Spots",
-                "description": "Single-particle tracking data from Cell1 with multi-channel intensity measurements",
-                "tracks": None,  # Will be loaded dynamically
-                "particles": None,
-                "frames": None,
-                "channels": ["CH1", "CH2", "CH3"]
-            },
-            "Cell2_spots.csv": {
-                "name": "Cell2 Spots", 
-                "description": "Single-particle tracking data from Cell2 experiment",
-                "tracks": None,
-                "particles": None,
-                "frames": None,
-                "channels": ["CH1", "CH2", "CH3"]
-            },
-            "Cropped_spots.csv": {
-                "name": "Cropped Spots",
-                "description": "Cropped region single-particle tracking data with focused analysis area",
-                "tracks": None,
-                "particles": None,
-                "frames": None,
-                "channels": []
-            },
-            "Frame8_spots.csv": {
-                "name": "Frame8 Spots",
-                "description": "Single frame analysis data for detailed particle characterization",
-                "tracks": None,
-                "particles": None,
-                "frames": None,
-                "channels": []
-            },
-            "MS2_spots_F1C1.csv": {
-                "name": "MS2 F1C1 Spots",
-                "description": "MS2 mRNA tracking data from field 1, cell 1 with temporal dynamics",
-                "tracks": None,
-                "particles": None,
-                "frames": None,
-                "channels": []
-            }
-        }
         
-        # Check which files exist and load their metadata
-        for filename, info in dataset_info.items():
-            file_path = self.sample_data_dir / filename
-            if file_path.exists():
-                try:
-                    # Load basic metadata without loading full dataset
-                    df = pd.read_csv(file_path, nrows=5)  # Just peek at structure
-                    info["available"] = True
-                    info["file_path"] = str(file_path)
-                    info["file_size"] = file_path.stat().st_size
-                    
-                    # Detect columns and structure
-                    info["columns"] = list(df.columns)
-                    if "TRACK_ID" in df.columns:
-                        info["has_tracks"] = True
-                    if "FRAME" in df.columns:
-                        info["has_temporal"] = True
-                    if any("CH" in col for col in df.columns):
-                        info["has_multichannel"] = True
-                        
-                    self._available_datasets[filename] = info
-                except Exception as e:
-                    st.warning(f"Could not load metadata for {filename}: {str(e)}")
+        # Recursively find all CSV files in sample_data and subdirectories
+        csv_files = list(self.sample_data_dir.glob('**/*.csv'))
+        
+        for csv_file in csv_files:
+            try:
+                # Create relative path for cleaner display
+                rel_path = csv_file.relative_to(self.sample_data_dir)
+                
+                # Use relative path as key for uniqueness
+                file_key = str(rel_path).replace('\\', '/')
+                
+                # Extract dataset category from subdirectory
+                parts = rel_path.parts
+                if len(parts) > 1:
+                    category = parts[0]  # e.g., 'U2OS_MS2', 'C2C12_40nm_SC35'
+                    filename = parts[-1]
+                else:
+                    category = "General"
+                    filename = parts[0]
+                
+                # Create a nice display name
+                display_name = filename.replace('_spots.csv', '').replace('_', ' ').title()
+                if category != "General":
+                    display_name = f"{category} - {display_name}"
+                
+                # Load basic metadata without loading full dataset
+                df = pd.read_csv(csv_file, nrows=5)  # Just peek at structure
+                
+                info = {
+                    "name": display_name,
+                    "description": f"Single-particle tracking data from {category}",
+                    "category": category,
+                    "filename": filename,
+                    "file_path": str(csv_file),
+                    "relative_path": file_key,
+                    "file_size": csv_file.stat().st_size,
+                    "available": True,
+                    "tracks": None,  # Will be loaded dynamically
+                    "particles": None,
+                    "frames": None,
+                    "columns": list(df.columns)
+                }
+                
+                # Detect columns and structure
+                if "TRACK_ID" in df.columns or "track_id" in df.columns:
+                    info["has_tracks"] = True
+                if "FRAME" in df.columns or "frame" in df.columns:
+                    info["has_temporal"] = True
+                if any("CH" in col.upper() for col in df.columns):
+                    info["has_multichannel"] = True
+                    info["channels"] = [col for col in df.columns if "CH" in col.upper()]
+                
+                self._available_datasets[file_key] = info
+                
+            except Exception as e:
+                # Silently skip files that can't be read
+                continue
     
     def get_available_datasets(self) -> Dict:
         """Get dictionary of available sample datasets."""
         return self._available_datasets
     
-    def load_dataset(self, filename: str) -> Optional[pd.DataFrame]:
+    def load_dataset(self, file_key: str) -> Optional[pd.DataFrame]:
         """Load a specific sample dataset.
         
         Parameters
         ----------
-        filename : str
-            Name of the dataset file to load
+        file_key : str
+            Relative path key of the dataset file to load
             
         Returns
         -------
         pd.DataFrame or None
             Loaded dataset or None if not found
         """
-        if filename not in self._available_datasets:
+        if file_key not in self._available_datasets:
             return None
             
         try:
-            file_path = self._available_datasets[filename]["file_path"]
+            file_path = self._available_datasets[file_key]["file_path"]
             df = pd.read_csv(file_path)
             
             # Update metadata with actual counts
             if "TRACK_ID" in df.columns:
-                self._available_datasets[filename]["tracks"] = df["TRACK_ID"].nunique()
-            self._available_datasets[filename]["particles"] = len(df)
+                self._available_datasets[file_key]["tracks"] = df["TRACK_ID"].nunique()
+            elif "track_id" in df.columns:
+                self._available_datasets[file_key]["tracks"] = df["track_id"].nunique()
+                
+            self._available_datasets[file_key]["particles"] = len(df)
+            
             if "FRAME" in df.columns:
-                self._available_datasets[filename]["frames"] = df["FRAME"].nunique()
+                self._available_datasets[file_key]["frames"] = df["FRAME"].nunique()
+            elif "frame" in df.columns:
+                self._available_datasets[file_key]["frames"] = df["frame"].nunique()
                 
             return df
             
         except Exception as e:
-            st.error(f"Error loading dataset {filename}: {str(e)}")
+            st.error(f"Error loading dataset {file_key}: {str(e)}")
             return None
     
     def create_dataset_selector(self) -> Optional[str]:
@@ -140,7 +136,7 @@ class SampleDataManager:
         Returns
         -------
         str or None
-            Selected dataset filename or None
+            Selected dataset relative path or None
         """
         if not self._available_datasets:
             st.warning("No sample datasets found in sample_data directory.")
@@ -148,11 +144,20 @@ class SampleDataManager:
             
         st.subheader("📊 Sample Dataset Selection")
         
-        # Create selection options
+        # Group datasets by category
+        categories = {}
+        for file_key, info in self._available_datasets.items():
+            category = info.get('category', 'General')
+            if category not in categories:
+                categories[category] = []
+            categories[category].append((file_key, info))
+        
+        # Create selection options with categories
         dataset_options = {}
-        for filename, info in self._available_datasets.items():
-            display_name = f"{info['name']} ({len(info.get('columns', []))} columns)"
-            dataset_options[display_name] = filename
+        for category in sorted(categories.keys()):
+            for file_key, info in sorted(categories[category], key=lambda x: x[1]['name']):
+                display_name = f"{info['name']} ({len(info.get('columns', []))} cols)"
+                dataset_options[display_name] = file_key
         
         # Add selection interface
         selected_display = st.selectbox(
@@ -162,16 +167,18 @@ class SampleDataManager:
         )
         
         if selected_display:
-            selected_filename = dataset_options[selected_display]
-            info = self._available_datasets[selected_filename]
+            selected_file_key = dataset_options[selected_display]
+            info = self._available_datasets[selected_file_key]
             
             # Display dataset information
             with st.expander("Dataset Information", expanded=True):
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
+                    st.write(f"**Category:** {info['category']}")
                     st.write(f"**Description:** {info['description']}")
-                    st.write(f"**File:** {selected_filename}")
+                    st.write(f"**File:** {info['filename']}")
+                    st.write(f"**Path:** {info['relative_path']}")
                     st.write(f"**Size:** {info['file_size'] / 1024:.1f} KB")
                     
                 with col2:
@@ -190,7 +197,7 @@ class SampleDataManager:
                         cols_display += f" ... (+{len(info['columns']) - 10} more)"
                     st.write(cols_display)
             
-            return selected_filename
+            return selected_file_key
             
         return None
     

@@ -168,6 +168,10 @@ tmp/
 *.jpeg
 *.ims
 
+# Allow sample data CSV files (must come after the ignore rule)
+!sample data/
+!sample data/**/*.csv
+
 # Project specific cache
 projects/
 output/
