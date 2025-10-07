@@ -1,17 +1,32 @@
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple, Union
+import warnings
 
+# Machine Learning imports
+try:
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+    from sklearn.svm import SVC
+    from sklearn.cluster import KMeans, DBSCAN
+    from sklearn.model_selection import train_test_split, cross_val_score
+    from sklearn.preprocessing import LabelEncoder, StandardScaler
+    from sklearn.metrics import classification_report, confusion_matrix, silhouette_score
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    warnings.warn("scikit-learn not available. ML classification features will be limited.")
+
+# Deep Learning imports
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, TimeDistributed
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, TimeDistributed
     from tensorflow.keras.preprocessing.sequence import pad_sequences
-    from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import LabelEncoder
+    from tensorflow.keras.callbacks import EarlyStopping
     TENSORFLOW_AVAILABLE = True
 except ImportError:
     TENSORFLOW_AVAILABLE = False
+    warnings.warn("TensorFlow not available. Deep learning classification will not be available.")
 
 def create_lstm_model(n_features: int, n_timesteps: int, n_classes: int) -> 'tf.keras.Model':
     """

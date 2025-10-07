@@ -330,6 +330,36 @@ class EnhancedSPTReportGenerator:
                 'priority': 4
             }
         
+        # Add ML motion classification
+        self.available_analyses['ml_classification'] = {
+            'name': 'ML Motion Classification',
+            'description': 'Machine learning-based trajectory classification using Random Forest, SVM, or unsupervised clustering.',
+            'function': self._analyze_ml_classification,
+            'visualization': self._plot_ml_classification,
+            'category': 'Machine Learning',
+            'priority': 3
+        }
+        
+        # Add MD simulation comparison
+        self.available_analyses['md_comparison'] = {
+            'name': 'MD Simulation Comparison',
+            'description': 'Compare experimental tracks with molecular dynamics simulations from nuclear diffusion model.',
+            'function': self._analyze_md_comparison,
+            'visualization': self._plot_md_comparison,
+            'category': 'Simulation',
+            'priority': 3
+        }
+        
+        # Add nuclear diffusion simulation
+        self.available_analyses['nuclear_diffusion_sim'] = {
+            'name': 'Nuclear Diffusion Simulation',
+            'description': 'Generate simulated trajectories using multi-compartment nuclear model with anomalous diffusion.',
+            'function': self._run_nuclear_diffusion_simulation,
+            'visualization': self._plot_nuclear_diffusion,
+            'category': 'Simulation',
+            'priority': 3
+        }
+        
         self.report_results = {}
         self.report_figures = {}
         self.metadata = {}
@@ -2744,6 +2774,367 @@ class EnhancedSPTReportGenerator:
             'n_confined_tracks': int(df_metrics['localized_flag'].sum()) if not df_metrics.empty else 0,
             'tracks_df': track_df,
         }
+    
+    # ==================== ML CLASSIFICATION ====================
+    
+    def _analyze_ml_classification(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Perform ML-based motion classification"""
+        try:
+            from ml_trajectory_classifier_enhanced import classify_motion_types, extract_features_from_tracks_df
+            
+            # Extract features
+            features, track_ids = extract_features_from_tracks_df(tracks_df, pixel_size, frame_interval)
+            
+            if len(features) == 0:
+                return {'success': False, 'error': 'No valid tracks for classification'}
+            
+            # Perform unsupervised clustering (default approach)
+            result = classify_motion_types(
+                tracks_df, 
+                pixel_size=pixel_size,
+                frame_interval=frame_interval,
+                method='unsupervised',
+                model_type='kmeans'
+            )
+            
+            if not result['success']:
+                return result
+            
+            # Add classification labels to tracks
+            tracks_classified = tracks_df.copy()
+            label_map = dict(zip(track_ids, result['predicted_labels']))
+            tracks_classified['motion_class'] = tracks_classified['track_id'].map(label_map)
+            
+            # Calculate class statistics
+            class_stats = {}
+            for class_id in np.unique(result['predicted_labels']):
+                class_tracks = tracks_classified[tracks_classified['motion_class'] == class_id]
+                n_tracks = len(class_tracks['track_id'].unique())
+                mean_length = class_tracks.groupby('track_id').size().mean()
+                
+                class_stats[f'Class_{class_id}'] = {
+                    'n_tracks': int(n_tracks),
+                    'mean_length': float(mean_length),
+                    'fraction': float(n_tracks / len(track_ids))
+                }
+            
+            return {
+                'success': True,
+                'method': 'unsupervised_kmeans',
+                'n_classes': result['clustering_results']['n_clusters'],
+                'class_labels': result['predicted_labels'],
+                'track_ids': track_ids,
+                'features': features,
+                'class_statistics': class_stats,
+                'silhouette_score': result['clustering_results']['silhouette_score'],
+                'tracks_classified': tracks_classified
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': f'ML classification failed: {str(e)}'}
+    
+    def _plot_ml_classification(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Visualize ML classification results"""
+        figures = []
+        
+        if not result.get('success', False):
+            return figures
+        
+        try:
+            from sklearn.decomposition import PCA
+            
+            # 1. PCA projection with class colors
+            features = result['features']
+            labels = result['class_labels']
+            
+            if features.shape[1] >= 2:
+                pca = PCA(n_components=2)
+                features_2d = pca.fit_transform(features)
+                
+                fig = go.Figure()
+                for class_id in np.unique(labels):
+                    mask = labels == class_id
+                    fig.add_trace(go.Scatter(
+                        x=features_2d[mask, 0],
+                        y=features_2d[mask, 1],
+                        mode='markers',
+                        name=f'Class {class_id}',
+                        marker=dict(size=8, opacity=0.7)
+                    ))
+                
+                fig.update_layout(
+                    title='Motion Classes - PCA Projection',
+                    xaxis_title=f'PC1 ({pca.explained_variance_ratio_[0]:.1%})',
+                    yaxis_title=f'PC2 ({pca.explained_variance_ratio_[1]:.1%})',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 2. Class distribution
+            class_stats = result['class_statistics']
+            class_names = list(class_stats.keys())
+            n_tracks = [class_stats[c]['n_tracks'] for c in class_names]
+            
+            fig = go.Figure(data=[
+                go.Bar(x=class_names, y=n_tracks,
+                      marker_color='steelblue')
+            ])
+            fig.update_layout(
+                title='Track Distribution by Motion Class',
+                xaxis_title='Motion Class',
+                yaxis_title='Number of Tracks',
+                template='plotly_white'
+            )
+            figures.append(fig)
+            
+            # 3. Feature importance (if available)
+            if 'feature_importance' in result and result['feature_importance'] is not None:
+                feat_imp = result['feature_importance']
+                sorted_features = sorted(feat_imp.items(), key=lambda x: x[1], reverse=True)[:10]
+                
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=[f[1] for f in sorted_features],
+                        y=[f[0] for f in sorted_features],
+                        orientation='h',
+                        marker_color='coral'
+                    )
+                ])
+                fig.update_layout(
+                    title='Top 10 Feature Importances',
+                    xaxis_title='Importance',
+                    yaxis_title='Feature',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+        
+        except Exception as e:
+            pass  # Silently fail visualization
+        
+        return figures
+    
+    # ==================== MD SIMULATION COMPARISON ====================
+    
+    def _analyze_md_comparison(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Compare experimental tracks with MD simulation"""
+        try:
+            from nuclear_diffusion_simulator import simulate_nuclear_diffusion
+            from md_spt_comparison import compare_md_with_spt
+            
+            # Run nuclear diffusion simulation with matched parameters
+            n_tracks_exp = len(tracks_df['track_id'].unique())
+            mean_length_exp = tracks_df.groupby('track_id').size().mean()
+            
+            # Simulate comparable dataset
+            tracks_md, sim_summary = simulate_nuclear_diffusion(
+                n_particles=min(n_tracks_exp, 100),
+                particle_radius=40,  # nm, typical
+                n_steps=int(mean_length_exp),
+                time_step=frame_interval,
+                temperature=310
+            )
+            
+            # Convert pixel coordinates to match experimental units
+            # (simulator outputs in pixels, we need μm)
+            tracks_md['x'] = tracks_md['x'] * pixel_size
+            tracks_md['y'] = tracks_md['y'] * pixel_size
+            
+            # Perform comprehensive comparison
+            comparison = compare_md_with_spt(
+                tracks_md, tracks_df,
+                pixel_size=1.0,  # Already converted
+                frame_interval=frame_interval,
+                analyze_compartments=True
+            )
+            
+            # Add simulation summary
+            comparison['simulation_summary'] = sim_summary
+            comparison['tracks_md'] = tracks_md
+            
+            return comparison
+            
+        except Exception as e:
+            return {'success': False, 'error': f'MD comparison failed: {str(e)}'}
+    
+    def _plot_md_comparison(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Visualize MD-SPT comparison"""
+        figures = []
+        
+        if not result.get('success', False):
+            return figures
+        
+        try:
+            # Use pre-generated figures if available
+            if 'figures' in result:
+                for fig_name, fig in result['figures'].items():
+                    figures.append(fig)
+            
+            # Add summary text figure
+            summary = result.get('summary', {})
+            recommendation = summary.get('recommendation', 'No recommendation available')
+            
+            fig = go.Figure()
+            fig.add_annotation(
+                x=0.5, y=0.5,
+                text=f"<b>Analysis Summary</b><br><br>" +
+                     f"Diffusion Agreement: {summary.get('diffusion_agreement', 'N/A')}<br>" +
+                     f"MSD Correlation: {summary.get('msd_correlation', 0):.3f}<br>" +
+                     f"Statistically Different: {summary.get('statistically_different', False)}<br><br>" +
+                     f"<b>Recommendation:</b><br>{recommendation}",
+                showarrow=False,
+                font=dict(size=12),
+                xref='paper',
+                yref='paper',
+                align='left'
+            )
+            fig.update_layout(
+                title='MD-SPT Comparison Summary',
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=400,
+                template='plotly_white'
+            )
+            figures.append(fig)
+            
+        except Exception as e:
+            pass  # Silently fail visualization
+        
+        return figures
+    
+    # ==================== NUCLEAR DIFFUSION SIMULATION ====================
+    
+    def _run_nuclear_diffusion_simulation(self, tracks_df: pd.DataFrame, pixel_size: float, frame_interval: float) -> Dict[str, Any]:
+        """Run standalone nuclear diffusion simulation"""
+        try:
+            from nuclear_diffusion_simulator import (
+                simulate_nuclear_diffusion, 
+                NuclearGeometry, 
+                ParticleProperties,
+                CompartmentType
+            )
+            
+            # Extract parameters from experimental data
+            n_tracks_exp = len(tracks_df['track_id'].unique())
+            mean_length_exp = tracks_df.groupby('track_id').size().mean()
+            
+            # Run simulation
+            tracks_sim, summary = simulate_nuclear_diffusion(
+                n_particles=min(n_tracks_exp, 100),
+                particle_radius=40,
+                n_steps=int(mean_length_exp * 1.5),  # Slightly longer
+                time_step=frame_interval,
+                temperature=310
+            )
+            
+            # Convert to μm
+            tracks_sim['x'] = tracks_sim['x'] * pixel_size
+            tracks_sim['y'] = tracks_sim['y'] * pixel_size
+            
+            # Calculate basic statistics
+            from analysis import calculate_msd
+            
+            msd_result = calculate_msd(tracks_sim, pixel_size=1.0, frame_interval=frame_interval)
+            
+            # Compartment statistics
+            compartment_counts = tracks_sim.groupby('compartment')['track_id'].nunique()
+            
+            return {
+                'success': True,
+                'tracks_simulated': tracks_sim,
+                'simulation_summary': summary,
+                'msd_result': msd_result,
+                'compartment_distribution': compartment_counts.to_dict(),
+                'n_particles': summary['n_particles'],
+                'total_steps': summary['total_steps'],
+                'simulation_time': summary['simulation_time']
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Simulation failed: {str(e)}'}
+    
+    def _plot_nuclear_diffusion(self, result: Dict[str, Any]) -> List[go.Figure]:
+        """Visualize nuclear diffusion simulation results"""
+        figures = []
+        
+        if not result.get('success', False):
+            return figures
+        
+        try:
+            tracks_sim = result['tracks_simulated']
+            
+            # 1. Trajectory visualization colored by compartment
+            fig = go.Figure()
+            
+            for track_id in tracks_sim['track_id'].unique()[:20]:  # Limit to 20 for clarity
+                track = tracks_sim[tracks_sim['track_id'] == track_id]
+                compartments = track['compartment'].values
+                
+                # Color by most common compartment
+                most_common_comp = pd.Series(compartments).mode()[0]
+                
+                fig.add_trace(go.Scatter(
+                    x=track['x'],
+                    y=track['y'],
+                    mode='lines',
+                    name=f'Track {track_id} ({most_common_comp})',
+                    line=dict(width=1),
+                    showlegend=(track_id < 5)  # Only show first 5 in legend
+                ))
+            
+            fig.update_layout(
+                title='Simulated Nuclear Diffusion Trajectories',
+                xaxis_title='X Position (μm)',
+                yaxis_title='Y Position (μm)',
+                template='plotly_white',
+                height=500
+            )
+            figures.append(fig)
+            
+            # 2. MSD curve
+            if 'msd_result' in result and result['msd_result'].get('success', False):
+                msd_data = result['msd_result']
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=msd_data.get('time', []),
+                    y=msd_data.get('msd', []),
+                    mode='lines+markers',
+                    name='Simulated MSD',
+                    line=dict(color='steelblue', width=2)
+                ))
+                
+                fig.update_layout(
+                    title='Mean Squared Displacement (Simulated)',
+                    xaxis_title='Time (s)',
+                    yaxis_title='MSD (μm²)',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+            
+            # 3. Compartment distribution
+            if 'compartment_distribution' in result:
+                comp_dist = result['compartment_distribution']
+                
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=list(comp_dist.keys()),
+                        y=list(comp_dist.values()),
+                        marker_color='teal'
+                    )
+                ])
+                
+                fig.update_layout(
+                    title='Particle Distribution by Nuclear Compartment',
+                    xaxis_title='Compartment',
+                    yaxis_title='Number of Tracks',
+                    template='plotly_white'
+                )
+                figures.append(fig)
+        
+        except Exception as e:
+            pass  # Silently fail visualization
+        
+        return figures
 
 # Streamlit app integration
 def show_enhanced_report_generator(track_data=None, analysis_results=None, 
