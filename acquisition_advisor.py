@@ -166,6 +166,25 @@ class AcquisitionAdvisor:
         min_N_alpha = self.bias_tables['min_track_length']['alpha_estimation']
         
         warnings = []
+        
+        # Sub-resolution diffusion warning (CRITICAL)
+        # Check if expected displacement < localization precision
+        expected_displacement = np.sqrt(4 * D_expected * dt_optimal)  # 2D RMS displacement
+        if expected_displacement < localization_precision:
+            warnings.append(
+                f'⚠️ CRITICAL: Expected displacement ({expected_displacement:.4f} μm) '
+                f'< localization precision ({localization_precision:.3f} μm). '
+                f'Motion is UNRESOLVABLE with current precision. '
+                f'Recommendations: (1) Increase frame interval, (2) Improve localization '
+                f'(brighter dye, better SNR), or (3) Accept that D cannot be reliably measured.'
+            )
+        elif expected_displacement < 2 * localization_precision:
+            warnings.append(
+                f'⚠️ WARNING: Expected displacement ({expected_displacement:.4f} μm) '
+                f'is only {expected_displacement/localization_precision:.1f}× localization precision. '
+                f'D estimates will have high uncertainty. Consider longer dt or better SNR.'
+            )
+        
         if track_length < min_N_D:
             warnings.append(
                 f'Track length ({track_length}) < recommended minimum ({min_N_D}) '

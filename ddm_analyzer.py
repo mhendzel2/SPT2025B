@@ -57,7 +57,9 @@ class DDMAnalyzer:
     def compute_image_structure_function(self, 
                                          image_stack: np.ndarray,
                                          lag_frames: Optional[List[int]] = None,
-                                         q_range_um_inv: Optional[Tuple[float, float]] = None) -> Dict:
+                                         q_range_um_inv: Optional[Tuple[float, float]] = None,
+                                         subtract_background: bool = True,
+                                         background_method: str = 'temporal_median') -> Dict:
         """
         Compute image structure function D(q, τ).
         
@@ -71,6 +73,12 @@ class DDMAnalyzer:
             Lag times in frames. Default: [1, 2, 5, 10, 20, 50]
         q_range_um_inv : tuple, optional
             (q_min, q_max) in μm⁻¹. Default: use all available q
+        subtract_background : bool
+            Whether to subtract background before DDM analysis
+        background_method : str
+            'temporal_median': Use temporal median as background
+            'temporal_mean': Use temporal mean
+            'rolling_ball': Use rolling ball algorithm (spatial)
         
         Returns
         -------
@@ -81,7 +89,8 @@ class DDMAnalyzer:
                 'lag_times_s': ndarray,       # Lag times
                 'D_q_tau': ndarray,           # Structure function (n_q, n_tau)
                 'A_q': ndarray,               # Amplitude factor (n_q,)
-                'B_q': ndarray                # Background (n_q,)
+                'B_q': ndarray,               # Background (n_q,)
+                'background_subtracted': bool
             }
         """
         if image_stack.ndim != 3:
@@ -97,6 +106,32 @@ class DDMAnalyzer:
                 'success': False,
                 'error': 'Need at least 10 frames for DDM analysis'
             }
+        
+        # Background subtraction
+        if subtract_background:
+            if background_method == 'temporal_median':
+                background = np.median(image_stack, axis=0)
+                image_stack_corrected = image_stack - background[np.newaxis, :, :]
+            elif background_method == 'temporal_mean':
+                background = np.mean(image_stack, axis=0)
+                image_stack_corrected = image_stack - background[np.newaxis, :, :]
+            elif background_method == 'rolling_ball':
+                # Simple rolling ball: subtract minimum over sliding window
+                from scipy.ndimage import uniform_filter
+                window_size = min(height, width) // 10
+                background = np.zeros_like(image_stack)
+                for i in range(n_frames):
+                    background[i] = uniform_filter(image_stack[i], size=window_size, mode='reflect')
+                image_stack_corrected = image_stack - background
+            else:
+                warnings.warn(f'Unknown background method: {background_method}, using temporal_median')
+                background = np.median(image_stack, axis=0)
+                image_stack_corrected = image_stack - background[np.newaxis, :, :]
+            
+            # Ensure non-negative intensities
+            image_stack_corrected = np.maximum(image_stack_corrected, 0)
+        else:
+            image_stack_corrected = image_stack.copy()
         
         # Default lag times
         if lag_frames is None:
@@ -142,8 +177,8 @@ class DDMAnalyzer:
             n_pairs = 0
             
             for t in range(n_frames - tau):
-                # Intensity difference
-                delta_I = image_stack[t + tau] - image_stack[t]
+                # Intensity difference (use background-corrected images)
+                delta_I = image_stack_corrected[t + tau] - image_stack_corrected[t]
                 
                 # Fourier transform
                 delta_I_fft = fft2(delta_I)

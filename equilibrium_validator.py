@@ -4,7 +4,12 @@ Equilibrium Validity Detection Module
 Multi-test system to detect when GSER assumptions are violated:
 1. VACF symmetry check (thermal equilibrium implies VACF is symmetric)
 2. 1P-2P microrheology agreement (homogeneous + equilibrium)
-3. AFM/OT concordance (when external data available)
+3. AFM/OT concordance (NOT IMPLEMENTED - excluded per user request)
+
+NOTE: AFM/optical tweezer cross-validation module was intentionally excluded
+from this implementation per user requirements. Users who wish to cross-validate
+SPT-derived rheology with active rheometry (AFM, optical tweezers) should use
+external tools or manual comparison.
 
 CRITICAL: GSER assumes thermal equilibrium and passive diffusion.
 Active stresses (motors, flows) violate these assumptions and lead to

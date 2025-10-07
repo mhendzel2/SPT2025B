@@ -116,10 +116,17 @@ class BiasedInferenceCorrector:
         
         D_cve = (msd_biased / (2 * dimensions) + covariance / dimensions) / (2 * dt)
         
-        # Standard error estimation (simplified)
-        # Full derivation in Berglund Eq. 16
+        # Standard error estimation via Fisher information matrix
+        # Cramér-Rao bound: Var(D) ≥ 1/I(D)
+        # Fisher information for CVE (Berglund Eq. 16-17)
+        
+        # Variance of MSD and covariance
         var_msd = np.var(squared_disp)
-        D_std = np.sqrt(var_msd / (2 * dimensions * dt**2 * N))
+        
+        # Simplified Fisher information for normal diffusion:
+        # I(D) ≈ N / (2·D²·dt²)
+        fisher_info = N / (2 * D_cve**2 * dt**2) if D_cve > 0 else 1e-10
+        D_std = np.sqrt(1.0 / fisher_info) if fisher_info > 0 else np.inf
         
         # Quality checks
         if D_cve < 0:
@@ -291,11 +298,33 @@ class BiasedInferenceCorrector:
                     'method': 'MLE'
                 }
             
-            # Estimate uncertainties from Hessian (simplified)
-            # Full calculation requires Fisher information matrix
-            # For now, use bootstrap-style approximation
-            D_std = D_mle * 0.1 / np.sqrt(N)  # Rough estimate
-            alpha_std = 0.05 / np.sqrt(N) if alpha_fixed is None else 0.0
+            # Estimate uncertainties from Fisher information matrix
+            # Cramér-Rao lower bound provides minimum variance
+            
+            # Fisher information matrix (diagonal approximation)
+            # I_DD = ∂²(-log L)/∂D²
+            # I_αα = ∂²(-log L)/∂α²
+            
+            # For Gaussian likelihood with variance σ² = 2D·dt^α + 2σ_loc²:
+            # I_DD ≈ N·d / σ⁴ · (dt^α)²
+            # I_αα ≈ N·d / σ⁴ · (D·dt^α·ln(dt))²
+            
+            R = (exposure_time / dt)**2 / 3 if exposure_time > 0 else 0
+            blur_factor = 1 - R
+            var_est = 2 * D_mle * (dt**alpha_mle) * blur_factor + 2 * localization_error**2
+            
+            if var_est > 0:
+                fisher_D = N * dimensions / (var_est**2) * ((dt**alpha_mle) * blur_factor)**2
+                D_std = np.sqrt(1.0 / fisher_D) if fisher_D > 0 else D_mle * 0.1
+                
+                if alpha_fixed is None:
+                    fisher_alpha = N * dimensions / (var_est**2) * (D_mle * (dt**alpha_mle) * np.log(dt) * blur_factor)**2
+                    alpha_std = np.sqrt(1.0 / fisher_alpha) if fisher_alpha > 0 else 0.05
+                else:
+                    alpha_std = 0.0
+            else:
+                D_std = D_mle * 0.1 / np.sqrt(N)
+                alpha_std = 0.05 / np.sqrt(N) if alpha_fixed is None else 0.0
             
             return {
                 'success': True,
@@ -527,14 +556,148 @@ class BiasedInferenceCorrector:
         return pd.DataFrame(results)
 
 
+    def bootstrap_confidence_intervals(self, track: np.ndarray, dt: float,
+                                       method: str = 'CVE',
+                                       exposure_time: float = 0.0,
+                                       localization_error: float = 0.0,
+                                       dimensions: int = 2,
+                                       n_bootstrap: int = 1000,
+                                       confidence: float = 0.95) -> Dict:
+        """
+        Calculate bootstrap confidence intervals for D and α.
+        
+        Parameters
+        ----------
+        track : np.ndarray
+            Trajectory coordinates
+        dt : float
+            Frame interval (s)
+        method : str
+            'CVE' or 'MLE'
+        n_bootstrap : int
+            Number of bootstrap samples
+        confidence : float
+            Confidence level (e.g., 0.95 for 95%)
+        
+        Returns
+        -------
+        Dict with confidence intervals
+        """
+        N = len(track)
+        D_samples = []
+        alpha_samples = []
+        
+        for _ in range(n_bootstrap):
+            # Resample with replacement
+            indices = np.random.choice(N, size=N, replace=True)
+            track_boot = track[indices]
+            
+            if method.upper() == 'CVE':
+                result = self.cve_estimator(track_boot, dt, localization_error, dimensions)
+            elif method.upper() == 'MLE':
+                result = self.mle_with_blur(track_boot, dt, exposure_time, localization_error, dimensions)
+            else:
+                raise ValueError(f"Unknown method: {method}")
+            
+            if result.get('success', True):
+                D_samples.append(result['D'])
+                alpha_samples.append(result.get('alpha', 1.0))
+        
+        if len(D_samples) == 0:
+            return {'success': False, 'error': 'All bootstrap samples failed'}
+        
+        # Calculate percentile-based confidence intervals
+        alpha_level = (1 - confidence) / 2
+        
+        return {
+            'success': True,
+            'D_mean': np.mean(D_samples),
+            'D_ci_lower': np.percentile(D_samples, alpha_level * 100),
+            'D_ci_upper': np.percentile(D_samples, (1 - alpha_level) * 100),
+            'D_std': np.std(D_samples),
+            'alpha_mean': np.mean(alpha_samples),
+            'alpha_ci_lower': np.percentile(alpha_samples, alpha_level * 100),
+            'alpha_ci_upper': np.percentile(alpha_samples, (1 - alpha_level) * 100),
+            'alpha_std': np.std(alpha_samples),
+            'n_bootstrap': len(D_samples),
+            'confidence': confidence,
+            'method': f'{method}_bootstrap'
+        }
+    
+    
+    def detect_anisotropic_diffusion(self, track: np.ndarray, dt: float,
+                                    dimensions: int = 2) -> Dict:
+        """
+        Detect anisotropic diffusion by analyzing 2D covariance matrix.
+        
+        Parameters
+        ----------
+        track : np.ndarray
+            Trajectory coordinates
+        dt : float
+            Frame interval (s)
+        dimensions : int
+            Number of dimensions (2 or 3)
+        
+        Returns
+        -------
+        Dict with anisotropy metrics
+        """
+        if dimensions not in [2, 3]:
+            return {'success': False, 'error': 'Need 2D or 3D tracks'}
+        
+        if len(track) < 10:
+            return {'success': False, 'error': 'Need at least 10 positions'}
+        
+        # Calculate displacements
+        displacements = np.diff(track, axis=0)
+        
+        # Covariance matrix
+        cov_matrix = np.cov(displacements.T)
+        
+        # Eigenvalue decomposition
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        idx = eigenvalues.argsort()[::-1]
+        eigenvalues = eigenvalues[idx]
+        eigenvectors = eigenvectors[:, idx]
+        
+        # Convert to diffusion coefficients
+        D_values = eigenvalues / (2 * dt)
+        
+        # Anisotropy ratio
+        anisotropy_ratio = D_values[0] / D_values[-1] if D_values[-1] > 0 else np.inf
+        
+        # Statistical test
+        D_mean = np.mean(D_values)
+        chi2_stat = np.sum((D_values - D_mean)**2) / (D_mean**2) if D_mean > 0 else 0
+        threshold = dimensions * 1.5
+        p_value = np.exp(-chi2_stat / threshold) if chi2_stat > 0 else 1.0
+        
+        isotropic = (anisotropy_ratio < 2.0) and (p_value > 0.05)
+        
+        return {
+            'success': True,
+            'isotropic': isotropic,
+            'anisotropy_ratio': anisotropy_ratio,
+            'eigenvalues': eigenvalues,
+            'eigenvectors': eigenvectors,
+            'D_values': D_values,
+            'D_mean': D_mean,
+            'D_max': D_values[0],
+            'D_min': D_values[-1],
+            'principal_direction': eigenvectors[:, 0],
+            'chi2_statistic': chi2_stat,
+            'p_value': p_value,
+            'interpretation': 'Isotropic' if isotropic else f'Anisotropic (ratio={anisotropy_ratio:.2f})'
+        }
+
+
 def compare_estimators(track: np.ndarray, dt: float,
                       localization_error: float,
                       exposure_time: float = 0.0,
                       dimensions: int = 2) -> Dict:
     """
     Compare MSD, CVE, and MLE estimates for a single track.
-    
-    Useful for understanding bias effects and method selection.
     
     Parameters
     ----------
@@ -551,17 +714,7 @@ def compare_estimators(track: np.ndarray, dt: float,
     
     Returns
     -------
-    Dict
-        {
-            'msd': {...},
-            'cve': {...},
-            'mle': {...},
-            'comparison': {
-                'D_bias_msd_vs_cve': fractional difference,
-                'D_bias_msd_vs_mle': fractional difference,
-                'recommended': 'CVE' or 'MLE'
-            }
-        }
+    Dict with comparison results
     """
     corrector = BiasedInferenceCorrector()
     

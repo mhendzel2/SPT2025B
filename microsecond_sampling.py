@@ -186,9 +186,14 @@ class IrregularSamplingHandler:
         lag_bins = np.logspace(np.log10(min_lag_s), np.log10(max_lag_s), n_lag_bins + 1)
         lag_centers = (lag_bins[:-1] + lag_bins[1:]) / 2
         
-        # Compute MSD for each lag bin
-        msd_values = np.zeros(n_lag_bins)
-        msd_std_values = np.zeros(n_lag_bins)
+        # Compute MSD using Welford's online algorithm for mean and variance
+        # Single-pass computation instead of two-pass
+        # Welford's method: M_n = M_{n-1} + (x_n - M_{n-1})/n
+        #                   S_n = S_{n-1} + (x_n - M_{n-1})(x_n - M_n)
+        # Variance = S_n / (n-1)
+        
+        welford_M = np.zeros(n_lag_bins)  # Running mean
+        welford_S = np.zeros(n_lag_bins)  # Running sum of squared differences
         n_observations = np.zeros(n_lag_bins, dtype=int)
         
         for i in range(len(positions)):
@@ -201,25 +206,19 @@ class IrregularSamplingHandler:
                     displacement = positions[j] - positions[i]
                     squared_disp = np.sum(displacement**2)
                     
-                    msd_values[bin_idx] += squared_disp
+                    # Welford update
                     n_observations[bin_idx] += 1
+                    n = n_observations[bin_idx]
+                    delta = squared_disp - welford_M[bin_idx]
+                    welford_M[bin_idx] += delta / n
+                    delta2 = squared_disp - welford_M[bin_idx]
+                    welford_S[bin_idx] += delta * delta2
         
-        # Average
-        valid = n_observations > 0
-        msd_values[valid] /= n_observations[valid]
-        
-        # Compute standard deviation (second pass)
-        for i in range(len(positions)):
-            for j in range(i + 1, len(positions)):
-                lag = times[j] - times[i]
-                bin_idx = np.searchsorted(lag_bins[:-1], lag, side='right') - 1
-                
-                if 0 <= bin_idx < n_lag_bins and valid[bin_idx]:
-                    displacement = positions[j] - positions[i]
-                    squared_disp = np.sum(displacement**2)
-                    msd_std_values[bin_idx] += (squared_disp - msd_values[bin_idx])**2
-        
-        msd_std_values[valid] = np.sqrt(msd_std_values[valid] / n_observations[valid])
+        # Extract results
+        msd_values = welford_M
+        valid = n_observations > 1  # Need > 1 for variance
+        msd_std_values = np.zeros(n_lag_bins)
+        msd_std_values[valid] = np.sqrt(welford_S[valid] / (n_observations[valid] - 1))
         
         return {
             'success': True,
