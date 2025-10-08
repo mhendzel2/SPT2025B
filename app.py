@@ -1772,6 +1772,22 @@ elif st.session_state.active_page == "Project Management":
                             pmgr.remove_file_from_project(proj, cond.id, f.get('id'))
                             pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
                             st.rerun()
+                    
+                    # Clear All Files button
+                    st.write("")  # Spacing
+                    col1, col2 = st.columns([3, 1])
+                    with col2:
+                        if st.button("🗑️ Clear All Files", key=f"clear_all_{cond.id}", type="secondary"):
+                            # Remove all files from this condition
+                            for f in list(cond.files):
+                                pmgr.remove_file_from_project(proj, cond.id, f.get('id'))
+                            # Clear the processed tracking for this condition
+                            upload_key = f"pm_upload_processed_{cond.id}"
+                            if upload_key in st.session_state:
+                                del st.session_state[upload_key]
+                            pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                            st.success(f"All files removed from '{cond.name}'")
+                            st.rerun()
 
                 # Pool and preview
                 if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
