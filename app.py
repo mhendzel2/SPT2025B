@@ -769,8 +769,8 @@ st.sidebar.title("SPT Analysis")
 nav_option = st.sidebar.radio(
     "Navigation",
     [
-        "Home", "Data Loading", "Image Processing", "Analysis", "Tracking",
-        "Visualization", "Advanced Analysis", "Project Management", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
+        "Home", "Project Management", "Data Loading", "Image Processing", "Tracking",
+        "Analysis", "Visualization", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
     ]
 )
 
@@ -5237,7 +5237,7 @@ Dilation expands detected particles to restore size after erosion."""
                             st.session_state.track_results = {"n_tracks": 0}
             
             # Display linking results if available
-            if st.session_state.track_results:
+            if hasattr(st.session_state, 'track_results') and st.session_state.track_results:
                 st.success(f"Linked {st.session_state.track_results['n_tracks']} tracks.")
         
         with tab3:
