@@ -220,29 +220,81 @@ class AdvancedMetricsAnalyzer:
 
     # -------- Hurst (from TAMSD slope) --------
     @staticmethod
-    def _robust_slope(x: np.ndarray, y: np.ndarray) -> float:
+    def _robust_slope(x: np.ndarray, y: np.ndarray, min_points: int = 5) -> float:
+        """Calculate slope from log-log linear regression with minimum point requirement."""
         mask = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
-        if np.count_nonzero(mask) < 2:
+        if np.count_nonzero(mask) < min_points:
             return np.nan
         b, a = np.polyfit(np.log10(x[mask]), np.log10(y[mask]), 1)
         return float(b)
 
-    def hurst_from_tamsd(self, tamsd_df: pd.DataFrame):
+    def hurst_from_tamsd(self, tamsd_df: pd.DataFrame, min_points: int = 5):
+        """
+        Calculate Hurst exponent from TAMSD power-law scaling.
+        
+        Parameters
+        ----------
+        tamsd_df : pd.DataFrame
+            Time-averaged MSD data with track_id, tau_s, tamsd columns
+        min_points : int
+            Minimum number of valid lag points required for robust slope calculation.
+            Default is 5. Tracks with fewer points will return NaN.
+        
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with track_id, alpha (scaling exponent), and H (Hurst exponent)
+        """
         rows = []
         for tid, g in tamsd_df.groupby('track_id'):
-            tau = g['tau_s'].values; msd = g['tamsd'].values
-            alpha = self._robust_slope(tau, msd)
-            rows.append({'track_id': tid, 'alpha': alpha, 'H': alpha/2 if np.isfinite(alpha) else np.nan})
+            tau = g['tau_s'].values
+            msd = g['tamsd'].values
+            alpha = self._robust_slope(tau, msd, min_points=min_points)
+            H_value = alpha/2 if np.isfinite(alpha) else np.nan
+            rows.append({
+                'track_id': tid, 
+                'alpha': alpha, 
+                'H': H_value,
+                'n_lag_points': int(np.count_nonzero(np.isfinite(tau) & np.isfinite(msd)))
+            })
         return pd.DataFrame(rows)
 
-    def fbm_analysis(self):
+    def fbm_analysis(self, min_track_length: int = 30):
         """
         Perform Fractional Brownian Motion (fBm) analysis on all tracks.
+        
+        Parameters
+        ----------
+        min_track_length : int
+            Minimum number of frames required for robust FBM estimation.
+            Default is 30. Shorter tracks will be skipped and marked with error.
+        
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with track_id, H_fbm (Hurst), D_fbm (diffusion), 
+            fbm_fit_error (error message if any), and track_length
         """
         rows = []
         for tid, g in self.df.groupby('track_id'):
-            result = fit_fbm_model(g, self.cfg.pixel_size, self.cfg.frame_interval)
-            row = {'track_id': tid, 'H_fbm': result.get('H'), 'D_fbm': result.get('D'), 'fbm_fit_error': result.get('error')}
+            track_len = len(g)
+            if track_len < min_track_length:
+                row = {
+                    'track_id': tid, 
+                    'H_fbm': np.nan, 
+                    'D_fbm': np.nan, 
+                    'fbm_fit_error': f'Track too short ({track_len} < {min_track_length} frames)',
+                    'track_length': track_len
+                }
+            else:
+                result = fit_fbm_model(g, self.cfg.pixel_size, self.cfg.frame_interval)
+                row = {
+                    'track_id': tid, 
+                    'H_fbm': result.get('H'), 
+                    'D_fbm': result.get('D'), 
+                    'fbm_fit_error': result.get('error', None),
+                    'track_length': track_len
+                }
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -255,14 +307,24 @@ class AdvancedMetricsAnalyzer:
         ngp_df = self.ngp_vs_lag()
         vacf_df = self.vacf()
         ang_df = self.turning_angles()
-        hurst_df = self.hurst_from_tamsd(tamsd_df)
-        fbm_df = self.fbm_analysis()
+        hurst_df = self.hurst_from_tamsd(tamsd_df, min_points=5)
+        fbm_df = self.fbm_analysis(min_track_length=30)
+        
+        # Calculate filtering statistics
+        n_tracks = int(self.df['track_id'].nunique())
+        n_valid_hurst = int(hurst_df['H'].notna().sum())
+        n_valid_fbm = int(fbm_df['H_fbm'].notna().sum())
+        
         summary = {
-            'n_tracks': int(self.df['track_id'].nunique()),
+            'n_tracks': n_tracks,
             'median_track_len': int(self.df.groupby('track_id').size().median()),
             'lags': self.lags.tolist(),
             'H_median': float(np.nanmedian(hurst_df['H'])) if not hurst_df.empty else np.nan,
-            'H_fbm_median': float(np.nanmedian(fbm_df['H_fbm'])) if not fbm_df.empty else np.nan
+            'H_fbm_median': float(np.nanmedian(fbm_df['H_fbm'])) if not fbm_df.empty else np.nan,
+            'n_valid_hurst': n_valid_hurst,
+            'n_excluded_hurst': n_tracks - n_valid_hurst,
+            'n_valid_fbm': n_valid_fbm,
+            'n_excluded_fbm': n_tracks - n_valid_fbm
         }
         return {
             'success': True,

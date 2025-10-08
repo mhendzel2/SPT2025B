@@ -89,21 +89,32 @@ def load_image_file(file) -> List[np.ndarray]:
                 image = Image.open(file)
                 frames = [np.array(image)]
             
-            # If we have multiple frames, check if they should be combined as channels
+            # If we have multiple frames, determine if it's a timelapse or multichannel image
             if len(frames) > 1:
                 # Check if all frames have the same dimensions
                 first_shape = frames[0].shape[:2]  # height, width
+                
+                # Heuristic: If there are many frames (>10), it's likely a timelapse
+                # If there are few frames (<=10), it might be multichannel data
+                TIMELAPSE_THRESHOLD = 10
+                
                 if all(frame.shape[:2] == first_shape for frame in frames):
-                    # Try to combine frames as channels in a single image
-                    if len(frames[0].shape) == 2:  # Grayscale frames
-                        # Stack as channels: (height, width, channels)
-                        combined = np.stack(frames, axis=2)
-                        st.info(f"Detected {len(frames)} frames - combining as multichannel image")
-                        return [combined]
-                    elif len(frames[0].shape) == 3:  # Already RGB frames
-                        # Each frame is already multichannel, return as separate frames
-                        st.info(f"Detected {len(frames)} RGB frames - treating as time series")
+                    if len(frames) > TIMELAPSE_THRESHOLD:
+                        # Many frames with same dimensions = timelapse series
+                        st.info(f"Detected {len(frames)} frames - treating as timelapse series")
                         return frames
+                    else:
+                        # Few frames - could be multichannel, but check frame shape
+                        if len(frames[0].shape) == 2:  # Grayscale frames
+                            # For <=10 grayscale frames, ask user or default to timelapse
+                            # Default to timelapse for safety (common use case)
+                            st.info(f"Detected {len(frames)} grayscale frames - treating as timelapse series")
+                            st.info("💡 Tip: If this is a multichannel image, please convert it to a proper multichannel TIFF format.")
+                            return frames
+                        elif len(frames[0].shape) == 3:  # Already RGB frames
+                            # Each frame is already multichannel, return as separate frames
+                            st.info(f"Detected {len(frames)} RGB frames - treating as time series")
+                            return frames
                 else:
                     st.info(f"Detected {len(frames)} frames with different dimensions - treating as time series")
                     return frames

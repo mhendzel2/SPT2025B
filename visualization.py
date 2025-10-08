@@ -2510,48 +2510,243 @@ def plot_energy_landscape(energy_data):
 
 def plot_polymer_physics_results(polymer_data):
     """
-    Plot polymer physics analysis results.
+    Plot polymer physics analysis results including MSD plot with power-law fit.
     
     Parameters:
     -----------
     polymer_data : dict
-        Dictionary containing polymer physics results
+        Dictionary containing polymer physics results with keys:
+        - msd_data: array of MSD values
+        - lag_times: array of lag times
+        - scaling_exponent: float (alpha value)
+        - regime: str (Rouse/Zimm/Reptation dynamics)
+        - fitted_models: dict with power-law and fixed-alpha fits
     
     Returns:
     --------
     plotly.graph_objects.Figure
-        Combined plot of polymer physics metrics
+        Combined plot with MSD curve, fit, and regime interpretation
     """
     try:
         from plotly.subplots import make_subplots
+        import numpy as np
         
+        # Check if we have the required data
+        if not all(k in polymer_data for k in ['msd_data', 'lag_times']):
+            return _empty_fig("Missing required MSD data for polymer physics plot")
+        
+        msd = np.array(polymer_data['msd_data'])
+        lag_times = np.array(polymer_data['lag_times'])
+        alpha = polymer_data.get('scaling_exponent', np.nan)
+        regime = polymer_data.get('regime', 'Unknown')
+        fitted_models = polymer_data.get('fitted_models', {})
+        
+        # Filter out NaN/inf values
+        valid_mask = np.isfinite(msd) & np.isfinite(lag_times) & (lag_times > 0) & (msd > 0)
+        if not np.any(valid_mask):
+            return _empty_fig("No valid MSD data points for polymer physics plot")
+        
+        msd = msd[valid_mask]
+        lag_times = lag_times[valid_mask]
+        
+        # Create 2x2 subplot layout
         fig = make_subplots(
             rows=2, cols=2,
-            subplot_titles=('Persistence Length', 'Contour Length', 
-                          'End-to-End Distance', 'Radius of Gyration'),
-            specs=[[{"secondary_y": False}, {"secondary_y": False}],
-                   [{"secondary_y": False}, {"secondary_y": False}]]
+            subplot_titles=(
+                'MSD vs Lag Time (Log-Log Scale)', 
+                'Regime Classification', 
+                'Power-Law Fit Comparison',
+                'Mesh Size & Crossover Metrics'
+            ),
+            specs=[
+                [{"type": "scatter"}, {"type": "table"}],
+                [{"type": "scatter"}, {"type": "table"}]
+            ],
+            vertical_spacing=0.12,
+            horizontal_spacing=0.15
         )
         
-        # Add plots based on available data
-        if 'persistence_length' in polymer_data:
+        # ===== Subplot 1: MSD vs Lag Time with Power-Law Fit =====
+        # Raw MSD data points
+        fig.add_trace(
+            go.Scatter(
+                x=lag_times, 
+                y=msd,
+                mode='markers',
+                marker=dict(size=8, color='blue', symbol='circle'),
+                name='MSD Data',
+                showlegend=True
+            ),
+            row=1, col=1
+        )
+        
+        # Power-law fit line: MSD = K * t^alpha
+        if np.isfinite(alpha) and 'power_law_fit' in fitted_models:
+            fit_info = fitted_models['power_law_fit']
+            K = fit_info.get('K', 1.0)
+            fit_msd = K * (lag_times ** alpha)
+            
             fig.add_trace(
-                go.Histogram(x=polymer_data['persistence_length'], name="Persistence Length"),
+                go.Scatter(
+                    x=lag_times,
+                    y=fit_msd,
+                    mode='lines',
+                    line=dict(color='red', width=2, dash='dash'),
+                    name=f'Fit: α={alpha:.3f}',
+                    showlegend=True
+                ),
                 row=1, col=1
             )
-            
-        # Add more subplots as needed based on polymer_data content
         
+        # Rouse fixed alpha=0.5 fit if available
+        if 'rouse_fixed_alpha' in fitted_models:
+            rouse_info = fitted_models['rouse_fixed_alpha']
+            K_rouse = rouse_info.get('K', 1.0)
+            rouse_msd = K_rouse * (lag_times ** 0.5)
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=lag_times,
+                    y=rouse_msd,
+                    mode='lines',
+                    line=dict(color='green', width=1, dash='dot'),
+                    name='Rouse (α=0.5)',
+                    showlegend=True
+                ),
+                row=1, col=1
+            )
+        
+        fig.update_xaxes(
+            title_text="Lag Time (s)", 
+            type="log",
+            row=1, col=1
+        )
+        fig.update_yaxes(
+            title_text="MSD (μm²)", 
+            type="log",
+            row=1, col=1
+        )
+        
+        # ===== Subplot 2: Regime Classification Table =====
+        regime_info = []
+        regime_info.append(['<b>Regime</b>', regime])
+        regime_info.append(['<b>Scaling Exponent (α)</b>', f'{alpha:.4f}' if np.isfinite(alpha) else 'N/A'])
+        
+        # Regime interpretation
+        if 'Rouse' in regime:
+            interpretation = 'Linear polymer in theta solvent<br>No hydrodynamic interactions'
+        elif 'Zimm' in regime:
+            interpretation = 'Polymer in good solvent<br>With hydrodynamic interactions'
+        elif 'Reptation' in regime:
+            interpretation = 'Entangled polymer<br>Confined diffusion through tube'
+        else:
+            interpretation = 'Regime not clearly identified'
+        
+        regime_info.append(['<b>Interpretation</b>', interpretation])
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['<b>Property</b>', '<b>Value</b>'],
+                    fill_color='lightblue',
+                    align='left',
+                    font=dict(size=12, color='black')
+                ),
+                cells=dict(
+                    values=[[row[0] for row in regime_info], [row[1] for row in regime_info]],
+                    fill_color='white',
+                    align='left',
+                    font=dict(size=11),
+                    height=30
+                )
+            ),
+            row=1, col=2
+        )
+        
+        # ===== Subplot 3: Fitted Models Comparison =====
+        if fitted_models:
+            model_names = []
+            r_squared_vals = []
+            K_vals = []
+            alpha_vals = []
+            
+            for model_name, model_info in fitted_models.items():
+                model_names.append(model_name.replace('_', ' ').title())
+                r_squared_vals.append(model_info.get('r_squared', np.nan))
+                K_vals.append(model_info.get('K', np.nan))
+                alpha_vals.append(model_info.get('alpha', np.nan))
+            
+            fig.add_trace(
+                go.Bar(
+                    x=model_names,
+                    y=r_squared_vals,
+                    marker=dict(color=['red', 'green']),
+                    name='R² Goodness of Fit',
+                    showlegend=False
+                ),
+                row=2, col=1
+            )
+            
+            fig.update_xaxes(title_text="Model", row=2, col=1)
+            fig.update_yaxes(title_text="R² Value", range=[0, 1], row=2, col=1)
+        
+        # ===== Subplot 4: Mesh Size & Crossover Metrics =====
+        metrics_info = []
+        
+        # Mesh size (if in reptation regime)
+        mesh_size = polymer_data.get('mesh_size')
+        if mesh_size and np.isfinite(mesh_size):
+            metrics_info.append(['<b>Mesh Size (ξ)</b>', f'{mesh_size:.3f} μm'])
+        
+        # Tube diameter
+        tube_diameter = polymer_data.get('tube_diameter')
+        if tube_diameter and np.isfinite(tube_diameter):
+            metrics_info.append(['<b>Tube Diameter</b>', f'{tube_diameter:.3f} μm'])
+        
+        # Crossover time
+        crossover_time = polymer_data.get('crossover_time')
+        if crossover_time and np.isfinite(crossover_time):
+            metrics_info.append(['<b>Crossover Time (τ<sub>e</sub>)</b>', f'{crossover_time:.3f} s'])
+        
+        # Crossover MSD
+        crossover_msd = polymer_data.get('crossover_msd')
+        if crossover_msd and np.isfinite(crossover_msd):
+            metrics_info.append(['<b>Crossover MSD</b>', f'{crossover_msd:.3e} μm²'])
+        
+        if not metrics_info:
+            metrics_info.append(['<b>Info</b>', 'No crossover metrics available'])
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['<b>Metric</b>', '<b>Value</b>'],
+                    fill_color='lightgreen',
+                    align='left',
+                    font=dict(size=12, color='black')
+                ),
+                cells=dict(
+                    values=[[row[0] for row in metrics_info], [row[1] for row in metrics_info]],
+                    fill_color='white',
+                    align='left',
+                    font=dict(size=11),
+                    height=30
+                )
+            ),
+            row=2, col=2
+        )
+        
+        # Overall layout
         fig.update_layout(
-            title="Polymer Physics Analysis Results",
-            showlegend=False,
-            height=600
+            title="Polymer Physics Analysis: MSD Scaling & Regime Classification",
+            showlegend=True,
+            height=800,
+            template="plotly_white"
         )
         
         return fig
         
-    except Exception:
-        return _empty_fig("Failed to render polymer physics plot")
+    except Exception as e:
+        return _empty_fig(f"Failed to render polymer physics plot: {str(e)}")
 
 
 def plot_pca_results(pca_results: Dict[str, Any]) -> Dict[str, go.Figure]:

@@ -3984,19 +3984,9 @@ class EnhancedSPTReportGenerator:
                         st.error(f"Analysis failed: {result['error']}")
                         continue
                     
-                    # Display analysis-specific results
-                    if analysis_key == 'basic_statistics':
-                        self._display_basic_stats(result)
-                    elif analysis_key == 'diffusion_analysis':
-                        self._display_diffusion_results(result)
-                    elif analysis_key == 'motion_classification':
-                        self._display_motion_results(result)
-                    else:
-                        # Generic result display
-                        st.json(result)
-                    
-                    # Display visualization if available
-                    if analysis_key in self.report_figures:
+                    # Display visualization first if available (before JSON)
+                    has_figure = analysis_key in self.report_figures
+                    if has_figure:
                         fig = self.report_figures[analysis_key]
                         # Support both Plotly and Matplotlib figures
                         try:
@@ -4007,6 +3997,35 @@ class EnhancedSPTReportGenerator:
                             st.pyplot(fig, use_container_width=True)
                         else:
                             st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Display analysis-specific results or summary
+                    if analysis_key == 'basic_statistics':
+                        self._display_basic_stats(result)
+                    elif analysis_key == 'diffusion_analysis':
+                        self._display_diffusion_results(result)
+                    elif analysis_key == 'motion_classification':
+                        self._display_motion_results(result)
+                    else:
+                        # For other analyses, show summary if available, otherwise show figure only
+                        summary = result.get('summary', {})
+                        if summary and isinstance(summary, dict):
+                            st.markdown("**Summary:**")
+                            cols = st.columns(min(len(summary), 4))
+                            for i, (key, value) in enumerate(summary.items()):
+                                with cols[i % len(cols)]:
+                                    # Format the value based on type
+                                    if isinstance(value, float):
+                                        if abs(value) < 0.01 or abs(value) > 1000:
+                                            st.metric(key.replace('_', ' ').title(), f"{value:.2e}")
+                                        else:
+                                            st.metric(key.replace('_', ' ').title(), f"{value:.3f}")
+                                    else:
+                                        st.metric(key.replace('_', ' ').title(), str(value))
+                        
+                        # Optionally show raw JSON in a collapsed expander
+                        if not has_figure or st.session_state.get('show_raw_json', False):
+                            with st.expander("🔍 View Raw JSON Data", expanded=False):
+                                st.json(result)
 
     def _display_basic_stats(self, stats):
         """Display basic statistics in a formatted way."""
