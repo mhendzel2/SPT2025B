@@ -1032,6 +1032,9 @@ def construct_tracks_from_spots(spots_df: pd.DataFrame) -> pd.DataFrame:
 def load_trackmate_xml_file(file_stream) -> pd.DataFrame:
     """
     Load a TrackMate XML file.
+    Supports two formats:
+    1. Standard TrackMate format with <Spot> and <Track> elements
+    2. Alternative format with <particle> and <detection> elements
     """
     import xml.etree.ElementTree as ET
     import pandas as pd
@@ -1040,50 +1043,68 @@ def load_trackmate_xml_file(file_stream) -> pd.DataFrame:
     content = file_stream.read()
     root = ET.fromstring(content)
 
-    # Dictionary to hold all spots, keyed by ID
-    spots = {}
-    # The XPath depends on the TrackMate version. Try a few common ones.
-    spot_elements = root.findall('.//Spot')
-    if not spot_elements:
-        spot_elements = root.findall('.//AllSpots/SpotsInFrame/Spot')
-
-    for spot in spot_elements:
-        spot_id = spot.get('ID')
-        spots[spot_id] = {
-            'frame': int(float(spot.get('FRAME', 0))),
-            'x': float(spot.get('POSITION_X', 0)),
-            'y': float(spot.get('POSITION_Y', 0)),
-            'z': float(spot.get('POSITION_Z', 0)),
-            'quality': float(spot.get('QUALITY', 0)),
-        }
-
     # List to hold track data
     track_data = []
-    track_elements = root.findall('.//Track')
-    if not track_elements:
-        track_elements = root.findall('.//AllTracks/Track')
-
-    if track_elements:
-        for track in track_elements:
-            track_id = int(track.get('TRACK_ID'))
-
-            # Get all spot IDs in this track from the edges
-            spot_ids = set()
-            for edge in track.findall('.//Edge'):
-                spot_ids.add(edge.get('SPOT_SOURCE_ID'))
-                spot_ids.add(edge.get('SPOT_TARGET_ID'))
-
-            # Add track data for each spot
-            for spot_id in spot_ids:
-                if spot_id in spots:
-                    spot_data = spots[spot_id].copy()
-                    spot_data['track_id'] = track_id
-                    track_data.append(spot_data)
+    
+    # Check for alternative format with <particle> and <detection> elements
+    particle_elements = root.findall('.//particle')
+    if particle_elements:
+        # Alternative format: <particle><detection t="frame" x="x" y="y" z="z"/></particle>
+        for track_idx, particle in enumerate(particle_elements):
+            detections = particle.findall('detection')
+            if detections:
+                for detection in detections:
+                    track_data.append({
+                        'track_id': track_idx,
+                        'frame': int(float(detection.get('t', 0))),
+                        'x': float(detection.get('x', 0)),
+                        'y': float(detection.get('y', 0)),
+                        'z': float(detection.get('z', 0))
+                    })
     else:
-        # If no tracks, treat all spots as belonging to a single track
-        for spot_id, spot_data in spots.items():
-            spot_data['track_id'] = 0
-            track_data.append(spot_data)
+        # Standard TrackMate format
+        # Dictionary to hold all spots, keyed by ID
+        spots = {}
+        # The XPath depends on the TrackMate version. Try a few common ones.
+        spot_elements = root.findall('.//Spot')
+        if not spot_elements:
+            spot_elements = root.findall('.//AllSpots/SpotsInFrame/Spot')
+
+        for spot in spot_elements:
+            spot_id = spot.get('ID')
+            spots[spot_id] = {
+                'frame': int(float(spot.get('FRAME', 0))),
+                'x': float(spot.get('POSITION_X', 0)),
+                'y': float(spot.get('POSITION_Y', 0)),
+                'z': float(spot.get('POSITION_Z', 0)),
+                'quality': float(spot.get('QUALITY', 0)),
+            }
+
+        track_elements = root.findall('.//Track')
+        if not track_elements:
+            track_elements = root.findall('.//AllTracks/Track')
+
+        if track_elements:
+            for track in track_elements:
+                track_id = int(track.get('TRACK_ID'))
+
+                # Get all spot IDs in this track from the edges
+                spot_ids = set()
+                for edge in track.findall('.//Edge'):
+                    spot_ids.add(edge.get('SPOT_SOURCE_ID'))
+                    spot_ids.add(edge.get('SPOT_TARGET_ID'))
+
+                # Add track data for each spot
+                for spot_id in spot_ids:
+                    if spot_id in spots:
+                        spot_data = spots[spot_id].copy()
+                        spot_data['track_id'] = track_id
+                        track_data.append(spot_data)
+        else:
+            # If no tracks, treat all spots as belonging to a single track
+            for spot_id, spot_data in spots.items():
+                spot_data['track_id'] = 0
+                track_data.append(spot_data)
 
     if not track_data:
         raise ValueError("No track or spot data found in TrackMate XML file")
