@@ -448,16 +448,53 @@ class DataQualityChecker:
         """Calculate comprehensive track statistics."""
         track_lengths = tracks_df.groupby('track_id').size()
         
+        # Calculate frame range
+        min_frame = int(tracks_df['frame'].min())
+        max_frame = int(tracks_df['frame'].max())
+        
+        # Calculate spatial ranges
+        x_min = tracks_df['x'].min()
+        x_max = tracks_df['x'].max()
+        y_min = tracks_df['y'].min()
+        y_max = tracks_df['y'].max()
+        
+        # Calculate displacement and velocity statistics
+        displacements = []
+        velocities = []
+        for track_id, track_data in tracks_df.groupby('track_id'):
+            if len(track_data) > 1:
+                track_data = track_data.sort_values('frame')
+                dx = track_data['x'].diff()
+                dy = track_data['y'].diff()
+                # Calculate displacement in physical units
+                step_displacements = np.sqrt(dx**2 + dy**2) * pixel_size
+                displacements.extend(step_displacements.dropna().tolist())
+                # Calculate velocity (displacement / time)
+                step_velocities = step_displacements / frame_interval
+                velocities.extend(step_velocities.dropna().tolist())
+        
+        mean_displacement = float(np.mean(displacements)) if displacements else 0.0
+        mean_velocity = float(np.mean(velocities)) if velocities else 0.0
+        
         return {
-            'total_tracks': int(tracks_df['track_id'].nunique()),
-            'total_detections': len(tracks_df),
+            # Keys expected by app.py
+            'n_tracks': int(tracks_df['track_id'].nunique()),
+            'n_points': len(tracks_df),
             'mean_track_length': float(track_lengths.mean()),
             'median_track_length': float(track_lengths.median()),
+            'frame_range': [min_frame, max_frame],
+            'x_range': [float(x_min * pixel_size), float(x_max * pixel_size)],
+            'y_range': [float(y_min * pixel_size), float(y_max * pixel_size)],
+            'mean_displacement': mean_displacement,
+            'mean_velocity': mean_velocity,
+            # Additional keys for backward compatibility
+            'total_tracks': int(tracks_df['track_id'].nunique()),
+            'total_detections': len(tracks_df),
             'min_track_length': int(track_lengths.min()),
             'max_track_length': int(track_lengths.max()),
-            'total_frames': int(tracks_df['frame'].max() - tracks_df['frame'].min() + 1),
-            'x_range_um': float((tracks_df['x'].max() - tracks_df['x'].min()) * pixel_size),
-            'y_range_um': float((tracks_df['y'].max() - tracks_df['y'].min()) * pixel_size),
+            'total_frames': max_frame - min_frame + 1,
+            'x_range_um': float((x_max - x_min) * pixel_size),
+            'y_range_um': float((y_max - y_min) * pixel_size),
             'has_z': 'z' in tracks_df.columns
         }
     
