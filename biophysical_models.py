@@ -647,6 +647,8 @@ class PolymerPhysicsModel:
             'D_map': D_map,
             'x_coords': x_centers,
             'y_coords': y_centers,
+            'x_edges': x_edges,
+            'y_edges': y_edges,
             'confidence_map': confidence_map,
             'count_map': count_map,
             'grid_resolution': grid_resolution

@@ -1265,6 +1265,28 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
         'analysis_type': 'motion-based' if regions is None else 'region-based',
         'total_regions_analyzed': len(regions) if regions is not None else 0
     }
+    
+    # Add formatted dwell_stats for display compatibility
+    n_tracks_analyzed = len(tracks_df['track_id'].unique())
+    n_tracks_with_dwell = len(track_results_df[track_results_df['n_dwell_events'] > 0]) if 'n_dwell_events' in track_results_df.columns and not track_results_df.empty else 0
+    n_dwell_events = len(dwell_events_df)
+    mean_dwell_time = dwell_events_df['dwell_time'].mean() if 'dwell_time' in dwell_events_df.columns and not dwell_events_df.empty else 0.0
+    median_dwell_time = dwell_events_df['dwell_time'].median() if 'dwell_time' in dwell_events_df.columns and not dwell_events_df.empty else 0.0
+    
+    results['dwell_stats'] = {
+        'Total tracks analyzed': n_tracks_analyzed,
+        'Tracks with dwell events': n_tracks_with_dwell,
+        'Total dwell events': n_dwell_events,
+        'Mean dwell time': f"{mean_dwell_time:.2f} s",
+        'Median dwell time': f"{median_dwell_time:.2f} s"
+    }
+    
+    # Add max dwell time if there are any events
+    if n_dwell_events > 0:
+        max_dwell_time = dwell_events_df['dwell_time'].max()
+        results['dwell_stats']['Max dwell time'] = f"{max_dwell_time:.2f} s"
+        results['dwell_stats']['Mean dwells per track'] = f"{track_results_df['n_dwell_events'].mean():.2f}"
+        results['dwell_stats']['Mean fraction of time dwelling'] = f"{track_results_df['dwell_fraction'].mean():.2%}"
 
     # If regions were provided, calculate region-specific statistics
     if regions is not None:

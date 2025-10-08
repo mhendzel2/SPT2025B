@@ -8716,13 +8716,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         
                                         # Calculate D(x,y) map
                                         model = PolymerPhysicsModel(
-                                            tracks_df=tracks_df,
                                             pixel_size=pixel_size_um,
                                             frame_interval=frame_interval_s
                                         )
                                         
                                         diffusion_map_results = model.calculate_local_diffusion_map(
-                                            grid_size=diff_map_resolution,
+                                            tracks_df=tracks_df,
+                                            grid_resolution=diff_map_resolution,
                                             min_points=min_points_per_cell
                                         )
                                         
@@ -8731,8 +8731,8 @@ elif st.session_state.active_page == "Advanced Analysis":
                                             
                                             D_map = diffusion_map_results['D_map']
                                             confidence_map = diffusion_map_results['confidence_map']
-                                            x_edges = diffusion_map_results['x_edges']
-                                            y_edges = diffusion_map_results['y_edges']
+                                            x_centers = diffusion_map_results['x_coords']
+                                            y_centers = diffusion_map_results['y_coords']
                                             
                                             # Statistics
                                             st.subheader("Diffusion Map Statistics")
@@ -8751,9 +8751,6 @@ elif st.session_state.active_page == "Advanced Analysis":
                                             
                                             # Visualize D(x,y) map
                                             st.subheader("Diffusion Coefficient Map")
-                                            
-                                            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-                                            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
                                             
                                             fig = go.Figure()
                                             
