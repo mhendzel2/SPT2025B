@@ -1719,17 +1719,33 @@ elif st.session_state.active_page == "Project Management":
                             st.rerun()
 
                 uploaded = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_{cond.id}")
+                
+                # Track which files have been processed to avoid duplicates
+                upload_key = f"pm_upload_processed_{cond.id}"
+                if upload_key not in st.session_state:
+                    st.session_state[upload_key] = set()
+                
                 if uploaded:
+                    # Check if these are new files (not already processed)
+                    new_files = []
                     for uf in uploaded:
-                        try:
-                            import pandas as _pd
-                            df = _pd.read_csv(uf)
-                            pmgr.add_file_to_condition(proj, cond.id, uf.name, df)
-                        except Exception as e:
-                            st.warning(f"Failed to add {uf.name}: {e}")
-                    pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
-                    st.success("Files added.")
-                    st.rerun()
+                        file_id = f"{uf.name}_{uf.size}"
+                        if file_id not in st.session_state[upload_key]:
+                            new_files.append((uf, file_id))
+                    
+                    # Only process new files
+                    if new_files:
+                        for uf, file_id in new_files:
+                            try:
+                                import pandas as _pd
+                                df = _pd.read_csv(uf)
+                                pmgr.add_file_to_condition(proj, cond.id, uf.name, df)
+                                st.session_state[upload_key].add(file_id)
+                            except Exception as e:
+                                st.warning(f"Failed to add {uf.name}: {e}")
+                        pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                        st.success(f"{len(new_files)} file(s) added.")
+                        st.rerun()
 
                 # Show files and remove option
                 if cond.files:
@@ -1770,6 +1786,132 @@ elif st.session_state.active_page == "Project Management":
                         st.dataframe(pooled.head())
                     else:
                         st.info("No data available to pool for this condition.")
+
+        # Batch Analysis Section
+        st.divider()
+        st.header("📊 Batch Analysis & Comparison")
+        
+        if proj.conditions and any(cond.files for cond in proj.conditions):
+            st.info("Analyze and compare data across all conditions in this project")
+            
+            # Analysis options
+            analysis_col1, analysis_col2 = st.columns(2)
+            
+            with analysis_col1:
+                st.subheader("Select Conditions to Compare")
+                conditions_to_analyze = []
+                for cond in proj.conditions:
+                    if cond.files:
+                        if st.checkbox(f"{cond.name} ({len(cond.files)} files)", 
+                                     value=True, 
+                                     key=f"analyze_cond_{cond.id}"):
+                            conditions_to_analyze.append(cond)
+            
+            with analysis_col2:
+                st.subheader("Analysis Options")
+                
+                # Quick analysis buttons
+                if st.button("📈 Generate Comparative Report", type="primary"):
+                    if len(conditions_to_analyze) < 1:
+                        st.error("Select at least one condition to analyze")
+                    else:
+                        with st.spinner("Generating comparative report..."):
+                            try:
+                                # Pool data from each condition
+                                condition_datasets = {}
+                                for cond in conditions_to_analyze:
+                                    pooled_df = cond.pool_tracks()
+                                    if pooled_df is not None and not pooled_df.empty:
+                                        condition_datasets[cond.name] = pooled_df
+                                
+                                if not condition_datasets:
+                                    st.error("No valid data in selected conditions")
+                                else:
+                                    st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
+                                    
+                                    # Show summary
+                                    st.subheader("Condition Summaries")
+                                    summary_data = []
+                                    for name, df in condition_datasets.items():
+                                        n_tracks = df['track_id'].nunique() if 'track_id' in df.columns else 0
+                                        n_frames = df['frame'].nunique() if 'frame' in df.columns else 0
+                                        n_points = len(df)
+                                        summary_data.append({
+                                            'Condition': name,
+                                            'Tracks': n_tracks,
+                                            'Frames': n_frames,
+                                            'Data Points': n_points
+                                        })
+                                    
+                                    import pandas as pd
+                                    summary_df = pd.DataFrame(summary_data)
+                                    st.dataframe(summary_df, use_container_width=True)
+                                    
+                                    # Option to run enhanced report generator on each condition
+                                    st.subheader("Advanced Analysis")
+                                    if REPORT_GENERATOR_AVAILABLE:
+                                        st.info("💡 Use the Enhanced Report Generator tab to run detailed analyses on individual conditions")
+                                        
+                                        # Quick access to load condition into main analysis
+                                        st.write("**Load condition for detailed analysis:**")
+                                        selected_cond_name = st.selectbox(
+                                            "Select condition to load into main workspace",
+                                            options=list(condition_datasets.keys()),
+                                            key="load_cond_to_workspace"
+                                        )
+                                        
+                                        if st.button("Load Selected Condition", key="load_cond_btn"):
+                                            st.session_state.tracks_data = condition_datasets[selected_cond_name]
+                                            try:
+                                                st.session_state.track_statistics = calculate_track_statistics(
+                                                    condition_datasets[selected_cond_name]
+                                                )
+                                            except Exception:
+                                                pass
+                                            st.success(f"✅ Loaded '{selected_cond_name}' into main workspace. Go to 'Enhanced Report Generator' tab to run analyses.")
+                                    else:
+                                        st.warning("Enhanced Report Generator not available")
+                                    
+                            except Exception as e:
+                                st.error(f"Error generating report: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                
+                # Export options
+                st.divider()
+                if st.button("💾 Export All Condition Data"):
+                    try:
+                        export_data = {}
+                        for cond in conditions_to_analyze:
+                            pooled_df = cond.pool_tracks()
+                            if pooled_df is not None and not pooled_df.empty:
+                                export_data[cond.name] = pooled_df
+                        
+                        if export_data:
+                            # Create a combined CSV with condition labels
+                            combined_rows = []
+                            for cond_name, df in export_data.items():
+                                df_copy = df.copy()
+                                df_copy['condition'] = cond_name
+                                combined_rows.append(df_copy)
+                            
+                            import pandas as pd
+                            combined_df = pd.concat(combined_rows, ignore_index=True)
+                            
+                            csv = combined_df.to_csv(index=False)
+                            st.download_button(
+                                label="Download Combined CSV",
+                                data=csv,
+                                file_name=f"{proj.name}_all_conditions.csv",
+                                mime="text/csv"
+                            )
+                            st.success(f"✅ Prepared {len(combined_df)} rows from {len(export_data)} conditions")
+                        else:
+                            st.error("No data to export")
+                    except Exception as e:
+                        st.error(f"Export failed: {e}")
+        else:
+            st.info("Add files to conditions to enable batch analysis")
 
         # Save project explicitly
         if st.button("Save Project"):
