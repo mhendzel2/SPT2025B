@@ -3754,7 +3754,8 @@ elif st.session_state.active_page == "Data Loading":
 elif st.session_state.active_page == "Tracking":
     st.title("Particle Detection and Tracking")
     
-    if st.session_state.image_data is None:
+    # Check if image_data exists and is not None
+    if 'image_data' not in st.session_state or st.session_state.image_data is None:
         st.warning("No image data loaded. Please upload images first.")
         st.button("Go to Data Loading", on_click=navigate_to, args=("Data Loading",))
     else:

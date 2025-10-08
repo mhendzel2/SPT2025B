@@ -30,6 +30,8 @@ def initialize_session_state():
         st.session_state.track_statistics = None
     if 'image_data' not in st.session_state:
         st.session_state.image_data = None
+    if 'mask_images' not in st.session_state:
+        st.session_state.mask_images = None
 
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = {}
