@@ -3877,7 +3877,7 @@ elif st.session_state.active_page == "Tracking":
                         st.caption(f"ROI built from mask '{sel_mask_name}' with classes {sel_classes}")
             
             # Add real-time detection tuning section
-            with st.expander("🔍 Real-time Detection Tuning", expanded=True):
+            with st.expander("🔍 Real-time Detection Tuning", expanded=False):
                 st.write("**Preview detection settings on a test frame before running full detection**")
                 
                 # Frame selection for testing
