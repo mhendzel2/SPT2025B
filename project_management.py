@@ -57,11 +57,17 @@ class Condition:
 
     def to_dict(self, save_path: str = None) -> Dict:
         # Files are stored as lightweight dicts (name/type/size/data bytes not persisted)
+        # Remove 'data' field from files as bytes are not JSON serializable
+        files_for_json = []
+        for f in self.files:
+            file_copy = {k: v for k, v in f.items() if k != 'data'}
+            files_for_json.append(file_copy)
+        
         return {
             'id': self.id,
             'name': self.name,
             'description': self.description,
-            'files': self.files  # keep metadata; 'data' may exist in RAM only
+            'files': files_for_json  # keep metadata; 'data' bytes excluded from JSON
         }
 
     @classmethod
@@ -245,13 +251,37 @@ class ProjectManager:
 
     def add_file_to_condition(self, project: 'Project', condition_id: str, 
                              file_name: str, tracks_df: pd.DataFrame) -> str:
+        """Add a file to a condition and save its data to CSV."""
         cond = next((c for c in project.conditions if c.id == condition_id), None)
         if cond is None:
             raise ValueError("Condition not found")
         fid = str(uuid.uuid4())
-        cond.files.append({
-            'id': fid, 'name': file_name, 'type': 'text/csv', 'size': 0, 'data': tracks_df.to_csv(index=False).encode('utf-8')
-        })
+        
+        # Save the track data to CSV file
+        data_dir = os.path.join(self.projects_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        data_path = os.path.join(data_dir, f"{fid}.csv")
+        
+        try:
+            tracks_df.to_csv(data_path, index=False)
+            # Store metadata with path to CSV file (no bytes in memory)
+            cond.files.append({
+                'id': fid, 
+                'name': file_name, 
+                'type': 'text/csv', 
+                'size': len(tracks_df), 
+                'data_path': data_path
+            })
+        except Exception as e:
+            # If save fails, store bytes in memory as fallback (will be excluded from JSON)
+            cond.files.append({
+                'id': fid, 
+                'name': file_name, 
+                'type': 'text/csv', 
+                'size': 0, 
+                'data': tracks_df.to_csv(index=False).encode('utf-8')
+            })
+        
         return fid
 
     def remove_file_from_project(self, project: 'Project', condition_id: str, file_id: str) -> Dict[str, Any]:
