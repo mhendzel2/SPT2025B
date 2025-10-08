@@ -3799,7 +3799,9 @@ elif st.session_state.active_page == "Data Loading":
                     st.write(f"Image dimensions: {preview_image.shape}")
                 
                 # Navigation button
-                st.button("Proceed to Tracking", on_click=navigate_to, args=("Tracking",), key="proceed_tracking_btn")
+                if st.button("Proceed to Tracking", key="proceed_tracking_btn"):
+                    st.session_state.active_page = "Tracking"
+                    st.rerun()
                 
             except Exception as e:
                 st.error(f"Error loading image: {str(e)}")
@@ -3866,7 +3868,9 @@ elif st.session_state.active_page == "Data Loading":
                     st.write(f"Number of channels: {preview_image.shape[2]}")
             
                 # Navigation buttons
-                st.button("Proceed to Image Processing", on_click=navigate_to, args=("Image Processing",), key="proceed_to_image_processing")
+                if st.button("Proceed to Image Processing", key="proceed_to_image_processing"):
+                    st.session_state.active_page = "Image Processing"
+                    st.rerun()
                 
             except Exception as e:
                 st.error(f"Error loading mask images: {str(e)}")
