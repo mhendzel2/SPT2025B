@@ -1895,6 +1895,32 @@ class EnhancedSPTReportGenerator:
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
             
+            # OPTIMIZATION: Limit analysis to prevent freezing
+            n_tracks = tracks_df['track_id'].nunique()
+            
+            # If too many tracks, subsample randomly
+            MAX_TRACKS_FOR_TWO_POINT = 20  # Limit pairs to manageable number
+            
+            if n_tracks > MAX_TRACKS_FOR_TWO_POINT:
+                # Subsample tracks
+                track_ids = tracks_df['track_id'].unique()
+                selected_tracks = np.random.choice(track_ids, MAX_TRACKS_FOR_TWO_POINT, replace=False)
+                tracks_df = tracks_df[tracks_df['track_id'].isin(selected_tracks)].copy()
+                n_tracks = MAX_TRACKS_FOR_TWO_POINT
+            
+            # Calculate expected number of pairs
+            n_pairs = n_tracks * (n_tracks - 1) // 2
+            
+            # If still too many pairs, reduce further
+            MAX_PAIRS = 50  # Maximum pairs to analyze
+            if n_pairs > MAX_PAIRS:
+                # Calculate how many tracks we need for ~MAX_PAIRS pairs
+                # n*(n-1)/2 = MAX_PAIRS => n ≈ sqrt(2*MAX_PAIRS)
+                target_tracks = int(np.sqrt(2 * MAX_PAIRS))
+                track_ids = tracks_df['track_id'].unique()
+                selected_tracks = np.random.choice(track_ids, target_tracks, replace=False)
+                tracks_df = tracks_df[tracks_df['track_id'].isin(selected_tracks)].copy()
+            
             # Initialize analyzer with correct parameters
             particle_radius_nm = 100
             particle_radius_m = particle_radius_nm * 1e-9
@@ -1905,17 +1931,19 @@ class EnhancedSPTReportGenerator:
                 temperature_K=temperature_K
             )
             
-            # Call the actual two-point microrheology method
+            # Call the actual two-point microrheology method with reduced parameters
             result = analyzer.two_point_microrheology(
                 tracks_df,
                 pixel_size_um=pixel_size,
                 frame_interval_s=frame_interval,
-                distance_bins_um=np.linspace(0.5, 10, 15),  # 15 distance bins from 0.5 to 10 μm
-                max_lag=10
+                distance_bins_um=np.linspace(0.5, 10, 6),  # Reduced from 15 to 6 bins
+                max_lag=8  # Reduced from 10 to 8
             )
             
-            # Add units to result
+            # Add units and metadata to result
             result['units'] = current_units
+            if result.get('success'):
+                result['note'] = f'Analysis performed on {tracks_df["track_id"].nunique()} tracks'
             
             return result
             

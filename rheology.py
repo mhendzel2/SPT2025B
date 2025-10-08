@@ -813,15 +813,23 @@ class MicrorheologyAnalyzer:
                 
                 # Find pairs within this distance bin
                 cross_msds = []
+                pairs_in_bin = 0
+                MAX_PAIRS_PER_BIN = 20  # Limit pairs per bin to prevent slowdown
                 
                 for i, tid1 in enumerate(valid_tracks):
                     for tid2 in valid_tracks[i+1:]:
+                        # Early termination if we have enough pairs for this bin
+                        if pairs_in_bin >= MAX_PAIRS_PER_BIN:
+                            break
+                        
                         # Calculate average separation
                         dx = track_positions[tid1]['x_avg'] - track_positions[tid2]['x_avg']
                         dy = track_positions[tid1]['y_avg'] - track_positions[tid2]['y_avg']
                         separation = np.sqrt(dx**2 + dy**2)
                         
                         if bin_min <= separation < bin_max:
+                            pairs_in_bin += 1
+                            
                             # Calculate cross-MSD for this pair
                             data1 = track_positions[tid1]['data']
                             data2 = track_positions[tid2]['data']
