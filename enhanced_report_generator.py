@@ -983,38 +983,207 @@ class EnhancedSPTReportGenerator:
     def _plot_diffusion(self, result):
         """Full implementation for diffusion visualization."""
         try:
-            from visualization import plot_diffusion_coefficients, plot_msd_curves, _empty_fig
+            from visualization import _empty_fig
+            import io
 
             if not result.get('success', False):
                 return _empty_fig("Diffusion analysis failed.")
 
-            # Create a figure with two subplots
+            # Parse track_results if it's a string representation of DataFrame
+            track_results = result.get('track_results', None)
+            if isinstance(track_results, str):
+                try:
+                    # Parse DataFrame string representation
+                    track_results = pd.read_csv(io.StringIO(track_results), sep=r'\s+')
+                except Exception as e:
+                    track_results = None
+            
+            # Parse msd_data if it's a string representation of DataFrame
+            msd_data = result.get('msd_data', None)
+            if isinstance(msd_data, str):
+                try:
+                    # Parse DataFrame string representation
+                    msd_data = pd.read_csv(io.StringIO(msd_data), sep=r'\s+')
+                except Exception as e:
+                    msd_data = None
+
+            # Create a 2x2 figure with comprehensive visualizations
             fig = make_subplots(
-                rows=1, cols=2,
-                subplot_titles=("Diffusion Coefficients", "Mean Squared Displacement")
+                rows=2, cols=2,
+                subplot_titles=(
+                    "Diffusion Coefficient Distribution",
+                    "Mean Squared Displacement Curves",
+                    "Motion Type Classification",
+                    "Summary Statistics"
+                ),
+                specs=[
+                    [{"type": "histogram"}, {"type": "scatter"}],
+                    [{"type": "bar"}, {"type": "table"}]
+                ]
             )
 
-            # Plot diffusion coefficients
-            diff_fig = plot_diffusion_coefficients(result)
-            if diff_fig.data:
-                fig.add_trace(diff_fig.data[0], row=1, col=1)
-                if len(diff_fig.layout.shapes) > 0:
-                    for shape in diff_fig.layout.shapes:
-                        fig.add_shape(shape, row=1, col=1)
+            # Panel 1: Diffusion coefficients histogram
+            if track_results is not None and isinstance(track_results, pd.DataFrame):
+                # Find diffusion coefficient column
+                diff_col = None
+                possible_cols = ['diffusion_coefficient', 'D', 'diffusion_coeff', 'coefficient']
+                for col in possible_cols:
+                    if col in track_results.columns:
+                        diff_col = col
+                        break
+                
+                if diff_col is not None:
+                    D_values = track_results[diff_col].dropna()
+                    D_values = D_values[D_values > 0]  # Filter valid values
+                    
+                    if len(D_values) > 0:
+                        # Create log-spaced bins for histogram
+                        log_bins = np.logspace(np.log10(D_values.min()), 
+                                              np.log10(D_values.max()), 30)
+                        
+                        fig.add_trace(
+                            go.Histogram(
+                                x=D_values,
+                                xbins=dict(
+                                    start=np.log10(D_values.min()),
+                                    end=np.log10(D_values.max()),
+                                    size=(np.log10(D_values.max()) - np.log10(D_values.min())) / 30
+                                ),
+                                marker=dict(color='steelblue', line=dict(color='black', width=1)),
+                                showlegend=False,
+                                hovertemplate='D: %{x:.2e} μm²/s<br>Count: %{y}<extra></extra>'
+                            ),
+                            row=1, col=1
+                        )
+                        
+                        # Add mean and median lines
+                        mean_val = D_values.mean()
+                        median_val = D_values.median()
+                        
+                        fig.add_vline(x=mean_val, line_dash="dash", line_color="red",
+                                    annotation_text=f"Mean: {mean_val:.2e}",
+                                    annotation_position="top left", row=1, col=1)
+                        fig.add_vline(x=median_val, line_dash="dot", line_color="blue",
+                                    annotation_text=f"Median: {median_val:.2e}",
+                                    annotation_position="top right", row=1, col=1)
 
-            # Plot MSD curves
-            if 'msd_data' in result:
-                msd_fig = plot_msd_curves(result['msd_data'])
-                if msd_fig.data:
-                    for trace in msd_fig.data:
-                        fig.add_trace(trace, row=1, col=2)
+            # Panel 2: MSD curves
+            if msd_data is not None and isinstance(msd_data, pd.DataFrame):
+                # Plot MSD curves for each track
+                unique_tracks = msd_data['track_id'].unique()
+                
+                # Limit to first 20 tracks for clarity
+                for i, track_id in enumerate(unique_tracks[:20]):
+                    track_msd = msd_data[msd_data['track_id'] == track_id]
+                    
+                    color = f'hsl({i * 360 / min(len(unique_tracks), 20)}, 70%, 50%)'
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=track_msd['lag_time'],
+                            y=track_msd['msd'],
+                            mode='lines+markers',
+                            name=f'Track {track_id}',
+                            line=dict(color=color, width=1),
+                            marker=dict(size=4),
+                            showlegend=False,
+                            hovertemplate=f'Track {track_id}<br>Lag: %{{x:.2f}} s<br>MSD: %{{y:.2e}} μm²<extra></extra>'
+                        ),
+                        row=1, col=2
+                    )
 
-            fig.update_layout(title_text="Diffusion Analysis", showlegend=False)
+            # Panel 3: Motion type classification bar chart
+            ensemble = result.get('ensemble_results', {})
+            if ensemble:
+                motion_types = {
+                    'Subdiffusive': int(ensemble.get('subdiffusive_count', 0)) if ensemble.get('subdiffusive_count') else 0,
+                    'Normal': int(ensemble.get('normal_count', 0)) if ensemble.get('normal_count') else 0,
+                    'Superdiffusive': int(ensemble.get('superdiffusive_count', 0)) if ensemble.get('superdiffusive_count') else 0,
+                    'Confined': ensemble.get('confined_count', 0)
+                }
+                
+                colors = ['#e74c3c', '#2ecc71', '#3498db', '#f39c12']
+                
+                fig.add_trace(
+                    go.Bar(
+                        x=list(motion_types.keys()),
+                        y=list(motion_types.values()),
+                        marker=dict(color=colors, line=dict(color='black', width=1)),
+                        text=[f"{v}" for v in motion_types.values()],
+                        textposition='outside',
+                        showlegend=False,
+                        hovertemplate='%{x}<br>Count: %{y}<extra></extra>'
+                    ),
+                    row=2, col=1
+                )
+
+            # Panel 4: Summary statistics table
+            stats_data = []
+            if ensemble:
+                stats_data = [
+                    ['Total Tracks', str(ensemble.get('n_tracks', 0))],
+                    ['Mean D', f"{ensemble.get('mean_diffusion_coefficient', 0):.2e} μm²/s"],
+                    ['Median D', f"{ensemble.get('median_diffusion_coefficient', 0):.2e} μm²/s"],
+                    ['Std D', f"{ensemble.get('std_diffusion_coefficient', 0):.2e} μm²/s"],
+                    ['Mean α', f"{ensemble.get('mean_alpha', 0):.3f}"],
+                    ['Median α', f"{ensemble.get('median_alpha', 0):.3f}"],
+                    ['Subdiffusive %', f"{ensemble.get('subdiffusive_fraction', 0)*100:.1f}%"],
+                    ['Normal %', f"{ensemble.get('normal_fraction', 0)*100:.1f}%"],
+                    ['Superdiffusive %', f"{ensemble.get('superdiffusive_fraction', 0)*100:.1f}%"],
+                    ['Confined %', f"{ensemble.get('confined_fraction', 0)*100:.1f}%"],
+                    ['Mean Conf. Radius', f"{ensemble.get('mean_confinement_radius', 0):.4f} μm"],
+                ]
+            else:
+                stats_data = [['No Data', 'N/A']]
+            
+            fig.add_trace(
+                go.Table(
+                    header=dict(
+                        values=['<b>Metric</b>', '<b>Value</b>'],
+                        fill_color='paleturquoise',
+                        align='left',
+                        font=dict(size=12, color='black')
+                    ),
+                    cells=dict(
+                        values=[[row[0] for row in stats_data],
+                               [row[1] for row in stats_data]],
+                        fill_color='lavender',
+                        align='left',
+                        font=dict(size=11),
+                        height=25
+                    )
+                ),
+                row=2, col=2
+            )
+
+            # Update axes
+            fig.update_xaxes(title_text="Diffusion Coefficient (μm²/s)", type='log', row=1, col=1)
+            fig.update_yaxes(title_text="Frequency", row=1, col=1)
+            
+            fig.update_xaxes(title_text="Lag Time (s)", type='log', row=1, col=2)
+            fig.update_yaxes(title_text="MSD (μm²)", type='log', row=1, col=2)
+            
+            fig.update_xaxes(title_text="Motion Type", row=2, col=1)
+            fig.update_yaxes(title_text="Number of Tracks", row=2, col=1)
+
+            # Update layout
+            fig.update_layout(
+                title_text="Comprehensive Diffusion Analysis",
+                template='plotly_white',
+                height=900,
+                showlegend=False
+            )
+            
             return fig
 
         except Exception as e:
             fig = go.Figure()
-            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(
+                text=f"Error creating diffusion visualization:<br>{str(e)}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=12, color="red")
+            )
             return fig
 
     def _analyze_motion(self, tracks_df, current_units):

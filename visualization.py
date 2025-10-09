@@ -2539,8 +2539,22 @@ def plot_polymer_physics_results(polymer_data):
         if not all(k in polymer_data for k in ['msd_data', 'lag_times']):
             return _empty_fig("Missing required MSD data for polymer physics plot")
         
-        msd = np.array(polymer_data['msd_data'])
-        lag_times = np.array(polymer_data['lag_times'])
+        # Parse numpy array strings if needed
+        def parse_numpy_array(array_data):
+            """Parse numpy array from various formats."""
+            if isinstance(array_data, (list, np.ndarray)):
+                return np.asarray(array_data, dtype=float)
+            elif isinstance(array_data, str):
+                # Remove brackets and newlines
+                cleaned = array_data.replace('[', '').replace(']', '').replace('\n', ' ')
+                # Split and convert to float
+                values = [float(x) for x in cleaned.split() if x.strip()]
+                return np.array(values)
+            else:
+                return np.array(array_data, dtype=float)
+        
+        msd = parse_numpy_array(polymer_data['msd_data'])
+        lag_times = parse_numpy_array(polymer_data['lag_times'])
         alpha = polymer_data.get('scaling_exponent', np.nan)
         regime = polymer_data.get('regime', 'Unknown')
         fitted_models = polymer_data.get('fitted_models', {})
@@ -2586,8 +2600,15 @@ def plot_polymer_physics_results(polymer_data):
         
         # Power-law fit line: MSD = K * t^alpha
         if np.isfinite(alpha) and 'power_law_fit' in fitted_models:
-            fit_info = fitted_models['power_law_fit']
-            K = fit_info.get('K', 1.0)
+            fit_info = fitted_models.get('power_law_fit', {})
+            if isinstance(fit_info, dict) and 'parameters' in fit_info:
+                params = fit_info['parameters']
+                K = params.get('K_rouse', 1.0)
+            elif isinstance(fit_info, dict):
+                K = fit_info.get('K', fit_info.get('K_rouse', 1.0))
+            else:
+                K = 1.0
+            
             fit_msd = K * (lag_times ** alpha)
             
             fig.add_trace(
@@ -2604,8 +2625,14 @@ def plot_polymer_physics_results(polymer_data):
         
         # Rouse fixed alpha=0.5 fit if available
         if 'rouse_fixed_alpha' in fitted_models:
-            rouse_info = fitted_models['rouse_fixed_alpha']
-            K_rouse = rouse_info.get('K', 1.0)
+            rouse_info = fitted_models.get('rouse_fixed_alpha', {})
+            if isinstance(rouse_info, dict) and 'parameters' in rouse_info:
+                params = rouse_info['parameters']
+                K_rouse = params.get('K_rouse', 1.0)
+            elif isinstance(rouse_info, dict):
+                K_rouse = rouse_info.get('K', rouse_info.get('K_rouse', 1.0))
+            else:
+                K_rouse = 1.0
             rouse_msd = K_rouse * (lag_times ** 0.5)
             
             fig.add_trace(
@@ -2675,10 +2702,21 @@ def plot_polymer_physics_results(polymer_data):
             alpha_vals = []
             
             for model_name, model_info in fitted_models.items():
+                if not isinstance(model_info, dict):
+                    continue
+                    
                 model_names.append(model_name.replace('_', ' ').title())
-                r_squared_vals.append(model_info.get('r_squared', np.nan))
-                K_vals.append(model_info.get('K', np.nan))
-                alpha_vals.append(model_info.get('alpha', np.nan))
+                
+                # Extract parameters, handling nested structure
+                if 'parameters' in model_info:
+                    params = model_info['parameters']
+                    r_squared_vals.append(model_info.get('r_squared', np.nan))
+                    K_vals.append(params.get('K_rouse', params.get('K', np.nan)))
+                    alpha_vals.append(params.get('alpha', np.nan))
+                else:
+                    r_squared_vals.append(model_info.get('r_squared', np.nan))
+                    K_vals.append(model_info.get('K', model_info.get('K_rouse', np.nan)))
+                    alpha_vals.append(model_info.get('alpha', np.nan))
             
             fig.add_trace(
                 go.Bar(
@@ -2698,9 +2736,9 @@ def plot_polymer_physics_results(polymer_data):
         metrics_info = []
         
         # Mesh size (if in reptation regime)
-        mesh_size = polymer_data.get('mesh_size')
+        mesh_size = polymer_data.get('mesh_size_estimate_um', polymer_data.get('mesh_size'))
         if mesh_size and np.isfinite(mesh_size):
-            metrics_info.append(['<b>Mesh Size (ξ)</b>', f'{mesh_size:.3f} μm'])
+            metrics_info.append(['<b>Mesh Size (ξ)</b>', f'{mesh_size:.4f} μm'])
         
         # Tube diameter
         tube_diameter = polymer_data.get('tube_diameter')
@@ -2708,14 +2746,24 @@ def plot_polymer_physics_results(polymer_data):
             metrics_info.append(['<b>Tube Diameter</b>', f'{tube_diameter:.3f} μm'])
         
         # Crossover time
-        crossover_time = polymer_data.get('crossover_time')
+        crossover_time = polymer_data.get('crossover_time_s', polymer_data.get('crossover_time'))
         if crossover_time and np.isfinite(crossover_time):
             metrics_info.append(['<b>Crossover Time (τ<sub>e</sub>)</b>', f'{crossover_time:.3f} s'])
         
         # Crossover MSD
-        crossover_msd = polymer_data.get('crossover_msd')
+        crossover_msd = polymer_data.get('crossover_msd_um2', polymer_data.get('crossover_msd'))
         if crossover_msd and np.isfinite(crossover_msd):
             metrics_info.append(['<b>Crossover MSD</b>', f'{crossover_msd:.3e} μm²'])
+        
+        # R-squared for fit
+        r_squared = polymer_data.get('fit_r_squared')
+        if r_squared is not None and np.isfinite(r_squared):
+            metrics_info.append(['<b>Fit R²</b>', f'{r_squared:.4f}'])
+        
+        # P-value
+        p_value = polymer_data.get('fit_p_value')
+        if p_value is not None and np.isfinite(p_value):
+            metrics_info.append(['<b>Fit P-value</b>', f'{p_value:.4f}'])
         
         if not metrics_info:
             metrics_info.append(['<b>Info</b>', 'No crossover metrics available'])
