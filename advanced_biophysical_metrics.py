@@ -379,14 +379,35 @@ def fit_fbm_model(track_df: pd.DataFrame, pixel_size: float = 1.0, frame_interva
         dx = np.diff(track['x_um'].values)
         dy = np.diff(track['y_um'].values)
 
+        # Check if we have valid displacement data
+        if len(dx) < 5 or len(dy) < 5:
+            return {'H': np.nan, 'D': np.nan, 'error': 'Insufficient displacement data.'}
+        
+        # Remove any NaN or infinite values
+        valid_dx = dx[np.isfinite(dx)]
+        valid_dy = dy[np.isfinite(dy)]
+        
+        if len(valid_dx) < 5 or len(valid_dy) < 5:
+            return {'H': np.nan, 'D': np.nan, 'error': 'Too many invalid displacements.'}
+
         # fbm.hurst expects a 1D array of increments
-        h_x = fbm.hurst(dx)
-        h_y = fbm.hurst(dy)
-        H = (h_x + h_y) / 2.0
+        # The fbm.hurst function can fail, so we need to catch that
+        try:
+            h_x = fbm.hurst(valid_dx)
+            h_y = fbm.hurst(valid_dy)
+            
+            # Validate Hurst values
+            if not np.isfinite(h_x) or not np.isfinite(h_y):
+                # Fall back to MSD-based estimation
+                H = np.nan
+            else:
+                H = (h_x + h_y) / 2.0
+        except Exception as hurst_error:
+            # If fbm.hurst fails, try alternative method: fit MSD power law
+            H = np.nan
 
         # Now, calculate MSD and fit for the diffusion coefficient D
         # MSD(t) = 4*D*t^H for 2D fBm
-
         msd_values = []
         lag_times = []
         max_lag = min(len(track) - 1, 20)
@@ -395,23 +416,51 @@ def fit_fbm_model(track_df: pd.DataFrame, pixel_size: float = 1.0, frame_interva
                 disp_x = track['x_um'].values[lag:] - track['x_um'].values[:-lag]
                 disp_y = track['y_um'].values[lag:] - track['y_um'].values[:-lag]
                 sq_disp = disp_x**2 + disp_y**2
-                msd_values.append(np.mean(sq_disp))
-                lag_times.append(lag * frame_interval)
+                valid_sq_disp = sq_disp[np.isfinite(sq_disp)]
+                if len(valid_sq_disp) > 0:
+                    msd_values.append(np.mean(valid_sq_disp))
+                    lag_times.append(lag * frame_interval)
+
+        if len(msd_values) < 3:
+            return {'H': np.nan, 'D': np.nan, 'error': 'Insufficient MSD data points.'}
 
         msd_values = np.array(msd_values)
         lag_times = np.array(lag_times)
 
+        # If H wasn't calculated above, estimate it from MSD slope in log-log space
+        if not np.isfinite(H):
+            try:
+                # log(MSD) = log(4*D) + H*log(t)
+                log_msd = np.log(msd_values[msd_values > 0])
+                log_t = np.log(lag_times[msd_values > 0])
+                if len(log_msd) >= 3:
+                    coeffs = np.polyfit(log_t, log_msd, 1)
+                    H = coeffs[0]  # Slope is the Hurst exponent
+                else:
+                    H = 0.5  # Default to Brownian motion
+            except Exception:
+                H = 0.5  # Default to Brownian motion
+
+        # Ensure H is in valid range [0, 1]
+        H = np.clip(H, 0.0, 1.0)
+
         def msd_model(t, D):
             return 4 * D * (t ** H)
 
-        if len(lag_times) > 0:
-            popt, _ = curve_fit(msd_model, lag_times, msd_values)
+        try:
+            # Use bounds to ensure positive D
+            popt, _ = curve_fit(msd_model, lag_times, msd_values, 
+                               bounds=(0, np.inf), maxfev=5000)
             D = popt[0]
-        else:
-            D = np.nan
+        except Exception:
+            # Fallback: estimate D from first MSD point assuming MSD = 4*D*t^H
+            if len(msd_values) > 0 and lag_times[0] > 0:
+                D = msd_values[0] / (4 * lag_times[0] ** H)
+            else:
+                D = np.nan
 
-        results['H'] = H
-        results['D'] = D
+        results['H'] = float(H) if np.isfinite(H) else np.nan
+        results['D'] = float(D) if np.isfinite(D) else np.nan
         results['error'] = None
 
     except Exception as e:

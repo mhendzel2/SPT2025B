@@ -2531,6 +2531,10 @@ def plot_polymer_physics_results(polymer_data):
         from plotly.subplots import make_subplots
         import numpy as np
         
+        # Validate input type
+        if not isinstance(polymer_data, dict):
+            return _empty_fig(f"Invalid polymer_data type: expected dict, got {type(polymer_data).__name__}")
+        
         # Check if we have the required data
         if not all(k in polymer_data for k in ['msd_data', 'lag_times']):
             return _empty_fig("Missing required MSD data for polymer physics plot")

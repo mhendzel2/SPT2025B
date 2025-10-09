@@ -2354,6 +2354,15 @@ class EnhancedSPTReportGenerator:
     def _plot_polymer_physics(self, result):
         """Full implementation for polymer physics visualization."""
         try:
+            # Validate that result is a dictionary
+            if not isinstance(result, dict):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Invalid data format: expected dict, got {type(result).__name__}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
             from visualization import plot_polymer_physics_results
             return plot_polymer_physics_results(result)
         except ImportError:
@@ -5333,19 +5342,190 @@ def _analyze_percolation(self, tracks_df, current_units):
 def _plot_percolation(self, result):
     """Visualize percolation analysis results."""
     if not result.get('success'):
-        return []
+        return None
     
     try:
-        figures = []
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        import numpy as np
+        
         full_results = result.get('full_results', {})
         
-        # Use the visualizer from the full results if available
-        if 'visualization' in full_results:
-            figures.append(full_results['visualization'])
+        # Create a comprehensive visualization with multiple subplots
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Percolation Network Map',
+                'Cluster Size Distribution',
+                'Network Statistics',
+                'Connectivity Summary'
+            ),
+            specs=[
+                [{"type": "scatter"}, {"type": "bar"}],
+                [{"type": "table"}, {"type": "indicator"}]
+            ],
+            vertical_spacing=0.12,
+            horizontal_spacing=0.12
+        )
         
-        return figures
+        # Extract data
+        num_clusters = result.get('num_clusters', 0)
+        largest_cluster = result.get('largest_cluster_size', 0)
+        percolation_detected = result.get('percolation_detected', False)
+        density = result.get('density', 0)
+        network_stats = result.get('network_stats', {})
+        
+        # Parse cluster sizes from full_results
+        cluster_sizes_str = full_results.get('cluster_size_distribution', '[]')
+        try:
+            # Handle numpy array string representation
+            cluster_sizes_str = cluster_sizes_str.replace('[', '').replace(']', '').strip()
+            if cluster_sizes_str:
+                cluster_sizes = [int(x) for x in cluster_sizes_str.split()]
+            else:
+                cluster_sizes = []
+        except Exception:
+            cluster_sizes = []
+        
+        # Parse labels
+        labels_str = full_results.get('labels', '[]')
+        try:
+            labels_str = labels_str.replace('[', '').replace(']', '').strip()
+            if labels_str:
+                labels = [int(x) for x in labels_str.split()]
+            else:
+                labels = []
+        except Exception:
+            labels = []
+        
+        # Subplot 1: Network Map (simplified scatter plot)
+        # Since we don't have position data here, show a simple cluster representation
+        if len(labels) > 0:
+            # Create a simple layout showing nodes colored by cluster
+            num_nodes = len(labels)
+            angles = np.linspace(0, 2*np.pi, num_nodes, endpoint=False)
+            x_pos = np.cos(angles)
+            y_pos = np.sin(angles)
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=x_pos,
+                    y=y_pos,
+                    mode='markers',
+                    marker=dict(
+                        size=12,
+                        color=labels,
+                        colorscale='Viridis',
+                        showscale=True,
+                        colorbar=dict(title="Cluster", x=0.45),
+                        line=dict(width=1, color='white')
+                    ),
+                    text=[f"Node {i}<br>Cluster {l}" for i, l in enumerate(labels)],
+                    hovertemplate='%{text}<extra></extra>',
+                    showlegend=False
+                ),
+                row=1, col=1
+            )
+            
+            fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False, row=1, col=1)
+            fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False, row=1, col=1)
+        
+        # Subplot 2: Cluster Size Distribution
+        if cluster_sizes:
+            cluster_indices = list(range(1, len(cluster_sizes) + 1))
+            fig.add_trace(
+                go.Bar(
+                    x=cluster_indices,
+                    y=cluster_sizes,
+                    marker_color='steelblue',
+                    showlegend=False,
+                    hovertemplate='Cluster %{x}<br>Size: %{y} nodes<extra></extra>'
+                ),
+                row=1, col=2
+            )
+            
+            fig.update_xaxes(title_text="Cluster Index", row=1, col=2)
+            fig.update_yaxes(title_text="Cluster Size (nodes)", row=1, col=2)
+        
+        # Subplot 3: Network Statistics Table
+        stats_data = [
+            ['Total Nodes', str(network_stats.get('num_nodes', 0))],
+            ['Total Edges', str(network_stats.get('num_edges', 0))],
+            ['Number of Clusters', str(num_clusters)],
+            ['Largest Cluster Size', str(largest_cluster)],
+            ['Average Degree', f"{network_stats.get('average_degree', 0):.2f}"],
+            ['Density', f"{density:.2f}"],
+            ['Distance Threshold', f"{full_results.get('distance_threshold', 0):.3f} μm"]
+        ]
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['Metric', 'Value'],
+                    fill_color='steelblue',
+                    font=dict(color='white', size=12),
+                    align='left'
+                ),
+                cells=dict(
+                    values=[[row[0] for row in stats_data], [row[1] for row in stats_data]],
+                    fill_color='lavender',
+                    align='left',
+                    font=dict(size=11)
+                )
+            ),
+            row=2, col=1
+        )
+        
+        # Subplot 4: Percolation Status Indicator
+        fig.add_trace(
+            go.Indicator(
+                mode="number+delta",
+                value=largest_cluster,
+                title={'text': "Largest Cluster Size"},
+                delta={'reference': network_stats.get('num_nodes', 0) / 2, 
+                       'relative': False,
+                       'valueformat': '.0f'},
+                domain={'x': [0, 1], 'y': [0, 1]}
+            ),
+            row=2, col=2
+        )
+        
+        # Add percolation status annotation
+        percolation_text = "✅ PERCOLATION DETECTED" if percolation_detected else "⚠️ No Spanning Cluster"
+        percolation_color = "green" if percolation_detected else "orange"
+        
+        fig.add_annotation(
+            text=percolation_text,
+            xref="paper", yref="paper",
+            x=0.75, y=0.15,
+            showarrow=False,
+            font=dict(size=14, color=percolation_color, family="Arial Black"),
+            bgcolor="white",
+            bordercolor=percolation_color,
+            borderwidth=2,
+            borderpad=10
+        )
+        
+        # Update overall layout
+        fig.update_layout(
+            title_text=f"Percolation Analysis: {num_clusters} Clusters, Largest={largest_cluster} nodes",
+            height=800,
+            showlegend=False
+        )
+        
+        return fig
+        
     except Exception as e:
-        return []
+        # Return an error figure
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Visualization error: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color="red")
+        )
+        return fig
 
 def _analyze_ctrw(self, tracks_df, current_units):
     """Analyze Continuous Time Random Walk (CTRW) signatures."""
@@ -5379,7 +5559,7 @@ def _plot_ctrw(self, result):
         return None
     
     try:
-        from advanced_diffusion_models import CTRWAnalyzer
+        import numpy as np
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
         
@@ -5389,36 +5569,221 @@ def _plot_ctrw(self, result):
             subplot_titles=(
                 'Waiting Time Distribution',
                 'Jump Length Distribution',
-                'Ergodicity Parameter',
+                'Ergodicity Test',
                 'Wait-Jump Coupling'
-            )
+            ),
+            specs=[
+                [{"type": "scatter"}, {"type": "scatter"}],
+                [{"type": "table"}, {"type": "scatter"}]
+            ],
+            vertical_spacing=0.15,
+            horizontal_spacing=0.12
         )
         
-        # Waiting times
+        # Parse waiting times
         wait_results = result.get('waiting_times', {})
-        if 'wait_times' in wait_results:
-            times = wait_results['wait_times']
-            fig.add_trace(
-                go.Histogram(x=times, name='Wait Times', nbinsx=50),
-                row=1, col=1
-            )
+        waiting_times = None
+        if 'waiting_times' in wait_results:
+            try:
+                # Parse numpy array string
+                wait_str = wait_results['waiting_times']
+                if isinstance(wait_str, str):
+                    wait_str = wait_str.replace('[', '').replace(']', '').replace('\n', ' ')
+                    waiting_times = np.array([float(x) for x in wait_str.split() if x])
+                else:
+                    waiting_times = np.array(wait_str)
+            except Exception:
+                pass
         
-        # Jump lengths
-        jump_results = result.get('jump_lengths', {})
-        if 'jump_lengths' in jump_results:
-            jumps = jump_results['jump_lengths']
-            fig.add_trace(
-                go.Histogram(x=jumps, name='Jump Lengths', nbinsx=50),
-                row=1, col=2
-            )
+        # Plot waiting time distribution (log-log histogram)
+        if waiting_times is not None and len(waiting_times) > 0:
+            # Create log-spaced bins
+            valid_times = waiting_times[waiting_times > 0]
+            if len(valid_times) > 0:
+                log_bins = np.logspace(np.log10(valid_times.min()), 
+                                      np.log10(valid_times.max()), 30)
+                hist, bin_edges = np.histogram(valid_times, bins=log_bins)
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=bin_centers,
+                        y=hist,
+                        mode='markers',
+                        marker=dict(size=8, color='steelblue'),
+                        name='Waiting Times',
+                        showlegend=False
+                    ),
+                    row=1, col=1
+                )
+                
+                # Add power-law fit line if available
+                if wait_results.get('is_heavy_tailed') == 'True':
+                    alpha = wait_results.get('alpha_exponent', 1.0)
+                    mean_wait = wait_results.get('mean_waiting_time', 1.0)
+                    x_fit = np.logspace(np.log10(valid_times.min()), 
+                                       np.log10(valid_times.max()), 50)
+                    y_fit = len(valid_times) * mean_wait * x_fit ** (-alpha)
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=y_fit,
+                            mode='lines',
+                            line=dict(color='red', dash='dash', width=2),
+                            name=f'Power-law α={alpha:.2f}',
+                            showlegend=True
+                        ),
+                        row=1, col=1
+                    )
         
         fig.update_xaxes(title_text="Wait Time (s)", type="log", row=1, col=1)
+        fig.update_yaxes(title_text="Count", type="log", row=1, col=1)
+        
+        # Parse jump lengths
+        jump_results = result.get('jump_lengths', {})
+        jump_lengths = None
+        if 'jump_lengths' in jump_results:
+            try:
+                # Parse numpy array string
+                jump_str = jump_results['jump_lengths']
+                if isinstance(jump_str, str):
+                    jump_str = jump_str.replace('[', '').replace(']', '').replace('\n', ' ')
+                    jump_lengths = np.array([float(x) for x in jump_str.split() if x])
+                else:
+                    jump_lengths = np.array(jump_str)
+            except Exception:
+                pass
+        
+        # Plot jump length distribution (log-log histogram)
+        if jump_lengths is not None and len(jump_lengths) > 0:
+            valid_jumps = jump_lengths[jump_lengths > 0]
+            if len(valid_jumps) > 0:
+                log_bins = np.logspace(np.log10(valid_jumps.min()), 
+                                      np.log10(valid_jumps.max()), 30)
+                hist, bin_edges = np.histogram(valid_jumps, bins=log_bins)
+                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=bin_centers,
+                        y=hist,
+                        mode='markers',
+                        marker=dict(size=8, color='coral'),
+                        name='Jump Lengths',
+                        showlegend=False
+                    ),
+                    row=1, col=2
+                )
+                
+                # Add distribution fit if available
+                if jump_results.get('distribution_type') == 'exponential':
+                    mean_jump = jump_results.get('mean_jump_length', 1.0)
+                    x_fit = np.linspace(valid_jumps.min(), valid_jumps.max(), 50)
+                    y_fit = len(valid_jumps) * np.exp(-x_fit / mean_jump) / mean_jump
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=y_fit,
+                            mode='lines',
+                            line=dict(color='green', dash='dash', width=2),
+                            name='Exponential fit',
+                            showlegend=True
+                        ),
+                        row=1, col=2
+                    )
+        
         fig.update_xaxes(title_text="Jump Length (μm)", type="log", row=1, col=2)
-        fig.update_layout(height=800, title="CTRW Analysis")
+        fig.update_yaxes(title_text="Count", type="log", row=1, col=2)
+        
+        # Ergodicity test table
+        ergodicity_results = result.get('ergodicity', {})
+        ergodicity_data = [
+            ['Is Ergodic', str(ergodicity_results.get('is_ergodic', 'Unknown'))],
+            ['EB Parameter', f"{ergodicity_results.get('ergodicity_breaking_parameter', 0):.3f}"],
+            ['Aging Coefficient', f"{ergodicity_results.get('aging_coefficient', 0):.3f}"]
+        ]
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['Metric', 'Value'],
+                    fill_color='steelblue',
+                    font=dict(color='white', size=12),
+                    align='left'
+                ),
+                cells=dict(
+                    values=[[row[0] for row in ergodicity_data], 
+                           [row[1] for row in ergodicity_data]],
+                    fill_color='lavender',
+                    align='left',
+                    font=dict(size=11)
+                )
+            ),
+            row=2, col=1
+        )
+        
+        # Wait-Jump coupling scatter plot
+        coupling_results = result.get('coupling', {})
+        if waiting_times is not None and jump_lengths is not None:
+            # Make sure arrays are same length
+            min_len = min(len(waiting_times), len(jump_lengths))
+            if min_len > 0:
+                wait_sample = waiting_times[:min_len]
+                jump_sample = jump_lengths[:min_len]
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=wait_sample,
+                        y=jump_sample,
+                        mode='markers',
+                        marker=dict(size=4, color='purple', opacity=0.5),
+                        name='Wait-Jump pairs',
+                        showlegend=False
+                    ),
+                    row=2, col=2
+                )
+                
+                # Add correlation info
+                corr = coupling_results.get('correlation_coefficient', 0)
+                is_coupled = coupling_results.get('is_coupled', 'False')
+                
+                fig.add_annotation(
+                    text=f"ρ = {corr:.3f}<br>Coupled: {is_coupled}",
+                    xref="x4", yref="y4",
+                    x=0.7, y=0.9,
+                    xanchor='left', yanchor='top',
+                    showarrow=False,
+                    bgcolor="white",
+                    bordercolor="purple",
+                    borderwidth=1,
+                    font=dict(size=10)
+                )
+        
+        fig.update_xaxes(title_text="Wait Time (s)", type="log", row=2, col=2)
+        fig.update_yaxes(title_text="Jump Length (μm)", type="log", row=2, col=2)
+        
+        # Overall layout
+        fig.update_layout(
+            height=800,
+            title_text="Continuous Time Random Walk (CTRW) Analysis",
+            showlegend=True
+        )
         
         return fig  # Return single figure with subplots, not list
+        
     except Exception as e:
-        return None
+        # Return error figure
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"CTRW visualization error: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color="red")
+        )
+        return fig
 
 def _analyze_fbm_enhanced(self, tracks_df, current_units):
     """Enhanced Fractional Brownian Motion analysis."""
