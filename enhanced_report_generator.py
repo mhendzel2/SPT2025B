@@ -2564,50 +2564,177 @@ class EnhancedSPTReportGenerator:
             return {'error': str(e), 'success': False}
 
     def _plot_energy_landscape(self, result):
-        """Visualize energy landscape as heatmap."""
+        """Visualize energy landscape as heatmap with force field overlay."""
         try:
+            import numpy as np
+            from plotly.subplots import make_subplots
+            
             if not result.get('success', False):
                 from visualization import _empty_fig
                 return _empty_fig(f"Energy landscape mapping failed: {result.get('error', 'Unknown error')}")
             
-            potential_map = result.get('potential')
+            # Helper function to parse numpy array strings
+            def parse_numpy_array(array_data):
+                """Parse numpy array from string or array format."""
+                if isinstance(array_data, str):
+                    # Remove brackets and newlines
+                    cleaned = array_data.replace('[', '').replace(']', '').replace('\n', ' ')
+                    # Split and convert to float
+                    values = [float(x) for x in cleaned.split() if x.strip()]
+                    return np.array(values)
+                return np.asarray(array_data, dtype=float)
+            
+            def parse_2d_array(array_data, expected_shape=None):
+                """Parse 2D numpy array from string format."""
+                if isinstance(array_data, str):
+                    # Remove brackets and newlines
+                    cleaned = array_data.replace('[', '').replace(']', '').replace('\n', ' ')
+                    # Split and convert to float
+                    values = [float(x) for x in cleaned.split() if x.strip()]
+                    arr = np.array(values)
+                    # Reshape if expected_shape is provided
+                    if expected_shape is not None:
+                        arr = arr.reshape(expected_shape)
+                    return arr
+                return np.asarray(array_data, dtype=float)
+            
+            # Get energy map data (try multiple possible key names)
+            energy_map = result.get('energy_map') or result.get('energy_landscape') or result.get('potential')
+            x_coords = result.get('x_coords')
+            y_coords = result.get('y_coords')
             x_edges = result.get('x_edges')
             y_edges = result.get('y_edges')
+            force_field = result.get('force_field', {})
             
-            if potential_map is None or x_edges is None or y_edges is None:
+            if energy_map is None:
                 from visualization import _empty_fig
-                return _empty_fig("Energy landscape data incomplete")
+                return _empty_fig("Energy landscape data missing")
             
-            # Create heatmap
-            fig = go.Figure()
+            # Parse arrays from strings
+            energy_map = parse_numpy_array(energy_map)
             
-            x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-            y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+            # Determine grid resolution
+            resolution = int(np.sqrt(len(energy_map)))
+            energy_map = energy_map.reshape(resolution, resolution)
             
-            fig.add_trace(go.Heatmap(
-                z=potential_map.T,
-                x=x_centers,
-                y=y_centers,
-                colorscale='Viridis',
-                colorbar=dict(title='Energy (kBT)'),
-                hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>Energy: %{z:.2f} kBT<extra></extra>'
-            ))
+            # Parse coordinates
+            if x_coords is not None:
+                x_coords = parse_numpy_array(x_coords)
+            elif x_edges is not None:
+                x_edges = parse_numpy_array(x_edges)
+                x_coords = (x_edges[:-1] + x_edges[1:]) / 2
+            else:
+                x_coords = np.arange(resolution)
             
-            fig.update_layout(
-                title='Energy Landscape (Boltzmann Inversion)',
-                xaxis_title='x position (μm)',
-                yaxis_title='y position (μm)',
-                height=500,
-                width=600
+            if y_coords is not None:
+                y_coords = parse_numpy_array(y_coords)
+            elif y_edges is not None:
+                y_edges = parse_numpy_array(y_edges)
+                y_coords = (y_edges[:-1] + y_edges[1:]) / 2
+            else:
+                y_coords = np.arange(resolution)
+            
+            # Parse force field data
+            fx = None
+            fy = None
+            if isinstance(force_field, dict):
+                if 'fx' in force_field:
+                    fx = parse_2d_array(force_field['fx'], (resolution, resolution))
+                if 'fy' in force_field:
+                    fy = parse_2d_array(force_field['fy'], (resolution, resolution))
+            
+            # Create subplots: 3D surface and 2D contour with force field
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=('Energy Landscape (3D Surface)', 'Energy Contour with Force Field'),
+                specs=[[{"type": "surface"}, {"type": "scatter"}]],
+                horizontal_spacing=0.15
             )
             
+            # 3D Surface plot
+            fig.add_trace(
+                go.Surface(
+                    z=energy_map,
+                    x=x_coords,
+                    y=y_coords,
+                    colorscale='Viridis',
+                    colorbar=dict(title='Energy (kBT)', x=0.42),
+                    hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>Energy: %{z:.2f} kBT<extra></extra>'
+                ),
+                row=1, col=1
+            )
+            
+            # 2D Contour plot
+            fig.add_trace(
+                go.Contour(
+                    z=energy_map,
+                    x=x_coords,
+                    y=y_coords,
+                    colorscale='Viridis',
+                    showscale=False,
+                    contours=dict(
+                        showlabels=True,
+                        labelfont=dict(size=10, color='white')
+                    ),
+                    hovertemplate='x: %{x:.2f} μm<br>y: %{y:.2f} μm<br>Energy: %{z:.2f} kBT<extra></extra>'
+                ),
+                row=1, col=2
+            )
+            
+            # Add force field arrows if available
+            if fx is not None and fy is not None:
+                # Downsample for visualization (every 3rd point)
+                step = max(1, resolution // 10)
+                X, Y = np.meshgrid(x_coords, y_coords)
+                
+                for i in range(0, resolution, step):
+                    for j in range(0, resolution, step):
+                        if abs(fx[i, j]) > 1e-6 or abs(fy[i, j]) > 1e-6:
+                            # Normalize arrow length
+                            scale = 0.05 * (x_coords.max() - x_coords.min())
+                            fig.add_annotation(
+                                x=X[i, j],
+                                y=Y[i, j],
+                                ax=X[i, j] + fx[i, j] * scale,
+                                ay=Y[i, j] + fy[i, j] * scale,
+                                xref='x2', yref='y2',
+                                axref='x2', ayref='y2',
+                                showarrow=True,
+                                arrowhead=2,
+                                arrowsize=1,
+                                arrowwidth=1,
+                                arrowcolor='red',
+                                opacity=0.6
+                            )
+            
+            # Update layout
+            fig.update_layout(
+                title='Energy Landscape Analysis (Boltzmann Inversion)',
+                height=600,
+                showlegend=False
+            )
+            
+            # Update 3D scene
+            fig.update_scenes(
+                xaxis_title='x position (μm)',
+                yaxis_title='y position (μm)',
+                zaxis_title='Energy (kBT)',
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.3))
+            )
+            
+            # Update 2D axes
+            fig.update_xaxes(title_text='x position (μm)', row=1, col=2)
+            fig.update_yaxes(title_text='y position (μm)', row=1, col=2)
+            
             return fig
+            
         except Exception as e:
             fig = go.Figure()
             fig.add_annotation(
-                text=f"Visualization failed: {e}",
+                text=f"Visualization failed: {str(e)}",
                 xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=14, color="red")
             )
             return fig
 
@@ -4145,31 +4272,46 @@ class EnhancedSPTReportGenerator:
                 elif isinstance(summary, str):
                     parts.append(f"<p>{html.escape(summary)}</p>")
 
-                # Embed figure if present
-                fig = self.report_figures.get(key)
-                if fig is not None:
+                # Embed figure(s) if present - handle both single and list of figures
+                figs = self.report_figures.get(key)
+                if figs is not None:
+                    # Normalize to list
+                    if not isinstance(figs, list):
+                        figs = [figs]
+                    
+                    # Detect matplotlib
                     try:
-                        # Plotly figure
                         from matplotlib.figure import Figure as _MplFigure
                     except Exception:
                         _MplFigure = None
-
-                    if _MplFigure is not None and isinstance(fig, _MplFigure):
-                        # Convert matplotlib fig to PNG and embed
-                        import base64 as _b64, io as _io
-                        buf = _io.BytesIO()
-                        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-                        buf.seek(0)
-                        b64 = _b64.b64encode(buf.read()).decode('utf-8')
-                        parts.append(f"<div class='figure'><img src='data:image/png;base64,{b64}' style='max-width:100%'></div>")
-                    else:
-                        # Assume Plotly
+                    
+                    # Process each figure
+                    for fig_idx, fig in enumerate(figs):
+                        if fig is None:
+                            continue
+                        
                         try:
-                            # Bundle plotly.js inline for fully self-contained HTML
-                            div = pio.to_html(fig, include_plotlyjs='inline', full_html=False)
-                            parts.append(f"<div class='figure'>{div}</div>")
+                            if _MplFigure is not None and isinstance(fig, _MplFigure):
+                                # Convert matplotlib fig to PNG and embed
+                                import base64 as _b64, io as _io
+                                buf = _io.BytesIO()
+                                fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                                buf.seek(0)
+                                b64 = _b64.b64encode(buf.read()).decode('utf-8')
+                                if len(figs) > 1:
+                                    parts.append(f"<div class='figure'><h4>Figure {fig_idx + 1} of {len(figs)}</h4><img src='data:image/png;base64,{b64}' style='max-width:100%'></div>")
+                                else:
+                                    parts.append(f"<div class='figure'><img src='data:image/png;base64,{b64}' style='max-width:100%'></div>")
+                            else:
+                                # Assume Plotly
+                                # Bundle plotly.js inline for fully self-contained HTML
+                                div = pio.to_html(fig, include_plotlyjs='cdn', full_html=False)
+                                if len(figs) > 1:
+                                    parts.append(f"<div class='figure'><h4>Figure {fig_idx + 1} of {len(figs)}</h4>{div}</div>")
+                                else:
+                                    parts.append(f"<div class='figure'>{div}</div>")
                         except Exception as e:
-                            parts.append(f"<pre class='code'>Failed to render figure: {html.escape(str(e))}</pre>")
+                            parts.append(f"<pre class='code'>Failed to render figure {fig_idx + 1}: {html.escape(str(e))}</pre>")
 
                 # Optional: include raw JSON for the section if requested
                 if config.get('include_raw', True):
@@ -4199,6 +4341,7 @@ class EnhancedSPTReportGenerator:
             from reportlab.pdfgen import canvas
             import io as _io
             import numpy as _np
+            
             # Prepare PDF in memory
             buf = _io.BytesIO()
             c = canvas.Canvas(buf, pagesize=A4)
@@ -4206,60 +4349,142 @@ class EnhancedSPTReportGenerator:
             margin = 36
             y = height - margin
 
-            # Title
-            c.setFont('Helvetica-Bold', 16)
+            # Title page
+            c.setFont('Helvetica-Bold', 20)
             c.drawString(margin, y, 'SPT Analysis Report')
-            y -= 24
-            c.setFont('Helvetica', 10)
-            c.drawString(margin, y, f"Pixel size (µm): {current_units.get('pixel_size', 0.1)}  |  Frame interval (s): {current_units.get('frame_interval', 0.1)}")
-            y -= 18
+            y -= 30
+            c.setFont('Helvetica', 12)
+            c.drawString(margin, y, f"Pixel size: {current_units.get('pixel_size', 0.1)} µm")
+            y -= 20
+            c.drawString(margin, y, f"Frame interval: {current_units.get('frame_interval', 0.1)} s")
+            y -= 30
+            
+            # Summary statistics
+            if 'basic_statistics' in self.report_results:
+                stats = self.report_results['basic_statistics']
+                c.setFont('Helvetica-Bold', 14)
+                c.drawString(margin, y, 'Summary Statistics')
+                y -= 20
+                c.setFont('Helvetica', 10)
+                c.drawString(margin, y, f"Total Tracks: {stats.get('total_tracks', 'N/A')}")
+                y -= 15
+                c.drawString(margin, y, f"Mean Track Length: {stats.get('mean_track_length', 0):.1f} frames")
+                y -= 15
+                c.drawString(margin, y, f"Mean Velocity: {stats.get('mean_velocity', 0):.3f} µm/s")
+                y -= 30
+            
+            # List of analyses in report
+            c.setFont('Helvetica-Bold', 14)
+            c.drawString(margin, y, f'Analyses Included ({len(self.report_figures)} total):')
+            y -= 20
+            c.setFont('Helvetica', 9)
+            for analysis_key in self.report_figures.keys():
+                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
+                c.drawString(margin + 10, y, f'• {analysis_name}')
+                y -= 12
+            
+            # Start new page for figures
+            c.showPage()
+            y = height - margin
 
-            # Add figures one by one (as PNG rasterized)
-            for key in self.report_figures:
-                fig = self.report_figures[key]
-                # Rasterize to PNG bytes
-                import io as _io
-                img_buf = _io.BytesIO()
-                try:
-                    from matplotlib.figure import Figure as _MplFigure
-                except Exception:
-                    _MplFigure = None
-                if _MplFigure is not None and isinstance(fig, _MplFigure):
-                    fig.savefig(img_buf, format='png', dpi=150, bbox_inches='tight')
-                else:
-                    # Plotly: use kaleido if available
+            # Detect matplotlib availability
+            try:
+                from matplotlib.figure import Figure as _MplFigure
+            except Exception:
+                _MplFigure = None
+
+            # Add figures - handle both single figures and lists of figures
+            figure_count = 0
+            for analysis_key in self.report_figures:
+                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
+                figs = self.report_figures[analysis_key]
+                
+                # Normalize to list
+                if not isinstance(figs, list):
+                    figs = [figs]
+                
+                # Process each figure
+                for fig_idx, fig in enumerate(figs):
+                    if fig is None:
+                        continue
+                    
+                    figure_count += 1
+                    
+                    # Create figure title
+                    if len(figs) > 1:
+                        fig_title = f"{analysis_name} (Figure {fig_idx + 1}/{len(figs)})"
+                    else:
+                        fig_title = analysis_name
+                    
+                    # Rasterize figure to PNG bytes
+                    img_buf = _io.BytesIO()
                     try:
-                        img_bytes = fig.to_image(format='png', scale=2)
-                        img_buf.write(img_bytes)
+                        if _MplFigure is not None and isinstance(fig, _MplFigure):
+                            # Matplotlib figure
+                            fig.savefig(img_buf, format='png', dpi=150, bbox_inches='tight')
+                        else:
+                            # Plotly figure - use kaleido if available
+                            try:
+                                img_bytes = fig.to_image(format='png', scale=2, width=1200, height=800)
+                                img_buf.write(img_bytes)
+                            except Exception as e:
+                                # Fallback: try without explicit dimensions
+                                try:
+                                    img_bytes = fig.to_image(format='png', scale=2)
+                                    img_buf.write(img_bytes)
+                                except Exception:
+                                    # Skip this figure if conversion fails
+                                    continue
+                    except Exception as e:
+                        # Skip figures that fail to render
+                        continue
+                    
+                    img_buf.seek(0)
+                    
+                    try:
+                        img = ImageReader(img_buf)
                     except Exception:
                         continue
-                img_buf.seek(0)
-                img = ImageReader(img_buf)
 
-                # Compute size to fit page
-                img_w, img_h = img.getSize()
-                scale = min((width - 2*margin)/img_w, (height - 2*margin)/img_h)
-                draw_w, draw_h = img_w*scale, img_h*scale
-                if y - draw_h < margin:
-                    c.showPage()
-                    y = height - margin
+                    # Compute size to fit page width (leave height flexible)
+                    img_w, img_h = img.getSize()
+                    max_width = width - 2 * margin
+                    max_height = height - 2 * margin - 40  # Reserve space for title
+                    
+                    # Scale to fit both width and height constraints
+                    scale = min(max_width / img_w, max_height / img_h, 1.0)
+                    draw_w = img_w * scale
+                    draw_h = img_h * scale
+                    
+                    # Check if we need a new page
+                    if y - draw_h - 40 < margin:
+                        c.showPage()
+                        y = height - margin
+                    
+                    # Draw title
                     c.setFont('Helvetica-Bold', 12)
-                    c.drawString(margin, y, key)
-                    y -= 18
-                else:
-                    c.setFont('Helvetica-Bold', 12)
-                    c.drawString(margin, y, key)
-                    y -= 18
-                c.drawImage(img, margin, y - draw_h, width=draw_w, height=draw_h, preserveAspectRatio=True, anchor='sw')
-                y -= (draw_h + 24)
+                    c.drawString(margin, y, fig_title)
+                    y -= 20
+                    
+                    # Draw image
+                    c.drawImage(img, margin, y - draw_h, width=draw_w, height=draw_h, 
+                              preserveAspectRatio=True, anchor='sw')
+                    y -= (draw_h + 30)
+                    
+                    # Add some spacing between figures
+                    if y < margin + 100:
+                        c.showPage()
+                        y = height - margin
 
+            # Finalize PDF
             c.showPage()
             c.save()
             buf.seek(0)
             return buf.read()
+            
         except Exception as e:
             # reportlab not available or another error; signal to caller
-            raise RuntimeError(str(e))
+            raise RuntimeError(f"PDF generation failed: {str(e)}")
 
     def _show_interactive_report(self, current_units):
         """Display interactive report with visualizations."""
@@ -5847,28 +6072,27 @@ def _plot_percolation(self, result):
         density = result.get('density', 0)
         network_stats = result.get('network_stats', {})
         
+        # Helper function to parse numpy array strings
+        def parse_array_string(array_str, dtype=int):
+            """Parse numpy array string to list."""
+            if isinstance(array_str, (list, np.ndarray)):
+                return list(array_str)
+            if not isinstance(array_str, str):
+                return []
+            # Remove brackets and newlines, split on whitespace
+            cleaned = array_str.replace('[', '').replace(']', '').replace('\n', ' ').strip()
+            if not cleaned:
+                return []
+            try:
+                return [dtype(x) for x in cleaned.split() if x.strip()]
+            except (ValueError, TypeError):
+                return []
+        
         # Parse cluster sizes from full_results
-        cluster_sizes_str = full_results.get('cluster_size_distribution', '[]')
-        try:
-            # Handle numpy array string representation
-            cluster_sizes_str = cluster_sizes_str.replace('[', '').replace(']', '').strip()
-            if cluster_sizes_str:
-                cluster_sizes = [int(x) for x in cluster_sizes_str.split()]
-            else:
-                cluster_sizes = []
-        except Exception:
-            cluster_sizes = []
+        cluster_sizes = parse_array_string(full_results.get('cluster_size_distribution', '[]'), int)
         
         # Parse labels
-        labels_str = full_results.get('labels', '[]')
-        try:
-            labels_str = labels_str.replace('[', '').replace(']', '').strip()
-            if labels_str:
-                labels = [int(x) for x in labels_str.split()]
-            else:
-                labels = []
-        except Exception:
-            labels = []
+        labels = parse_array_string(full_results.get('labels', '[]'), int)
         
         # Subplot 1: Network Map (simplified scatter plot)
         # Since we don't have position data here, show a simple cluster representation
