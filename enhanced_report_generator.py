@@ -3371,102 +3371,230 @@ class EnhancedSPTReportGenerator:
     def _plot_ihmm_blur(self, result: Dict[str, Any]) -> go.Figure:
         """Visualize iHMM state segmentation results."""
         try:
+            import numpy as np
+            
             if not result.get('success', False):
                 fig = go.Figure()
                 fig.add_annotation(text=f"Analysis failed: {result.get('error', 'Unknown error')}", 
                                  xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
                 return fig
             
+            # Parse the actual data structure
+            results_list = result.get('results', [])
+            summary = result.get('summary', {})
+            
+            if not results_list:
+                fig = go.Figure()
+                fig.add_annotation(text="No iHMM results available", 
+                                 xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+                return fig
+            
             fig = make_subplots(
                 rows=2, cols=2,
                 subplot_titles=(
-                    'Number of States Discovered',
-                    'State Diffusion Coefficients',
-                    'State Dwell Times',
-                    'Example Trajectory Segmentation'
+                    'States Per Track Distribution',
+                    'Diffusion Coefficients Across Tracks',
+                    'State Transition Rates',
+                    'Example Track Segmentation'
                 ),
-                specs=[[{"type": "bar"}, {"type": "bar"}],
-                       [{"type": "bar"}, {"type": "scatter"}]]
+                specs=[[{"type": "bar"}, {"type": "scatter"}],
+                       [{"type": "bar"}, {"type": "scatter"}]],
+                vertical_spacing=0.15,
+                horizontal_spacing=0.12
             )
             
-            # 1. Number of states
-            n_states = result.get('n_states', 0)
+            # Collect data from all tracks
+            n_states_per_track = []
+            all_D_values = []
+            all_transitions = []
+            track_ids = []
             
-            fig.add_trace(go.Bar(
-                x=['Discovered States'],
-                y=[n_states],
-                marker_color='steelblue',
-                text=[n_states],
-                textposition='auto',
-                showlegend=False
-            ), row=1, col=1)
+            for track_result in results_list:
+                if not track_result.get('success'):
+                    continue
+                
+                track_summary = track_result.get('track_summary', {})
+                n_states = track_result.get('n_states', 1)
+                n_states_per_track.append(n_states)
+                track_ids.append(track_summary.get('track_id', '?'))
+                
+                # Parse D values (numpy array string)
+                D_str = track_result.get('D_values', '[]')
+                try:
+                    if isinstance(D_str, str):
+                        D_str = D_str.replace('[', '').replace(']', '').strip()
+                        D_vals = [float(x) for x in D_str.split() if x]
+                        all_D_values.extend(D_vals)
+                except Exception:
+                    pass
+                
+                # Get transitions
+                n_trans = track_summary.get('state_transitions', 0)
+                all_transitions.append(n_trans)
             
-            # 2. State diffusion coefficients
-            state_params = result.get('state_parameters', {})
-            if 'diffusion_coefficients' in state_params:
-                D_states = state_params['diffusion_coefficients']
+            # 1. States per track histogram
+            if n_states_per_track:
+                state_counts = {}
+                for n in n_states_per_track:
+                    state_counts[n] = state_counts.get(n, 0) + 1
                 
                 fig.add_trace(go.Bar(
-                    x=[f'State {i+1}' for i in range(len(D_states))],
-                    y=D_states,
-                    marker_color='lightcoral',
-                    showlegend=False
-                ), row=1, col=2)
+                    x=list(state_counts.keys()),
+                    y=list(state_counts.values()),
+                    marker_color='steelblue',
+                    showlegend=False,
+                    text=list(state_counts.values()),
+                    textposition='auto'
+                ), row=1, col=1)
             
-            # 3. State dwell times
-            if 'dwell_times' in state_params:
-                dwell_times = state_params['dwell_times']
-                
-                fig.add_trace(go.Bar(
-                    x=[f'State {i+1}' for i in range(len(dwell_times))],
-                    y=dwell_times,
-                    marker_color='lightgreen',
-                    showlegend=False
-                ), row=2, col=1)
+            fig.update_xaxes(title_text="Number of States", row=1, col=1)
+            fig.update_yaxes(title_text="Track Count", row=1, col=1)
             
-            # 4. Example trajectory
-            segmented_tracks = result.get('segmented_tracks', {})
-            if len(segmented_tracks) > 0:
-                # Get first track
-                first_track_id = list(segmented_tracks.keys())[0]
-                track_data = segmented_tracks[first_track_id]
+            # 2. Diffusion coefficients (log scale scatter/histogram)
+            if all_D_values:
+                # Create histogram bins in log space
+                D_array = np.array(all_D_values)
+                D_array = D_array[D_array > 0]  # Remove zeros
                 
-                if 'x' in track_data and 'y' in track_data and 'states' in track_data:
-                    x_coords = track_data['x']
-                    y_coords = track_data['y']
-                    states = track_data['states']
+                if len(D_array) > 0:
+                    log_bins = np.logspace(np.log10(D_array.min()), 
+                                          np.log10(D_array.max()), 20)
+                    hist, bin_edges = np.histogram(D_array, bins=log_bins)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
                     
-                    # Plot trajectory colored by state
-                    for state_id in range(n_states):
-                        mask = [s == state_id for s in states]
-                        x_state = [x for x, m in zip(x_coords, mask) if m]
-                        y_state = [y for y, m in zip(y_coords, mask) if m]
+                    fig.add_trace(go.Scatter(
+                        x=bin_centers,
+                        y=hist,
+                        mode='markers+lines',
+                        marker=dict(size=8, color='coral'),
+                        line=dict(color='coral', width=2),
+                        showlegend=False
+                    ), row=1, col=2)
+            
+            fig.update_xaxes(title_text="D (μm²/s)", type="log", row=1, col=2)
+            fig.update_yaxes(title_text="State Count", row=1, col=2)
+            
+            # 3. State transitions per track
+            if all_transitions and track_ids:
+                # Show only top 10 tracks with most transitions
+                sorted_data = sorted(zip(track_ids, all_transitions), 
+                                    key=lambda x: x[1], reverse=True)[:10]
+                if sorted_data:
+                    track_labels, trans_counts = zip(*sorted_data)
+                    
+                    fig.add_trace(go.Bar(
+                        x=list(track_labels),
+                        y=list(trans_counts),
+                        marker_color='lightgreen',
+                        showlegend=False,
+                        text=list(trans_counts),
+                        textposition='auto'
+                    ), row=2, col=1)
+            
+            fig.update_xaxes(title_text="Track ID", row=2, col=1)
+            fig.update_yaxes(title_text="Transitions", row=2, col=1)
+            
+            # 4. Example trajectory with state segmentation
+            # Find a track with multiple states
+            example_track = None
+            for track_result in results_list:
+                if track_result.get('n_states', 1) > 1:
+                    example_track = track_result
+                    break
+            
+            if not example_track and results_list:
+                example_track = results_list[0]
+            
+            if example_track:
+                # Parse states array
+                states_str = example_track.get('states', '[]')
+                try:
+                    if isinstance(states_str, str):
+                        states_str = states_str.replace('[', '').replace(']', '').replace('\n', ' ')
+                        states = np.array([int(x) for x in states_str.split() if x])
                         
-                        if len(x_state) > 0:
+                        # Create a simple time vs state plot
+                        time_points = np.arange(len(states))
+                        
+                        # Plot each state as different color segments
+                        unique_states = np.unique(states)
+                        colors = ['blue', 'red', 'green', 'purple', 'orange']
+                        
+                        for i, state_val in enumerate(unique_states):
+                            mask = states == state_val
+                            times = time_points[mask]
+                            state_vals = states[mask]
+                            
+                            color = colors[i % len(colors)]
                             fig.add_trace(go.Scatter(
-                                x=x_state,
-                                y=y_state,
-                                mode='markers+lines',
-                                marker=dict(size=4),
-                                name=f'State {state_id+1}',
+                                x=times,
+                                y=state_vals,
+                                mode='markers',
+                                marker=dict(size=6, color=color),
+                                name=f'State {state_val}',
                                 showlegend=True
                             ), row=2, col=2)
+                        
+                        # Add connecting lines
+                        fig.add_trace(go.Scatter(
+                            x=time_points,
+                            y=states,
+                            mode='lines',
+                            line=dict(color='gray', width=1),
+                            showlegend=False,
+                            hoverinfo='skip'
+                        ), row=2, col=2)
+                        
+                        track_id = example_track.get('track_summary', {}).get('track_id', '?')
+                        fig.add_annotation(
+                            text=f"Track {track_id}",
+                            xref="x4", yref="y4",
+                            x=0.05, y=0.95,
+                            xanchor='left', yanchor='top',
+                            showarrow=False,
+                            bgcolor="white",
+                            bordercolor="black",
+                            borderwidth=1,
+                            font=dict(size=10)
+                        )
+                        
+                except Exception as e:
+                    pass
             
-            # Update axes
-            fig.update_xaxes(title_text="", row=1, col=1)
-            fig.update_yaxes(title_text="Count", row=1, col=1)
-            fig.update_xaxes(title_text="State", row=1, col=2)
-            fig.update_yaxes(title_text="D (µm²/s)", row=1, col=2)
-            fig.update_xaxes(title_text="State", row=2, col=1)
-            fig.update_yaxes(title_text="Dwell Time (s)", row=2, col=1)
-            fig.update_xaxes(title_text="X (µm)", row=2, col=2)
-            fig.update_yaxes(title_text="Y (µm)", row=2, col=2)
+            fig.update_xaxes(title_text="Time Point", row=2, col=2)
+            fig.update_yaxes(title_text="State ID", row=2, col=2)
+            
+            # Overall layout with summary info
+            n_tracks = summary.get('n_tracks_analyzed', 0)
+            n_states_dist = summary.get('n_states_distribution', {})
+            mean_states = n_states_dist.get('mean', 0)
+            
+            # Convert numpy types to Python types
+            if hasattr(mean_states, 'item'):
+                mean_states = mean_states.item()
+            
+            title_text = (f"iHMM State Segmentation: {n_tracks} tracks, "
+                         f"avg {mean_states:.2f} states/track")
             
             fig.update_layout(
-                title_text="iHMM State Segmentation with Motion Blur",
+                title_text=title_text,
                 height=800,
                 showlegend=True
             )
+            
+            return fig
+            
+        except Exception as e:
+            # Return error figure
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"iHMM visualization error: {str(e)}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                showarrow=False,
+                font=dict(size=14, color="red")
+            )
+            return fig
             
             return fig
             
@@ -4022,12 +4150,36 @@ class EnhancedSPTReportGenerator:
                             cols = st.columns(min(len(summary), 4))
                             for i, (key, value) in enumerate(summary.items()):
                                 with cols[i % len(cols)]:
+                                    # Convert numpy types to Python types
+                                    if hasattr(value, 'item'):
+                                        value = value.item()
+                                    elif isinstance(value, dict):
+                                        # Handle nested dicts (like n_states_distribution)
+                                        value = {k: (v.item() if hasattr(v, 'item') else v) 
+                                                for k, v in value.items()}
+                                    elif isinstance(value, (list, tuple)):
+                                        # Handle lists/tuples with numpy types
+                                        value = [(v.item() if hasattr(v, 'item') else v) for v in value]
+                                    
                                     # Format the value based on type
                                     if isinstance(value, float):
                                         if abs(value) < 0.01 or abs(value) > 1000:
                                             st.metric(key.replace('_', ' ').title(), f"{value:.2e}")
                                         else:
                                             st.metric(key.replace('_', ' ').title(), f"{value:.3f}")
+                                    elif isinstance(value, dict):
+                                        # Display dict values nicely
+                                        dict_str = ', '.join([f"{k}: {v:.3f}" if isinstance(v, float) else f"{k}: {v}" 
+                                                             for k, v in value.items()])
+                                        st.metric(key.replace('_', ' ').title(), dict_str)
+                                    elif isinstance(value, (list, tuple)) and len(value) == 2:
+                                        # Display range as min-max
+                                        v0 = value[0]
+                                        v1 = value[1]
+                                        if isinstance(v0, float) and isinstance(v1, float):
+                                            st.metric(key.replace('_', ' ').title(), f"{v0:.2e} - {v1:.2e}")
+                                        else:
+                                            st.metric(key.replace('_', ' ').title(), f"{v0} - {v1}")
                                     else:
                                         st.metric(key.replace('_', ' ').title(), str(value))
                         
