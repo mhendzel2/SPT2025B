@@ -4124,16 +4124,34 @@ class EnhancedSPTReportGenerator:
                     # Display visualization first if available (before JSON)
                     has_figure = analysis_key in self.report_figures
                     if has_figure:
-                        fig = self.report_figures[analysis_key]
+                        figs = self.report_figures[analysis_key]
+                        
+                        # Handle both single figures and lists of figures
+                        if not isinstance(figs, list):
+                            figs = [figs]
+                        
                         # Support both Plotly and Matplotlib figures
                         try:
                             from matplotlib.figure import Figure as MplFigure
                         except Exception:
                             MplFigure = None
-                        if MplFigure is not None and isinstance(fig, MplFigure):
-                            st.pyplot(fig, use_container_width=True)
-                        else:
-                            st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display each figure
+                        for idx, fig in enumerate(figs):
+                            if fig is None:
+                                continue
+                            
+                            # Add section header for multiple figures
+                            if len(figs) > 1:
+                                st.markdown(f"**Visualization {idx + 1} of {len(figs)}**")
+                            
+                            try:
+                                if MplFigure is not None and isinstance(fig, MplFigure):
+                                    st.pyplot(fig, use_container_width=True)
+                                else:
+                                    st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.error(f"Failed to render figure: {str(e)}")
                     
                     # Display analysis-specific results or summary
                     if analysis_key == 'basic_statistics':
@@ -6305,20 +6323,236 @@ def _analyze_loop_extrusion(self, tracks_df, current_units):
 def _plot_loop_extrusion(self, result):
     """Visualize loop extrusion analysis."""
     if not result.get('success'):
-        return []
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Loop extrusion analysis failed or returned no data",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14, color="red")
+        )
+        return [fig]
     
     try:
         figures = []
         full_results = result.get('full_results', {})
         
-        # The detector has a visualize method
-        if 'evidence' in full_results:
-            # We can create visualization from evidence
-            pass
+        # Parse track_results DataFrame from string if needed
+        track_results = full_results.get('track_results', None)
+        if isinstance(track_results, str):
+            # Parse DataFrame string representation
+            import io
+            import pandas as pd
+            try:
+                # Try to read as CSV-like format
+                track_results = pd.read_csv(io.StringIO(track_results), sep=r'\s+')
+            except:
+                # Fallback: create empty DataFrame
+                track_results = pd.DataFrame()
+        
+        # Extract summary statistics
+        n_tracks = full_results.get('n_tracks_analyzed', 0)
+        n_confined = int(full_results.get('n_confined_tracks', 0)) if full_results.get('n_confined_tracks') else 0
+        n_periodic = int(full_results.get('n_periodic_tracks', 0)) if full_results.get('n_periodic_tracks') else 0
+        confinement_frac = full_results.get('confinement_fraction', 0)
+        periodicity_frac = full_results.get('periodicity_fraction', 0)
+        mean_loop_size = full_results.get('mean_loop_size', 0)
+        loop_detected = result.get('loop_detected', 'False')
+        periodic_tracks = result.get('periodic_tracks', [])
+        
+        # Create 4-panel comprehensive visualization
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Track Classification Summary',
+                'Loop Size & Confinement',
+                'Periodicity vs Return Tendency',
+                'Detection Statistics'
+            ),
+            specs=[
+                [{"type": "bar"}, {"type": "scatter"}],
+                [{"type": "scatter"}, {"type": "table"}]
+            ]
+        )
+        
+        # Panel 1: Track classification bar chart
+        classifications = {
+            'Confined': n_confined,
+            'Non-Confined': n_tracks - n_confined,
+            'Periodic': n_periodic,
+            'Non-Periodic': n_tracks - n_periodic
+        }
+        
+        fig.add_trace(
+            go.Bar(
+                x=list(classifications.keys()),
+                y=list(classifications.values()),
+                marker=dict(
+                    color=['#2ecc71', '#e74c3c', '#3498db', '#95a5a6'],
+                    line=dict(color='black', width=1)
+                ),
+                text=[f"{v} ({v/n_tracks*100:.1f}%)" if n_tracks > 0 else f"{v}" 
+                      for v in classifications.values()],
+                textposition='outside',
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Panel 2: Loop size vs confinement radius (for confined tracks)
+        if isinstance(track_results, pd.DataFrame) and not track_results.empty:
+            confined_mask = track_results['is_confined'] == True
+            confined_data = track_results[confined_mask]
+            
+            if len(confined_data) > 0:
+                fig.add_trace(
+                    go.Scatter(
+                        x=confined_data['confinement_radius'],
+                        y=confined_data['plateau_msd'],
+                        mode='markers',
+                        marker=dict(
+                            size=12,
+                            color=confined_data['has_periodicity'].map({True: '#e74c3c', False: '#3498db'}),
+                            line=dict(color='black', width=1),
+                            symbol='circle'
+                        ),
+                        text=[f"Track {tid}" for tid in confined_data['track_id']],
+                        hovertemplate='Track: %{text}<br>Radius: %{x:.4f} μm<br>Plateau MSD: %{y:.4f} μm²<extra></extra>',
+                        showlegend=False
+                    ),
+                    row=1, col=2
+                )
+                
+                # Add legend markers
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        marker=dict(size=10, color='#e74c3c', symbol='circle'),
+                        name='Periodic',
+                        showlegend=True
+                    ),
+                    row=1, col=2
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None], y=[None],
+                        mode='markers',
+                        marker=dict(size=10, color='#3498db', symbol='circle'),
+                        name='Non-Periodic',
+                        showlegend=True
+                    ),
+                    row=1, col=2
+                )
+        
+        # Panel 3: Periodicity vs Return Tendency scatter
+        if isinstance(track_results, pd.DataFrame) and not track_results.empty:
+            periodic_mask = track_results['has_periodicity'] == True
+            
+            # All tracks with period > 0
+            period_data = track_results[track_results['period'] > 0]
+            
+            if len(period_data) > 0:
+                fig.add_trace(
+                    go.Scatter(
+                        x=period_data['period'],
+                        y=period_data['return_tendency'],
+                        mode='markers+text',
+                        marker=dict(
+                            size=15,
+                            color=period_data['is_confined'].map({True: '#2ecc71', False: '#e74c3c'}),
+                            line=dict(color='black', width=1),
+                            symbol='diamond'
+                        ),
+                        text=[f"T{tid}" for tid in period_data['track_id']],
+                        textposition='top center',
+                        textfont=dict(size=10),
+                        hovertemplate='Track %{text}<br>Period: %{x:.2f} frames<br>Return: %{y:.3f}<extra></extra>',
+                        showlegend=False
+                    ),
+                    row=2, col=1
+                )
+                
+                # Reference line at y=0
+                fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
+        
+        # Panel 4: Detection statistics table
+        stats_data = [
+            ['Metric', 'Value'],
+            ['Total Tracks Analyzed', str(n_tracks)],
+            ['Confined Tracks', f"{n_confined} ({confinement_frac*100:.1f}%)"],
+            ['Periodic Tracks', f"{n_periodic} ({periodicity_frac*100:.1f}%)"],
+            ['Mean Loop Size', f"{mean_loop_size:.4f} μm"],
+            ['Loop Extrusion Detected', str(loop_detected)],
+            ['Periodic Track IDs', ', '.join(map(str, periodic_tracks))]
+        ]
+        
+        # Color code loop detection result
+        detection_color = '#2ecc71' if str(loop_detected).lower() == 'true' else '#e74c3c'
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['<b>Metric</b>', '<b>Value</b>'],
+                    fill_color='paleturquoise',
+                    align='left',
+                    font=dict(size=12, color='black')
+                ),
+                cells=dict(
+                    values=[[row[0] for row in stats_data[1:]], 
+                           [row[1] for row in stats_data[1:]]],
+                    fill_color=[['lavender']*6, 
+                               ['lavender']*4 + [detection_color] + ['lavender']],
+                    align='left',
+                    font=dict(size=11),
+                    height=25
+                )
+            ),
+            row=2, col=2
+        )
+        
+        # Update axes labels
+        fig.update_xaxes(title_text="Classification Type", row=1, col=1)
+        fig.update_yaxes(title_text="Number of Tracks", row=1, col=1)
+        
+        fig.update_xaxes(title_text="Confinement Radius (μm)", row=1, col=2)
+        fig.update_yaxes(title_text="Plateau MSD (μm²)", row=1, col=2)
+        
+        fig.update_xaxes(title_text="Period (frames)", row=2, col=1)
+        fig.update_yaxes(title_text="Return Tendency", row=2, col=1)
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f'Loop Extrusion Detection Analysis<br><sub>Status: {"<b style=\\'color:green\\'>DETECTED</b>" if str(loop_detected).lower() == "true" else "<b style=\\'color:red\\'>NOT DETECTED</b>"}</sub>',
+                x=0.5,
+                xanchor='center'
+            ),
+            template='plotly_white',
+            height=800,
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=0.95,
+                xanchor="left",
+                x=0.75
+            )
+        )
+        
+        figures.append(fig)
         
         return figures
+        
     except Exception as e:
-        return []
+        # Create error figure
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Error creating loop extrusion visualization:<br>{str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=12, color="red")
+        )
+        return [fig]
 
 def _analyze_territory_mapping(self, tracks_df, current_units):
     """Analyze chromosome territories."""
@@ -6343,18 +6577,262 @@ def _analyze_territory_mapping(self, tracks_df, current_units):
 def _plot_territory_mapping(self, result):
     """Visualize territory mapping results."""
     if not result.get('success'):
-        return []
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Territory mapping analysis failed or returned no data",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14, color="red")
+        )
+        return [fig]
     
     try:
         figures = []
         full_results = result.get('full_results', {})
         
-        if 'visualization' in full_results:
-            figures.append(full_results['visualization'])
+        # Parse numpy array strings
+        def parse_numpy_array(array_str, dtype=float):
+            """Parse numpy array string to actual array."""
+            if isinstance(array_str, (list, np.ndarray)):
+                return np.asarray(array_str)
+            if isinstance(array_str, str):
+                # Remove brackets and newlines
+                cleaned = array_str.replace('[', '').replace(']', '').replace('\n', ' ')
+                # Split and convert
+                values = [dtype(x) for x in cleaned.split() if x.strip()]
+                return np.array(values)
+            return np.array([])
+        
+        # Extract data
+        n_territories = full_results.get('n_territories', result.get('num_territories', 0))
+        territory_labels = parse_numpy_array(full_results.get('territory_labels', '[]'), dtype=int)
+        territory_centers_str = full_results.get('territory_centers', '[]')
+        territory_sizes = parse_numpy_array(full_results.get('territory_sizes', '[]'), dtype=int)
+        method = full_results.get('method', 'unknown')
+        
+        # Parse territory centers (2D array)
+        territory_centers = []
+        if isinstance(territory_centers_str, str):
+            # Remove outer brackets
+            cleaned = territory_centers_str.strip('[]')
+            # Split by inner brackets
+            if ']]' in cleaned or '][' in cleaned:
+                # Multiple centers
+                center_strs = cleaned.replace('][', ']|[').split('|')
+                for center_str in center_strs:
+                    center_str = center_str.strip('[]')
+                    coords = [float(x) for x in center_str.split() if x.strip()]
+                    if len(coords) >= 2:
+                        territory_centers.append(coords[:2])
+            else:
+                # Single center
+                coords = [float(x) for x in cleaned.split() if x.strip()]
+                if len(coords) >= 2:
+                    territory_centers.append(coords[:2])
+        
+        territory_centers = np.array(territory_centers) if territory_centers else np.array([[0, 0]])
+        
+        # Parse boundary map if available
+        boundary_map_str = full_results.get('boundary_map', '')
+        boundary_map = None
+        if isinstance(boundary_map_str, str) and boundary_map_str:
+            try:
+                # Try to parse the boundary map matrix
+                lines = boundary_map_str.strip().split('\n')
+                boundary_rows = []
+                for line in lines:
+                    if line.strip() and not line.strip().startswith('['):
+                        continue
+                    cleaned = line.replace('[', '').replace(']', '').replace('...', '')
+                    values = [float(x) for x in cleaned.split() if x.strip() and x != '...']
+                    if values:
+                        boundary_rows.append(values)
+                if boundary_rows:
+                    # Take first and last few rows to get a sense of the map
+                    boundary_map = np.array(boundary_rows[:10])  # Sample for visualization
+            except:
+                pass
+        
+        # Create 4-panel visualization
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Territory Centers & Spatial Distribution',
+                'Territory Sizes',
+                'Territory Labels Distribution',
+                'Detection Summary'
+            ),
+            specs=[
+                [{"type": "scatter"}, {"type": "bar"}],
+                [{"type": "histogram"}, {"type": "table"}]
+            ]
+        )
+        
+        # Panel 1: Territory centers spatial map
+        if len(territory_centers) > 0:
+            # Generate colors for territories
+            colors = [f'hsl({i * 360 / max(n_territories, 1)}, 70%, 50%)' 
+                     for i in range(n_territories)]
+            
+            for i, center in enumerate(territory_centers):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[center[0]],
+                        y=[center[1]],
+                        mode='markers+text',
+                        marker=dict(
+                            size=30,
+                            color=colors[i] if i < len(colors) else '#3498db',
+                            line=dict(color='black', width=2),
+                            symbol='star'
+                        ),
+                        text=[f'T{i}'],
+                        textposition='middle center',
+                        textfont=dict(size=12, color='white', family='Arial Black'),
+                        name=f'Territory {i}',
+                        hovertemplate=f'Territory {i}<br>Center: ({center[0]:.3f}, {center[1]:.3f})<extra></extra>',
+                        showlegend=False
+                    ),
+                    row=1, col=1
+                )
+                
+                # Add circle around center to represent territory extent
+                if len(territory_sizes) > i and territory_sizes[i] > 0:
+                    # Estimate radius from size (assuming circular territory)
+                    radius = np.sqrt(territory_sizes[i] / np.pi) * 0.1  # Rough estimate
+                    theta = np.linspace(0, 2*np.pi, 100)
+                    x_circle = center[0] + radius * np.cos(theta)
+                    y_circle = center[1] + radius * np.sin(theta)
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_circle,
+                            y=y_circle,
+                            mode='lines',
+                            line=dict(color=colors[i] if i < len(colors) else '#3498db', 
+                                    width=2, dash='dash'),
+                            hoverinfo='skip',
+                            showlegend=False
+                        ),
+                        row=1, col=1
+                    )
+        
+        # Panel 2: Territory sizes bar chart
+        if len(territory_sizes) > 0:
+            territory_names = [f'Territory {i}' for i in range(len(territory_sizes))]
+            colors_bar = [f'hsl({i * 360 / max(len(territory_sizes), 1)}, 70%, 50%)' 
+                         for i in range(len(territory_sizes))]
+            
+            fig.add_trace(
+                go.Bar(
+                    x=territory_names,
+                    y=territory_sizes,
+                    marker=dict(
+                        color=colors_bar,
+                        line=dict(color='black', width=1)
+                    ),
+                    text=[f"{size} tracks" for size in territory_sizes],
+                    textposition='outside',
+                    showlegend=False,
+                    hovertemplate='%{x}<br>Tracks: %{y}<extra></extra>'
+                ),
+                row=1, col=2
+            )
+        
+        # Panel 3: Territory labels histogram
+        if len(territory_labels) > 0:
+            fig.add_trace(
+                go.Histogram(
+                    x=territory_labels,
+                    nbinsx=max(n_territories, 1),
+                    marker=dict(
+                        color='steelblue',
+                        line=dict(color='black', width=1)
+                    ),
+                    showlegend=False,
+                    hovertemplate='Territory: %{x}<br>Count: %{y}<extra></extra>'
+                ),
+                row=2, col=1
+            )
+        
+        # Panel 4: Detection summary table
+        total_tracks = len(territory_labels) if len(territory_labels) > 0 else 0
+        avg_territory_size = np.mean(territory_sizes) if len(territory_sizes) > 0 else 0
+        
+        stats_data = [
+            ['Number of Territories', str(n_territories)],
+            ['Total Tracks Analyzed', str(total_tracks)],
+            ['Detection Method', method.upper()],
+            ['Avg Territory Size', f"{avg_territory_size:.1f} tracks"],
+            ['Territory Centers', f"{len(territory_centers)} detected"]
+        ]
+        
+        # Add individual territory info
+        for i, size in enumerate(territory_sizes):
+            if i < len(territory_centers):
+                center = territory_centers[i]
+                stats_data.append([
+                    f'Territory {i} Info',
+                    f"Size: {size}, Center: ({center[0]:.2f}, {center[1]:.2f})"
+                ])
+        
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=['<b>Metric</b>', '<b>Value</b>'],
+                    fill_color='paleturquoise',
+                    align='left',
+                    font=dict(size=12, color='black')
+                ),
+                cells=dict(
+                    values=[[row[0] for row in stats_data], 
+                           [row[1] for row in stats_data]],
+                    fill_color='lavender',
+                    align='left',
+                    font=dict(size=11),
+                    height=25
+                )
+            ),
+            row=2, col=2
+        )
+        
+        # Update axes labels
+        fig.update_xaxes(title_text="X Position (μm)", row=1, col=1)
+        fig.update_yaxes(title_text="Y Position (μm)", row=1, col=1)
+        fig.update_yaxes(scaleanchor="x", scaleratio=1, row=1, col=1)  # Equal aspect ratio
+        
+        fig.update_xaxes(title_text="Territory", row=1, col=2)
+        fig.update_yaxes(title_text="Number of Tracks", row=1, col=2)
+        
+        fig.update_xaxes(title_text="Territory Label", row=2, col=1)
+        fig.update_yaxes(title_text="Frequency", row=2, col=1)
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f'Chromosome Territory Mapping Analysis<br><sub>{n_territories} Territor{"y" if n_territories == 1 else "ies"} Detected via {method.upper()} Method</sub>',
+                x=0.5,
+                xanchor='center'
+            ),
+            template='plotly_white',
+            height=850,
+            showlegend=False
+        )
+        
+        figures.append(fig)
         
         return figures
+        
     except Exception as e:
-        return []
+        # Create error figure
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Error creating territory mapping visualization:<br>{str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=12, color="red")
+        )
+        return [fig]
 
 def _analyze_local_diffusion_map(self, tracks_df, current_units):
     """Analyze local diffusion coefficient map D(x,y)."""
