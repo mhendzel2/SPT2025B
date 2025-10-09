@@ -5175,13 +5175,33 @@ class EnhancedSPTReportGenerator:
         
         try:
             if not result.get('success', False):
-                return figures
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Statistical validation failed or returned no data",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color="red")
+                )
+                return [fig]
             
-            # 1. Model comparison plot
+            # Helper function to parse numpy array strings
+            def parse_numpy_array(array_str):
+                """Parse numpy array string like '[0.1 0.2 0.3]' to list."""
+                if isinstance(array_str, (list, np.ndarray)):
+                    return np.asarray(array_str)
+                if isinstance(array_str, str):
+                    # Remove brackets and newlines
+                    cleaned = array_str.replace('[', '').replace(']', '').replace('\n', ' ')
+                    # Split and convert to float
+                    values = [float(x) for x in cleaned.split() if x.strip()]
+                    return np.array(values)
+                return np.array([])
+            
+            # 1. Model comparison plot (MSD with fits)
             if 'msd_data' in result:
                 msd_data = result['msd_data']
-                lag_times = msd_data['lag_times']
-                msd = msd_data['msd']
+                lag_times = np.array(msd_data['lag_times'])
+                msd = np.array(msd_data['msd'])
                 
                 fig = go.Figure()
                 
@@ -5190,36 +5210,39 @@ class EnhancedSPTReportGenerator:
                     x=lag_times,
                     y=msd,
                     mode='markers',
-                    name='Observed',
-                    marker=dict(size=8, color='black')
+                    name='Observed MSD',
+                    marker=dict(size=10, color='black')
                 ))
                 
-                # Linear fit
+                # Linear fit (Brownian)
                 if 'linear_fit' in result:
                     linear_fit = result['linear_fit']
-                    predicted = linear_fit['D'] * lag_times
-                    r2 = linear_fit['validation']['residual_analysis']['r_squared']
+                    D = linear_fit['D']
+                    r2 = linear_fit.get('r_squared', linear_fit['validation']['residual_analysis']['r_squared'])
+                    predicted = 4 * D * lag_times
                     
                     fig.add_trace(go.Scatter(
                         x=lag_times,
                         y=predicted,
                         mode='lines',
-                        name=f'Linear (R²={r2:.3f})',
-                        line=dict(color='blue', dash='dash')
+                        name=f'Linear Fit (D={D:.2e} μm²/s, R²={r2:.3f})',
+                        line=dict(color='blue', dash='dash', width=2)
                     ))
                 
                 # Anomalous fit
                 if 'anomalous_fit' in result:
                     anom_fit = result['anomalous_fit']
-                    predicted = anom_fit['D'] * (lag_times ** anom_fit['alpha'])
+                    D = anom_fit['D']
+                    alpha = anom_fit['alpha']
                     r2 = anom_fit['validation']['residual_analysis']['r_squared']
+                    predicted = 4 * D * (lag_times ** alpha)
                     
                     fig.add_trace(go.Scatter(
                         x=lag_times,
                         y=predicted,
                         mode='lines',
-                        name=f'Anomalous α={anom_fit["alpha"]:.2f} (R²={r2:.3f})',
-                        line=dict(color='red', dash='dot')
+                        name=f'Anomalous Fit (D={D:.2e}, α={alpha:.2f}, R²={r2:.3f})',
+                        line=dict(color='red', dash='dot', width=2)
                     ))
                 
                 fig.update_layout(
@@ -5228,86 +5251,196 @@ class EnhancedSPTReportGenerator:
                     yaxis_title='MSD (μm²)',
                     xaxis_type='log',
                     yaxis_type='log',
-                    template='plotly_white'
+                    template='plotly_white',
+                    height=500,
+                    hovermode='x unified'
                 )
                 figures.append(fig)
             
-            # 2. Residual analysis
-            if 'linear_fit' in result:
+            # 2. Residual analysis (4-panel: residuals, distribution, Q-Q plot, stats table)
+            if 'linear_fit' in result and 'validation' in result['linear_fit']:
                 validation = result['linear_fit']['validation']
-                residuals = validation['residual_analysis']['standardized_residuals']
+                residual_analysis = validation.get('residual_analysis', {})
                 
-                fig = make_subplots(
-                    rows=1, cols=2,
-                    subplot_titles=('Residual Distribution', 'Q-Q Plot')
-                )
+                # Parse residuals
+                residuals_raw = residual_analysis.get('standardized_residuals', [])
+                residuals = parse_numpy_array(residuals_raw)
                 
-                # Histogram of residuals
-                fig.add_trace(
-                    go.Histogram(x=residuals, nbinsx=30, name='Residuals', marker_color='steelblue'),
-                    row=1, col=1
-                )
-                
-                # Q-Q plot
-                import scipy.stats as stats_scipy
-                theoretical_quantiles = stats_scipy.norm.ppf(np.linspace(0.01, 0.99, len(residuals)))
-                sample_quantiles = np.sort(residuals)
-                
-                fig.add_trace(
-                    go.Scatter(x=theoretical_quantiles, y=sample_quantiles, 
-                             mode='markers', name='Q-Q', marker=dict(color='red')),
-                    row=1, col=2
-                )
-                fig.add_trace(
-                    go.Scatter(x=[-3, 3], y=[-3, 3], mode='lines', 
-                             line=dict(color='black', dash='dash'), name='Identity', showlegend=False),
-                    row=1, col=2
-                )
-                
-                fig.update_xaxes(title_text='Standardized Residuals', row=1, col=1)
-                fig.update_xaxes(title_text='Theoretical Quantiles', row=1, col=2)
-                fig.update_yaxes(title_text='Frequency', row=1, col=1)
-                fig.update_yaxes(title_text='Sample Quantiles', row=1, col=2)
-                
-                fig.update_layout(
-                    title='Residual Analysis for Model Validation',
-                    template='plotly_white',
-                    showlegend=False
-                )
-                figures.append(fig)
+                if len(residuals) > 0:
+                    fig = make_subplots(
+                        rows=2, cols=2,
+                        subplot_titles=('Residual Plot', 'Residual Distribution', 
+                                       'Q-Q Plot', 'Diagnostic Statistics'),
+                        specs=[[{"type": "scatter"}, {"type": "histogram"}],
+                               [{"type": "scatter"}, {"type": "table"}]]
+                    )
+                    
+                    # Panel 1: Residual plot vs index
+                    fig.add_trace(
+                        go.Scatter(x=np.arange(len(residuals)), y=residuals,
+                                 mode='markers+lines', name='Residuals',
+                                 marker=dict(size=8, color='steelblue'),
+                                 line=dict(color='lightblue')),
+                        row=1, col=1
+                    )
+                    fig.add_hline(y=0, line_dash="dash", line_color="red", row=1, col=1)
+                    fig.add_hline(y=2, line_dash="dot", line_color="orange", row=1, col=1)
+                    fig.add_hline(y=-2, line_dash="dot", line_color="orange", row=1, col=1)
+                    
+                    # Panel 2: Histogram of residuals
+                    fig.add_trace(
+                        go.Histogram(x=residuals, nbinsx=30, name='Distribution',
+                                   marker_color='steelblue', showlegend=False),
+                        row=1, col=2
+                    )
+                    
+                    # Panel 3: Q-Q plot
+                    import scipy.stats as stats_scipy
+                    theoretical_quantiles = stats_scipy.norm.ppf(np.linspace(0.01, 0.99, len(residuals)))
+                    sample_quantiles = np.sort(residuals)
+                    
+                    fig.add_trace(
+                        go.Scatter(x=theoretical_quantiles, y=sample_quantiles,
+                                 mode='markers', name='Q-Q Points',
+                                 marker=dict(color='red', size=6)),
+                        row=2, col=1
+                    )
+                    fig.add_trace(
+                        go.Scatter(x=[-3, 3], y=[-3, 3], mode='lines',
+                                 line=dict(color='black', dash='dash', width=1),
+                                 name='Normal Line', showlegend=False),
+                        row=2, col=1
+                    )
+                    
+                    # Panel 4: Diagnostic statistics table
+                    stats_data = []
+                    stats_data.append(['RMSE', f"{residual_analysis.get('rmse', 0):.2e}"])
+                    stats_data.append(['MAE', f"{residual_analysis.get('mae', 0):.2e}"])
+                    stats_data.append(['R²', f"{residual_analysis.get('r_squared', 0):.4f}"])
+                    stats_data.append(['Adj R²', f"{residual_analysis.get('adj_r_squared', 0):.4f}"])
+                    
+                    # Normality test
+                    normality = residual_analysis.get('normality_test', {})
+                    if normality:
+                        stats_data.append(['Normality (p)', f"{normality.get('p_value', 0):.4f}"])
+                        is_normal = normality.get('normal', 'False')
+                        stats_data.append(['Normal?', str(is_normal)])
+                    
+                    # Durbin-Watson
+                    dw = residual_analysis.get('durbin_watson', {})
+                    if dw:
+                        stats_data.append(['Durbin-Watson', f"{dw.get('statistic', 0):.3f}"])
+                        stats_data.append(['Interpretation', dw.get('interpretation', 'N/A')])
+                    
+                    # Chi-squared test
+                    if 'chi_squared_test' in validation:
+                        chi2 = validation['chi_squared_test']
+                        stats_data.append(['χ² (p-value)', f"{chi2.get('p_value', 0):.4f}"])
+                        stats_data.append(['Fit Quality', chi2.get('conclusion', 'N/A')])
+                    
+                    fig.add_trace(
+                        go.Table(
+                            header=dict(values=['Metric', 'Value'],
+                                      fill_color='paleturquoise',
+                                      align='left',
+                                      font=dict(size=12, color='black')),
+                            cells=dict(values=[[row[0] for row in stats_data],
+                                             [row[1] for row in stats_data]],
+                                     fill_color='lavender',
+                                     align='left',
+                                     font=dict(size=11))
+                        ),
+                        row=2, col=2
+                    )
+                    
+                    # Update axes
+                    fig.update_xaxes(title_text='Data Point Index', row=1, col=1)
+                    fig.update_yaxes(title_text='Standardized Residual', row=1, col=1)
+                    fig.update_xaxes(title_text='Standardized Residual', row=1, col=2)
+                    fig.update_yaxes(title_text='Frequency', row=1, col=2)
+                    fig.update_xaxes(title_text='Theoretical Quantiles', row=2, col=1)
+                    fig.update_yaxes(title_text='Sample Quantiles', row=2, col=1)
+                    
+                    fig.update_layout(
+                        title='Residual Analysis & Model Diagnostics',
+                        template='plotly_white',
+                        showlegend=False,
+                        height=700
+                    )
+                    figures.append(fig)
             
             # 3. Bootstrap confidence intervals
             if 'bootstrap_D' in result:
                 bootstrap_data = result['bootstrap_D']
                 
-                fig = go.Figure()
+                # Parse bootstrap distribution
+                boot_dist_raw = bootstrap_data.get('bootstrap_distribution', [])
+                boot_dist = parse_numpy_array(boot_dist_raw)
                 
-                # Distribution
-                fig.add_trace(go.Histogram(
-                    x=bootstrap_data['bootstrap_distribution'],
-                    nbinsx=50,
-                    name='Bootstrap Distribution',
-                    marker_color='lightblue'
-                ))
-                
-                # Confidence interval
-                fig.add_vline(x=bootstrap_data['ci_lower'], line_dash="dash", 
-                            line_color="red", annotation_text="95% CI Lower")
-                fig.add_vline(x=bootstrap_data['ci_upper'], line_dash="dash",
-                            line_color="red", annotation_text="95% CI Upper")
-                fig.add_vline(x=bootstrap_data['point_estimate'], line_color="black",
-                            line_width=2, annotation_text="Estimate")
-                
-                fig.update_layout(
-                    title='Bootstrap Confidence Interval for Diffusion Coefficient',
-                    xaxis_title='D (μm²/s)',
-                    yaxis_title='Frequency',
-                    template='plotly_white'
-                )
-                figures.append(fig)
+                if len(boot_dist) > 0:
+                    fig = go.Figure()
+                    
+                    # Distribution histogram
+                    fig.add_trace(go.Histogram(
+                        x=boot_dist,
+                        nbinsx=50,
+                        name='Bootstrap Distribution',
+                        marker_color='lightblue',
+                        opacity=0.7
+                    ))
+                    
+                    # Point estimate
+                    point_est = bootstrap_data.get('point_estimate', 0)
+                    fig.add_vline(x=point_est, line_color="black", line_width=3,
+                                annotation_text=f"Estimate: {point_est:.2e}",
+                                annotation_position="top right")
+                    
+                    # Confidence interval
+                    ci_lower = bootstrap_data.get('ci_lower', 0)
+                    ci_upper = bootstrap_data.get('ci_upper', 0)
+                    ci_level = bootstrap_data.get('confidence_level', 0.95)
+                    
+                    fig.add_vline(x=ci_lower, line_dash="dash", line_color="red", line_width=2,
+                                annotation_text=f"{int(ci_level*100)}% CI Lower: {ci_lower:.2e}",
+                                annotation_position="bottom left")
+                    fig.add_vline(x=ci_upper, line_dash="dash", line_color="red", line_width=2,
+                                annotation_text=f"{int(ci_level*100)}% CI Upper: {ci_upper:.2e}",
+                                annotation_position="bottom right")
+                    
+                    # Standard error annotation
+                    std_err = bootstrap_data.get('standard_error', 0)
+                    n_bootstrap = bootstrap_data.get('n_bootstrap', len(boot_dist))
+                    
+                    fig.add_annotation(
+                        text=f"SE: {std_err:.2e}<br>n={n_bootstrap} resamples",
+                        xref="paper", yref="paper",
+                        x=0.02, y=0.98,
+                        showarrow=False,
+                        bgcolor="white",
+                        bordercolor="black",
+                        borderwidth=1,
+                        font=dict(size=11)
+                    )
+                    
+                    fig.update_layout(
+                        title='Bootstrap Confidence Interval for Diffusion Coefficient',
+                        xaxis_title='Diffusion Coefficient D (μm²/s)',
+                        yaxis_title='Frequency',
+                        template='plotly_white',
+                        height=500
+                    )
+                    figures.append(fig)
         
         except Exception as e:
-            pass
+            # Create error figure with detailed message
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Error creating statistical validation plots:<br>{str(e)}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=12, color="red")
+            )
+            figures.append(fig)
         
         return figures
     
