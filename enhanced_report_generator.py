@@ -7586,7 +7586,26 @@ def _plot_obstacle_density(self, result):
         
         # Add text summary at bottom
         summary_text = (
-            f\"<b>Interpretation:</b> {result.get('interpretation', '')}<br><br>\"\n            f\"<b>Measurements:</b><br>\"\n            f\"D_observed: {result.get('D_obs', 0):.3f} µm²/s<br>\"\n            f\"D_free (est.): {result.get('D_free_estimate', 0):.3f} µm²/s<br>\"\n            f\"Tortuosity: {result.get('tortuosity', 0):.2f}×<br><br>\"\n            f\"<i>{result.get('note', '')}</i>\"\n        )\n        \n        fig.add_annotation(\n            text=summary_text,\n            xref='paper', yref='paper',\n            x=0.5, y=0.3,\n            xanchor='center', yanchor='top',\n            showarrow=False,\n            bgcolor='rgba(255,255,255,0.9)',\n            bordercolor='black',\n            borderwidth=1,\n            font=dict(size=11),\n            align='left'\n        )
+            f"<b>Interpretation:</b> {result.get('interpretation', '')}<br><br>"
+            f"<b>Measurements:</b><br>"
+            f"D_observed: {result.get('D_obs', 0):.3f} µm²/s<br>"
+            f"D_free (est.): {result.get('D_free_estimate', 0):.3f} µm²/s<br>"
+            f"Tortuosity: {result.get('tortuosity', 0):.2f}×<br><br>"
+            f"<i>{result.get('note', '')}</i>"
+        )
+        
+        fig.add_annotation(
+            text=summary_text,
+            xref='paper', yref='paper',
+            x=0.5, y=0.3,
+            xanchor='center', yanchor='top',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='black',
+            borderwidth=1,
+            font=dict(size=11),
+            align='left'
+        )
         
         fig.update_layout(
             title='Obstacle Density & Percolation Analysis (Mackie-Meares Model)',
@@ -7607,21 +7626,6 @@ EnhancedSPTReportGenerator._analyze_anomalous_exponent = _analyze_anomalous_expo
 EnhancedSPTReportGenerator._plot_anomalous_exponent = _plot_anomalous_exponent
 EnhancedSPTReportGenerator._analyze_obstacle_density = _analyze_obstacle_density
 EnhancedSPTReportGenerator._plot_obstacle_density = _plot_obstacle_density
-            x=x_centers,
-            y=y_centers,
-            colorscale='Plasma',
-            colorbar=dict(title="D (μm²/s)")
-        ))
-        
-        fig.update_layout(
-            title="Local Diffusion Coefficient Map D(x,y)",
-            xaxis_title="X Position (μm)",
-            yaxis_title="Y Position (μm)"
-        )
-        
-        return fig  # Return single figure, not list
-    except Exception as e:
-        return None
 
 # Register the new analysis methods
 EnhancedSPTReportGenerator._analyze_percolation = _analyze_percolation
