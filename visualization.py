@@ -3933,3 +3933,583 @@ def plot_diffusion_heatmap(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
         return _empty_fig(f"Missing required package: {str(e)}")
     except Exception as e:
         return _empty_fig(f"Error creating diffusion heatmap: {str(e)}")
+
+
+# ============================================================================
+# Anomalous Exponent Spatial Mapping for Percolation Path Visualization
+# ============================================================================
+
+def plot_anomalous_exponent_map(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
+                                frame_interval: float = 1.0, grid_size: int = 50,
+                                window_size: int = 5, min_points: int = 4,
+                                show_tracks: bool = True) -> go.Figure:
+    """
+    Create 2D spatial heatmap of anomalous exponent (α) to visualize percolation paths.
+    
+    **Percolation Interpretation via α(x,y):**
+    
+    The anomalous exponent α describes subdiffusion: MSD ~ t^α
+    - α ≈ 1.0 (blue): Free diffusion zones (pores, channels)
+    - 0.5 < α < 1.0 (green): Transition regions (network edges)
+    - α << 0.5 (red): Obstacles/barriers (heterochromatin, matrix)
+    
+    **Percolation Path Detection:**
+    Continuous paths of α ≈ 1 regions indicate percolating channels through
+    the chromatin network. Isolated high-α islands suggest pores without connectivity.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Tracking data with 'track_id', 'frame', 'x', 'y'.
+    pixel_size : float, default=1.0
+        Pixel size in micrometers.
+    frame_interval : float, default=1.0
+        Time between frames in seconds.
+    grid_size : int, default=50
+        Number of grid points in each dimension for interpolation.
+    window_size : int, default=5
+        Number of frames for local α calculation.
+    min_points : int, default=4
+        Minimum points required for MSD fitting.
+    show_tracks : bool, default=True
+        Overlay trajectories on heatmap.
+    
+    Returns
+    -------
+    go.Figure
+        Plotly heatmap showing spatial distribution of α.
+    
+    References
+    ----------
+    - Anomalous diffusion in crowded environments (Phys Rev E, 2019)
+    - Percolation channels in phase-separated nuclei (Nat Struct Mol Biol, 2021)
+    """
+    try:
+        from scipy.interpolate import griddata
+        
+        if tracks_df.empty or 'x' not in tracks_df.columns:
+            return _empty_fig("No valid track data")
+        
+        # Calculate local anomalous exponent for each position
+        alpha_data = []
+        
+        for track_id, track_data in tracks_df.groupby('track_id'):
+            track_data = track_data.sort_values('frame')
+            frames = track_data['frame'].values
+            x_vals = track_data['x'].values * pixel_size
+            y_vals = track_data['y'].values * pixel_size
+            
+            # Sliding window to calculate local α
+            for i in range(len(frames) - window_size + 1):
+                window_frames = frames[i:i+window_size]
+                window_x = x_vals[i:i+window_size]
+                window_y = y_vals[i:i+window_size]
+                
+                if len(window_frames) < min_points:
+                    continue
+                
+                # Calculate MSD for this window
+                time_lags = []
+                msd_values = []
+                
+                for lag in range(1, len(window_frames)):
+                    if lag >= len(window_frames):
+                        break
+                    
+                    dx = window_x[lag:] - window_x[:-lag]
+                    dy = window_y[lag:] - window_y[:-lag]
+                    squared_displacements = dx**2 + dy**2
+                    
+                    if len(squared_displacements) > 0:
+                        msd = np.mean(squared_displacements)
+                        time_lags.append(lag * frame_interval)
+                        msd_values.append(msd)
+                
+                # Fit MSD ~ t^α in log-log space
+                if len(time_lags) >= 3:
+                    log_t = np.log(time_lags)
+                    log_msd = np.log(msd_values)
+                    
+                    # Linear fit: log(MSD) = log(4D) + α*log(t)
+                    coeffs = np.polyfit(log_t, log_msd, 1)
+                    alpha = coeffs[0]
+                    
+                    # Clamp to physically reasonable range
+                    alpha = np.clip(alpha, 0.0, 2.0)
+                    
+                    # Position is center of window
+                    center_idx = i + window_size // 2
+                    pos_x = x_vals[center_idx]
+                    pos_y = y_vals[center_idx]
+                    
+                    alpha_data.append({
+                        'x': pos_x,
+                        'y': pos_y,
+                        'alpha': alpha
+                    })
+        
+        if not alpha_data:
+            return _empty_fig("Insufficient data for anomalous exponent calculation")
+        
+        alpha_df = pd.DataFrame(alpha_data)
+        
+        # Remove outliers (IQR method)
+        Q1 = alpha_df['alpha'].quantile(0.25)
+        Q3 = alpha_df['alpha'].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        alpha_df_filtered = alpha_df[
+            (alpha_df['alpha'] >= lower_bound) & 
+            (alpha_df['alpha'] <= upper_bound)
+        ]
+        
+        if len(alpha_df_filtered) == 0:
+            return _empty_fig("All data filtered as outliers")
+        
+        # Create grid for interpolation
+        x_min, x_max = alpha_df_filtered['x'].min(), alpha_df_filtered['x'].max()
+        y_min, y_max = alpha_df_filtered['y'].min(), alpha_df_filtered['y'].max()
+        
+        xi = np.linspace(x_min, x_max, grid_size)
+        yi = np.linspace(y_min, y_max, grid_size)
+        Xi, Yi = np.meshgrid(xi, yi)
+        
+        # Interpolate α values
+        points = alpha_df_filtered[['x', 'y']].values
+        values = alpha_df_filtered['alpha'].values
+        
+        alpha_interpolated = griddata(
+            points, values, (Xi, Yi),
+            method='linear',
+            fill_value=np.nan
+        )
+        
+        # Create heatmap with percolation-focused colorscale
+        # Red (low α) → Yellow (intermediate) → Green (α ≈ 1, percolating)
+        fig = go.Figure()
+        
+        fig.add_trace(go.Heatmap(
+            x=xi,
+            y=yi,
+            z=alpha_interpolated,
+            colorscale=[
+                [0.0, 'darkred'],     # α << 0.5: Obstacles
+                [0.25, 'red'],        # α ≈ 0.5: Strong subdiffusion
+                [0.5, 'yellow'],      # α ≈ 0.75: Moderate subdiffusion
+                [0.75, 'lightgreen'], # α ≈ 0.9: Weak subdiffusion
+                [1.0, 'darkgreen']    # α ≈ 1.0: Free diffusion (percolating)
+            ],
+            colorbar=dict(
+                title='α (Anomalous<br>Exponent)',
+                tickvals=[0, 0.5, 0.75, 1.0],
+                ticktext=['0 (Trapped)', '0.5 (Subdiff)', '0.75 (Hindered)', '1.0 (Free)']
+            ),
+            hovertemplate='<b>Position:</b> (%.3f, %.3f) µm<br><b>α:</b> %.3f<extra></extra>',
+            zmin=0, zmax=1.5
+        ))
+        
+        # Overlay trajectories
+        if show_tracks:
+            for track_id, track_data in tracks_df.groupby('track_id'):
+                track_data = track_data.sort_values('frame')
+                x_track = track_data['x'].values * pixel_size
+                y_track = track_data['y'].values * pixel_size
+                
+                fig.add_trace(go.Scatter(
+                    x=x_track,
+                    y=y_track,
+                    mode='lines',
+                    line=dict(color='white', width=0.5, dash='dot'),
+                    opacity=0.3,
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+        
+        fig.update_layout(
+            title={
+                'text': 'Anomalous Exponent Spatial Map - Percolation Path Analysis',
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            xaxis_title='X Position (µm)',
+            yaxis_title='Y Position (µm)',
+            width=750,
+            height=700,
+            xaxis=dict(scaleanchor='y', scaleratio=1),
+            yaxis=dict(scaleanchor='x', scaleratio=1),
+            template='plotly_white'
+        )
+        
+        # Add interpretation guide
+        stats_text = (
+            f"<b>Percolation Interpretation:</b><br>"
+            f"Green (α≈1): Percolating channels<br>"
+            f"Yellow (0.5<α<1): Transition zones<br>"
+            f"Red (α<0.5): Obstacles/Matrix<br><br>"
+            f"Mean α: {np.nanmean(alpha_interpolated):.2f}<br>"
+            f"Std α: {np.nanstd(alpha_interpolated):.2f}<br>"
+            f"Percolating fraction: {np.sum(alpha_interpolated > 0.85) / np.sum(~np.isnan(alpha_interpolated)):.1%}"
+        )
+        
+        fig.add_annotation(
+            text=stats_text,
+            xref='paper', yref='paper',
+            x=0.02, y=0.98,
+            xanchor='left', yanchor='top',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='black',
+            borderwidth=1,
+            font=dict(size=9)
+        )
+        
+        return fig
+        
+    except ImportError as e:
+        return _empty_fig(f"Missing required package: {str(e)}")
+    except Exception as e:
+        return _empty_fig(f"Error creating anomalous exponent map: {str(e)}")
+
+
+# ============================================================================
+# Fractal Dimension Distribution Visualization
+# ============================================================================
+
+def plot_fractal_dimension_distribution(fractal_results: Dict[str, Any]) -> go.Figure:
+    """
+    Plot histogram of trajectory fractal dimensions with reference lines.
+    
+    Parameters
+    ----------
+    fractal_results : Dict
+        Output from calculate_fractal_dimension() with 'per_track_df' key.
+    
+    Returns
+    -------
+    go.Figure
+        Histogram with annotations for different trajectory types.
+    """
+    try:
+        if not fractal_results.get('success', False):
+            return _empty_fig(f"Analysis failed: {fractal_results.get('error', 'Unknown')}")
+        
+        df = fractal_results['per_track_df']
+        
+        # Filter valid values
+        df_valid = df[np.isfinite(df['fractal_dimension'])]
+        
+        if len(df_valid) == 0:
+            return _empty_fig("No valid fractal dimension values")
+        
+        fig = go.Figure()
+        
+        # Histogram
+        fig.add_trace(go.Histogram(
+            x=df_valid['fractal_dimension'],
+            nbinsx=30,
+            marker=dict(color='steelblue', line=dict(color='black', width=0.5)),
+            name='Trajectories'
+        ))
+        
+        # Add reference lines for trajectory types
+        y_max = len(df_valid) * 0.8
+        
+        references = [
+            (1.0, 'Linear/Channeled', 'blue'),
+            (1.7, 'Confined', 'orange'),
+            (2.0, 'Normal Diffusion', 'green'),
+            (2.5, 'Fractal Matrix', 'red')
+        ]
+        
+        for d_f, label, color in references:
+            fig.add_vline(
+                x=d_f,
+                line=dict(color=color, width=2, dash='dash'),
+                annotation_text=label,
+                annotation_position='top'
+            )
+        
+        fig.update_layout(
+            title='Fractal Dimension Distribution',
+            xaxis_title='Fractal Dimension (d_f)',
+            yaxis_title='Number of Trajectories',
+            template='plotly_white',
+            width=800,
+            height=500,
+            showlegend=False
+        )
+        
+        # Add statistics
+        mean_df = fractal_results['ensemble_statistics']['mean_df']
+        std_df = fractal_results['ensemble_statistics']['std_df']
+        
+        stats_text = (
+            f"Mean d_f: {mean_df:.2f} ± {std_df:.2f}<br>"
+            f"Median: {fractal_results['ensemble_statistics']['median_df']:.2f}<br>"
+            f"Range: [{fractal_results['ensemble_statistics']['min_df']:.2f}, "
+            f"{fractal_results['ensemble_statistics']['max_df']:.2f}]<br>"
+            f"<b>{fractal_results['interpretation']}</b>"
+        )
+        
+        fig.add_annotation(
+            text=stats_text,
+            xref='paper', yref='paper',
+            x=0.98, y=0.98,
+            xanchor='right', yanchor='top',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='black',
+            borderwidth=1
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error plotting fractal dimension: {str(e)}")
+
+
+# ============================================================================
+# Connectivity Network Graph Visualization
+# ============================================================================
+
+def plot_connectivity_network(network_results: Dict[str, Any],
+                             tracks_df: pd.DataFrame = None,
+                             pixel_size: float = 1.0) -> go.Figure:
+    """
+    Visualize spatial connectivity network showing percolation paths.
+    
+    Parameters
+    ----------
+    network_results : Dict
+        Output from build_connectivity_network() with 'graph_object' key.
+    tracks_df : pd.DataFrame, optional
+        Original track data for background scatter.
+    pixel_size : float, default=1.0
+        Pixel to micron conversion.
+    
+    Returns
+    -------
+    go.Figure
+        Network graph with nodes (visited cells) and edges (connections).
+    """
+    try:
+        if not network_results.get('success', False):
+            return _empty_fig(f"Analysis failed: {network_results.get('error', 'Unknown')}")
+        
+        G = network_results['graph_object']
+        
+        if G.number_of_nodes() == 0:
+            return _empty_fig("Empty network graph")
+        
+        fig = go.Figure()
+        
+        # Add edges
+        edge_x = []
+        edge_y = []
+        for edge in G.edges():
+            x0, y0 = edge[0]
+            x1, y1 = edge[1]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        fig.add_trace(go.Scatter(
+            x=edge_x, y=edge_y,
+            mode='lines',
+            line=dict(color='lightgray', width=1),
+            hoverinfo='none',
+            showlegend=False,
+            name='Connections'
+        ))
+        
+        # Add nodes (color by giant component membership)
+        giant_component = network_results['percolation_analysis'].get('giant_component_size', 0)
+        
+        # Get largest component
+        import networkx as nx
+        components = list(nx.connected_components(G))
+        giant = max(components, key=len) if components else set()
+        
+        node_x = []
+        node_y = []
+        node_colors = []
+        
+        for node in G.nodes():
+            x, y = node
+            node_x.append(x)
+            node_y.append(y)
+            node_colors.append('red' if node in giant else 'lightblue')
+        
+        fig.add_trace(go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            marker=dict(
+                size=8,
+                color=node_colors,
+                line=dict(color='black', width=0.5)
+            ),
+            text=[f"Cell {node}" for node in G.nodes()],
+            hoverinfo='text',
+            showlegend=False,
+            name='Visited Cells'
+        ))
+        
+        # Add track overlay if provided
+        if tracks_df is not None and not tracks_df.empty:
+            for track_id, track_data in tracks_df.groupby('track_id'):
+                track_data = track_data.sort_values('frame')
+                x_track = track_data['x'].values * pixel_size
+                y_track = track_data['y'].values * pixel_size
+                
+                fig.add_trace(go.Scatter(
+                    x=x_track, y=y_track,
+                    mode='lines',
+                    line=dict(color='blue', width=0.3),
+                    opacity=0.2,
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+        
+        percolates = network_results['percolation_analysis']['percolates']
+        title_text = f"Connectivity Network - {'PERCOLATING' if percolates else 'NON-PERCOLATING'}"
+        
+        fig.update_layout(
+            title=title_text,
+            xaxis_title='Grid X Index',
+            yaxis_title='Grid Y Index',
+            width=800,
+            height=800,
+            xaxis=dict(scaleanchor='y', scaleratio=1),
+            yaxis=dict(scaleanchor='x', scaleratio=1),
+            template='plotly_white'
+        )
+        
+        # Add network statistics
+        perc_data = network_results['percolation_analysis']
+        stats_text = (
+            f"<b>Giant Component:</b> {perc_data['giant_component_size']} nodes "
+            f"({perc_data['giant_component_fraction']:.1%})<br>"
+            f"<b>Total Components:</b> {perc_data['n_components']}<br>"
+            f"<b>X Span:</b> {perc_data['x_span_fraction']:.1%}<br>"
+            f"<b>Y Span:</b> {perc_data['y_span_fraction']:.1%}"
+        )
+        
+        fig.add_annotation(
+            text=stats_text,
+            xref='paper', yref='paper',
+            x=0.02, y=0.98,
+            xanchor='left', yanchor='top',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='black',
+            borderwidth=1
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error plotting connectivity network: {str(e)}")
+
+
+# ============================================================================
+# Size-Dependent Diffusion Scaling Plot
+# ============================================================================
+
+def plot_size_dependent_diffusion(size_scaling_results: Dict[str, Any]) -> go.Figure:
+    """
+    Plot probe-size dependent diffusion with sieving model fit.
+    
+    Parameters
+    ----------
+    size_scaling_results : Dict
+        Output from analyze_size_dependent_diffusion().
+    
+    Returns
+    -------
+    go.Figure
+        Scatter plot with exponential fit showing mesh size.
+    """
+    try:
+        if not size_scaling_results.get('success', False):
+            return _empty_fig(f"Analysis failed: {size_scaling_results.get('error', 'Unknown')}")
+        
+        measured = size_scaling_results['measured_data']
+        sizes = np.array(measured['sizes_nm'])
+        D_measured = np.array(measured['D_values_um2s'])
+        D_predicted = np.array(measured['D_predicted_um2s'])
+        
+        xi = size_scaling_results['mesh_size_xi_nm']
+        D_0 = size_scaling_results['D_0_um2s']
+        R_c = size_scaling_results['critical_radius_nm']
+        
+        fig = go.Figure()
+        
+        # Measured data
+        fig.add_trace(go.Scatter(
+            x=sizes,
+            y=D_measured,
+            mode='markers',
+            marker=dict(size=12, color='blue', symbol='circle'),
+            name='Measured',
+            error_y=dict(
+                type='percent',
+                value=10,  # Assume 10% error
+                visible=True
+            )
+        ))
+        
+        # Model fit
+        fig.add_trace(go.Scatter(
+            x=sizes,
+            y=D_predicted,
+            mode='lines',
+            line=dict(color='red', width=2, dash='dash'),
+            name=f'Model: D = {D_0:.1f} * exp(-R/{xi:.1f})'
+        ))
+        
+        # Critical radius line
+        fig.add_vline(
+            x=R_c,
+            line=dict(color='green', width=2, dash='dot'),
+            annotation_text=f'R_c = {R_c:.1f} nm',
+            annotation_position='top right'
+        )
+        
+        fig.update_layout(
+            title='Probe-Size Dependent Diffusion - Percolation Sieving',
+            xaxis_title='Probe Radius (nm)',
+            yaxis_title='Diffusion Coefficient (µm²/s)',
+            template='plotly_white',
+            width=800,
+            height=600,
+            xaxis_type='log',
+            yaxis_type='log'
+        )
+        
+        # Add statistics
+        r_sq = size_scaling_results['fit_quality_r_squared']
+        regime = size_scaling_results['percolation_regime']
+        
+        stats_text = (
+            f"<b>Mesh Size (ξ):</b> {xi:.1f} nm<br>"
+            f"<b>Critical Radius:</b> {R_c:.1f} nm<br>"
+            f"<b>D_0:</b> {D_0:.2f} µm²/s<br>"
+            f"<b>R² fit:</b> {r_sq:.3f}<br>"
+            f"<b>Regime:</b> {regime}"
+        )
+        
+        fig.add_annotation(
+            text=stats_text,
+            xref='paper', yref='paper',
+            x=0.98, y=0.02,
+            xanchor='right', yanchor='bottom',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='black',
+            borderwidth=1
+        )
+        
+        return fig
+        
+    except Exception as e:
+        return _empty_fig(f"Error plotting size-dependent diffusion: {str(e)}")

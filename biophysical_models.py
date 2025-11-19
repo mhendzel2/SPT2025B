@@ -2498,3 +2498,327 @@ def infer_chromatin_compaction_advanced(tracks_df: pd.DataFrame, pixel_size: flo
             'success': False,
             'error': f'Advanced chromatin compaction inference failed: {str(e)}'
         }
+
+
+# ============================================================================
+# Advanced Percolation Analysis - Mesh Size & Obstacle Density Inference
+# Based on: Percolation theory and nuclear transport (2024-2025 literature)
+# ============================================================================
+
+def infer_obstacle_density(D_observed: float, D_free: float) -> Dict[str, float]:
+    """
+    Estimate obstacle volume fraction from observed vs free diffusion using obstruction models.
+    
+    The Mackie-Meares equation relates the effective diffusion coefficient in a porous
+    medium to the volume fraction of obstacles (φ):
+    
+        D_obs / D_free = (1 - φ)² / (1 + φ)²
+    
+    This model assumes:
+    - Impermeable, uniformly distributed obstacles
+    - No particle-obstacle interactions (pure excluded volume)
+    - Valid for φ < 0.6 (below percolation threshold)
+    
+    For chromatin:
+    - φ ≈ 0.1-0.2: Open euchromatin regions
+    - φ ≈ 0.3-0.4: Typical nucleoplasm
+    - φ ≈ 0.5-0.6: Dense heterochromatin (near percolation)
+    
+    Parameters
+    ----------
+    D_observed : float
+        Measured diffusion coefficient in crowded environment (µm²/s).
+    D_free : float
+        Reference diffusion coefficient in dilute solution (µm²/s).
+        Can be measured in vitro or calculated from Stokes-Einstein:
+        D_free = k_B*T / (6*π*η*R_h)
+    
+    Returns
+    -------
+    Dict[str, float]
+        Dictionary with:
+        - 'obstacle_fraction_phi': Volume fraction of obstacles (0-1)
+        - 'accessible_fraction': 1 - φ (available volume)
+        - 'tortuosity': Effective path length increase factor
+        - 'percolation_proximity': How close to critical threshold (φ_c ≈ 0.59)
+        - 'interpretation': Text description of crowding level
+    
+    References
+    ----------
+    - Mackie & Meares, Proc. R. Soc. London A 232, 498 (1955)
+    - Obstruction effects in chromatin diffusion (Biophys J. 2020)
+    - Percolation thresholds in 3D random media (Phys Rev E, 2018)
+    
+    Examples
+    --------
+    >>> # GFP in nucleus (D_obs) vs buffer (D_free)
+    >>> result = infer_obstacle_density(D_observed=5.0, D_free=25.0)
+    >>> print(f"Obstacle fraction: {result['obstacle_fraction_phi']:.1%}")
+    >>> print(result['interpretation'])
+    """
+    if D_free <= 0:
+        return {
+            'error': 'D_free must be positive',
+            'obstacle_fraction_phi': np.nan
+        }
+    
+    ratio = D_observed / D_free
+    
+    if ratio > 1.0:
+        # Observed faster than free - physically implausible or measurement error
+        return {
+            'obstacle_fraction_phi': 0.0,
+            'accessible_fraction': 1.0,
+            'tortuosity': 1.0,
+            'percolation_proximity': 0.0,
+            'interpretation': 'No obstruction detected (D_obs > D_free may indicate measurement error)'
+        }
+    
+    # Solve Mackie-Meares equation for φ
+    # D_obs/D_free = (1-φ)²/(1+φ)²
+    # Let R = sqrt(D_obs/D_free)
+    # Then R = (1-φ)/(1+φ)
+    # Solving: φ = (1-R)/(1+R)
+    
+    R = np.sqrt(ratio)
+    phi = (1 - R) / (1 + R)
+    
+    # Tortuosity factor (effective path length increase)
+    # τ = 1/ratio for simple obstruction
+    tortuosity = 1.0 / ratio if ratio > 0 else np.inf
+    
+    # Percolation threshold for 3D random spheres: φ_c ≈ 0.59
+    phi_critical = 0.59
+    percolation_proximity = phi / phi_critical
+    
+    # Interpretation
+    if phi < 0.15:
+        interp = 'Low crowding - open chromatin or interchromatin channels'
+    elif phi < 0.35:
+        interp = 'Moderate crowding - typical nucleoplasm'
+    elif phi < 0.50:
+        interp = 'High crowding - dense chromatin regions'
+    elif phi < phi_critical:
+        interp = 'Very high crowding - approaching percolation threshold'
+    else:
+        interp = 'Critical/supercritical - system may be non-percolating'
+    
+    return {
+        'obstacle_fraction_phi': float(phi),
+        'accessible_fraction': float(1 - phi),
+        'tortuosity': float(tortuosity),
+        'percolation_proximity': float(percolation_proximity),
+        'phi_critical': phi_critical,
+        'interpretation': interp,
+        'D_ratio': ratio
+    }
+
+
+def analyze_size_dependent_diffusion(size_diffusion_map: Dict[float, float],
+                                    temperature: float = 300.0,
+                                    viscosity: float = 0.001) -> Dict[str, Any]:
+    """
+    Analyze probe-size dependent diffusion to extract mesh size and percolation properties.
+    
+    **Percolation Theory Background:**
+    
+    In a porous medium, diffusion depends on probe size relative to mesh size (ξ):
+    - Small probes (R_h << ξ): Percolate freely, D ≈ D_free
+    - Medium probes (R_h ~ ξ): Restricted diffusion, sieving effect
+    - Large probes (R_h >> ξ): Cannot percolate, D → 0
+    
+    **Sieving Model:**
+    
+        D(R_h) = D_0 * exp(-R_h / ξ)
+    
+    where:
+    - D_0: Diffusion coefficient of infinitesimal probe
+    - R_h: Hydrodynamic radius of probe
+    - ξ: Correlation length (mesh size) of porous matrix
+    
+    **Critical Radius (R_c):**
+    
+    The size at which D drops to some threshold (e.g., 37% of D_0 for e^-1).
+    Probes larger than R_c effectively cannot percolate.
+    
+    Parameters
+    ----------
+    size_diffusion_map : Dict[float, float]
+        Dictionary mapping probe radius (nm) → diffusion coefficient (µm²/s).
+        Requires measurements with at least 3 different probe sizes.
+        Example: {5.0: 15.2, 10.0: 8.3, 20.0: 2.1, 40.0: 0.3}
+    temperature : float, default=300.0
+        Temperature in Kelvin for Stokes-Einstein calculations.
+    viscosity : float, default=0.001
+        Solvent viscosity in Pa·s (water at 25°C = 0.001).
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing:
+        - 'mesh_size_xi_nm': Correlation length (nm)
+        - 'D_0': Extrapolated D for R_h=0 (µm²/s)
+        - 'critical_radius_nm': Size threshold for percolation
+        - 'fit_quality_r_squared': Goodness of fit
+        - 'percolation_regime': Classification of matrix porosity
+        - 'model_parameters': Dict with fit params and uncertainties
+    
+    Notes
+    -----
+    **Experimental Requirements:**
+    1. Use fluorescent probes with well-characterized R_h (dextrans, Ficoll, proteins)
+    2. Measure D for each probe in same sample conditions
+    3. Include at least one small probe (R_h < 3nm) as reference
+    4. Measure D_free for each probe in buffer to validate Stokes-Einstein
+    
+    **Chromatin Mesh Size Literature Values:**
+    - Interphase nucleus (typical): ξ = 15-30 nm
+    - Mitotic chromosomes: ξ = 5-15 nm
+    - Nucleolus: ξ = 10-20 nm
+    - Phase-separated condensates: ξ = 5-50 nm (highly variable)
+    
+    References
+    ----------
+    - Percolation and nuclear transport (Annu. Rev. Biophys. 2019)
+    - Mesh sizes in chromatin (Nucleus, 2020)
+    - Sieving effects in polymer networks (Macromolecules, 2015)
+    
+    Examples
+    --------
+    >>> # Measure different sized dextrans in nucleus
+    >>> probe_data = {
+    ...     3.0: 18.5,   # 3 nm radius dextran
+    ...     10.0: 7.2,   # 10 nm radius
+    ...     25.0: 1.8,   # 25 nm radius
+    ...     50.0: 0.2    # 50 nm radius
+    ... }
+    >>> result = analyze_size_dependent_diffusion(probe_data)
+    >>> print(f"Mesh size: {result['mesh_size_xi_nm']:.1f} nm")
+    >>> print(f"Critical radius: {result['critical_radius_nm']:.1f} nm")
+    """
+    try:
+        from scipy.optimize import curve_fit
+        
+        if len(size_diffusion_map) < 3:
+            return {
+                'success': False,
+                'error': 'Need at least 3 probe sizes for reliable fitting'
+            }
+        
+        # Extract data
+        sizes = np.array(sorted(size_diffusion_map.keys()))  # nm
+        D_values = np.array([size_diffusion_map[s] for s in sizes])  # µm²/s
+        
+        # Remove any invalid data points
+        valid_mask = (sizes > 0) & (D_values > 0) & np.isfinite(D_values)
+        sizes = sizes[valid_mask]
+        D_values = D_values[valid_mask]
+        
+        if len(sizes) < 3:
+            return {
+                'success': False,
+                'error': 'Insufficient valid data points after filtering'
+            }
+        
+        # Define sieving model: D(R) = D_0 * exp(-R / xi)
+        def sieving_model(R, D_0, xi):
+            return D_0 * np.exp(-R / xi)
+        
+        # Initial guess: D_0 = max(D), xi = characteristic size where D drops
+        D_0_guess = D_values[0] * 1.5  # Extrapolate slightly above largest D
+        xi_guess = sizes[len(sizes)//2]  # Middle size as guess
+        
+        # Fit model
+        try:
+            popt, pcov = curve_fit(
+                sieving_model, 
+                sizes, 
+                D_values,
+                p0=[D_0_guess, xi_guess],
+                bounds=([0, 1], [np.inf, 500]),  # D_0 > 0, 1nm < xi < 500nm
+                maxfev=5000
+            )
+            
+            D_0_fit, xi_fit = popt
+            D_0_err, xi_err = np.sqrt(np.diag(pcov))
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Curve fitting failed: {str(e)}'
+            }
+        
+        # Calculate fit quality (R²)
+        D_predicted = sieving_model(sizes, D_0_fit, xi_fit)
+        ss_res = np.sum((D_values - D_predicted)**2)
+        ss_tot = np.sum((D_values - np.mean(D_values))**2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        # Critical radius: where D drops to e^-1 of D_0 (37%)
+        # D(R_c) = D_0 * e^-1  =>  R_c = xi
+        critical_radius = xi_fit
+        
+        # Alternative: percolation threshold at 10% of D_0
+        # D(R_10%) = 0.1 * D_0  =>  R_10% = xi * ln(10)
+        R_10_percent = xi_fit * np.log(10)
+        
+        # Classify percolation regime
+        if xi_fit > 50:
+            regime = 'Open matrix - Large pores, minimal obstruction'
+        elif xi_fit > 25:
+            regime = 'Permeable matrix - Moderate mesh size'
+        elif xi_fit > 10:
+            regime = 'Restrictive matrix - Small mesh, size-selective'
+        else:
+            regime = 'Impermeable matrix - Very dense, only small molecules percolate'
+        
+        # Calculate Stokes-Einstein reference D for smallest probe
+        k_B = 1.380649e-23  # J/K
+        R_h_smallest = sizes[0] * 1e-9  # Convert nm to m
+        D_free_SE = (k_B * temperature) / (6 * np.pi * viscosity * R_h_smallest)
+        D_free_SE_um2s = D_free_SE * 1e12  # Convert m²/s to µm²/s
+        
+        results = {
+            'success': True,
+            'mesh_size_xi_nm': float(xi_fit),
+            'mesh_size_uncertainty_nm': float(xi_err),
+            'D_0_um2s': float(D_0_fit),
+            'D_0_uncertainty_um2s': float(D_0_err),
+            'critical_radius_nm': float(critical_radius),
+            'percolation_threshold_10percent_nm': float(R_10_percent),
+            'fit_quality_r_squared': float(r_squared),
+            'percolation_regime': regime,
+            'model_parameters': {
+                'D_0': float(D_0_fit),
+                'xi': float(xi_fit),
+                'D_0_stderr': float(D_0_err),
+                'xi_stderr': float(xi_err)
+            },
+            'measured_data': {
+                'sizes_nm': sizes.tolist(),
+                'D_values_um2s': D_values.tolist(),
+                'D_predicted_um2s': D_predicted.tolist()
+            },
+            'reference_calculations': {
+                'D_free_stokes_einstein_um2s': float(D_free_SE_um2s),
+                'smallest_probe_radius_nm': float(sizes[0])
+            },
+            'summary': {
+                'mesh_size': f"{xi_fit:.1f} ± {xi_err:.1f} nm",
+                'critical_size': f"{critical_radius:.1f} nm",
+                'percolation_regime': regime
+            }
+        }
+        
+        return results
+        
+    except ImportError:
+        return {
+            'success': False,
+            'error': 'scipy.optimize required for curve fitting'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Analysis failed: {str(e)}'
+        }

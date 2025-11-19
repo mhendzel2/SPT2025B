@@ -2667,6 +2667,439 @@ def analyze_kinetic_states_hmm(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
 
 
 # ============================================================================
+# Fractal Dimension Analysis for Percolation Assessment
+# Based on: Fractal analysis of chromatin trajectories (2024-2025)
+# ============================================================================
+
+def calculate_fractal_dimension(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
+                               method: str = 'box_counting', min_track_length: int = 10) -> Dict[str, Any]:
+    """
+    Calculate fractal dimension of trajectories to assess interaction with fractal matrix.
+    
+    **Fractal Dimension Background:**
+    
+    A trajectory in a homogeneous medium (free diffusion) has fractal dimension d_f = 2
+    (for 3D: d_f = 2 exactly for Brownian motion). Deviations indicate:
+    
+    - d_f < 2: Subdiffusion, confined motion, crowded environment
+    - d_f = 2: Normal diffusion
+    - d_f > 2: Anomalous diffusion, possibly directed motion or swelling
+    
+    In percolating systems or fractal matrices (like chromatin):
+    - d_f ≈ 2.5: Motion on fractal substrate (e.g., chromatin fiber)
+    - d_f ≈ 1.7: Confined to fractal network
+    - d_f ≈ 1.0: Linear motion along channels
+    
+    **Methods:**
+    1. **Box-counting**: Standard fractal analysis - cover trajectory with boxes
+    2. **Mass-radius**: M(r) ~ r^d_f where M is number of points within radius r
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with 'track_id', 'x', 'y' columns.
+    pixel_size : float, default=1.0
+        Pixel size in micrometers.
+    method : str, default='box_counting'
+        Fractal dimension calculation method:
+        - 'box_counting': Classic Hausdorff dimension
+        - 'mass_radius': Mass-radius scaling
+    min_track_length : int, default=10
+        Minimum points per track for reliable d_f calculation.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary with:
+        - 'per_track_df': Fractal dimension for each track
+        - 'ensemble_statistics': Mean, std, distribution
+        - 'interpretation': Classification of trajectory types
+    
+    References
+    ----------
+    - Fractal analysis of protein motion (Biophys J. 2018)
+    - Chromatin as a fractal globule (Science, 2009)
+    - Percolation on fractal lattices (Phys Rev E)
+    """
+    try:
+        results_list = []
+        
+        for track_id, track_data in tracks_df.groupby('track_id'):
+            if len(track_data) < min_track_length:
+                continue
+            
+            # Extract coordinates
+            track_data = track_data.sort_values('frame')
+            x = track_data['x'].values * pixel_size
+            y = track_data['y'].values * pixel_size
+            points = np.column_stack([x, y])
+            
+            if method == 'box_counting':
+                # Box-counting method
+                # Count boxes needed to cover trajectory at different scales
+                
+                # Define range of box sizes (scales)
+                track_size = np.max([
+                    np.ptp(x),  # Range of x
+                    np.ptp(y)   # Range of y
+                ])
+                
+                if track_size < 1e-6:  # Stationary track
+                    d_f = 0.0
+                else:
+                    # Logarithmically spaced scales
+                    min_scale = track_size / 50
+                    max_scale = track_size / 2
+                    scales = np.logspace(
+                        np.log10(min_scale),
+                        np.log10(max_scale),
+                        num=10
+                    )
+                    
+                    box_counts = []
+                    valid_scales = []
+                    
+                    for scale in scales:
+                        # Create grid
+                        x_bins = np.arange(x.min(), x.max() + scale, scale)
+                        y_bins = np.arange(y.min(), y.max() + scale, scale)
+                        
+                        # Count occupied boxes
+                        x_indices = np.digitize(x, x_bins)
+                        y_indices = np.digitize(y, y_bins)
+                        
+                        # Unique boxes
+                        occupied_boxes = len(set(zip(x_indices, y_indices)))
+                        
+                        if occupied_boxes > 0:
+                            box_counts.append(occupied_boxes)
+                            valid_scales.append(scale)
+                    
+                    if len(box_counts) >= 3:
+                        # Fit log(N) vs log(1/ε) where N = box count, ε = scale
+                        # d_f = -slope
+                        log_scales = np.log(valid_scales)
+                        log_counts = np.log(box_counts)
+                        
+                        # Linear regression
+                        coeffs = np.polyfit(log_scales, log_counts, 1)
+                        d_f = -coeffs[0]  # Negative slope
+                    else:
+                        d_f = np.nan
+            
+            elif method == 'mass_radius':
+                # Mass-radius scaling: M(r) ~ r^d_f
+                # M(r) = number of points within distance r from center of mass
+                
+                center = np.mean(points, axis=0)
+                distances = np.sqrt(np.sum((points - center)**2, axis=1))
+                
+                max_dist = np.max(distances)
+                if max_dist < 1e-6:
+                    d_f = 0.0
+                else:
+                    # Define radius bins
+                    radii = np.logspace(
+                        np.log10(max_dist/20),
+                        np.log10(max_dist),
+                        num=10
+                    )
+                    
+                    masses = []
+                    valid_radii = []
+                    
+                    for r in radii:
+                        mass = np.sum(distances <= r)
+                        if mass > 0:
+                            masses.append(mass)
+                            valid_radii.append(r)
+                    
+                    if len(masses) >= 3:
+                        # Fit log(M) vs log(r)
+                        log_radii = np.log(valid_radii)
+                        log_masses = np.log(masses)
+                        
+                        coeffs = np.polyfit(log_radii, log_masses, 1)
+                        d_f = coeffs[0]  # Slope is d_f
+                    else:
+                        d_f = np.nan
+            else:
+                d_f = np.nan
+            
+            # Classify trajectory type
+            if np.isnan(d_f):
+                traj_type = 'Undefined'
+            elif d_f < 1.2:
+                traj_type = 'Linear/Channeled'
+            elif d_f < 1.8:
+                traj_type = 'Confined/Subdiffusive'
+            elif d_f < 2.2:
+                traj_type = 'Normal Diffusion'
+            elif d_f < 2.7:
+                traj_type = 'Fractal Matrix Motion'
+            else:
+                traj_type = 'Superdiffusive'
+            
+            results_list.append({
+                'track_id': track_id,
+                'fractal_dimension': d_f,
+                'trajectory_type': traj_type,
+                'n_points': len(points)
+            })
+        
+        if not results_list:
+            return {
+                'success': False,
+                'error': 'No tracks met minimum length requirement'
+            }
+        
+        results_df = pd.DataFrame(results_list)
+        
+        # Remove invalid values for statistics
+        valid_df = results_df[np.isfinite(results_df['fractal_dimension'])]
+        
+        if len(valid_df) == 0:
+            return {
+                'success': False,
+                'error': 'All fractal dimension calculations failed'
+            }
+        
+        # Ensemble statistics
+        d_f_values = valid_df['fractal_dimension'].values
+        
+        ensemble_stats = {
+            'mean_df': float(np.mean(d_f_values)),
+            'std_df': float(np.std(d_f_values)),
+            'median_df': float(np.median(d_f_values)),
+            'min_df': float(np.min(d_f_values)),
+            'max_df': float(np.max(d_f_values))
+        }
+        
+        # Population distribution
+        type_counts = valid_df['trajectory_type'].value_counts().to_dict()
+        type_fractions = {k: v/len(valid_df) for k, v in type_counts.items()}
+        
+        # Interpretation
+        mean_df = ensemble_stats['mean_df']
+        if mean_df < 1.5:
+            interpretation = 'Confined motion - particles trapped or moving in channels'
+        elif mean_df < 2.1:
+            interpretation = 'Normal diffusion - homogeneous environment'
+        elif mean_df < 2.6:
+            interpretation = 'Fractal environment - chromatin fiber interactions'
+        else:
+            interpretation = 'Anomalous motion - directed transport or active processes'
+        
+        return {
+            'success': True,
+            'per_track_df': results_df,
+            'ensemble_statistics': ensemble_stats,
+            'population_fractions': type_fractions,
+            'interpretation': interpretation,
+            'method_used': method,
+            'summary': {
+                'mean_fractal_dim': f"{mean_df:.2f}",
+                'interpretation': interpretation,
+                'n_tracks_analyzed': len(valid_df)
+            }
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Fractal dimension calculation failed: {str(e)}'
+        }
+
+
+# ============================================================================
+# Spatial Connectivity Graph for Direct Percolation Assessment
+# ============================================================================
+
+def build_connectivity_network(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
+                              grid_size: float = 0.2, min_visits: int = 2) -> Dict[str, Any]:
+    """
+    Build spatial connectivity graph to directly assess percolation through visited regions.
+    
+    **Network Percolation Theory:**
+    
+    Treat accessible space as a network:
+    - Nodes: Grid cells visited by particles
+    - Edges: Connections between adjacent visited cells
+    - Giant component: Largest connected cluster
+    
+    **Percolation Criteria:**
+    1. System percolates if giant component spans the observed volume
+    2. Percolation threshold: fraction of visited nodes for spanning cluster
+    3. Network efficiency: quantifies connectivity quality
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with 'track_id', 'x', 'y'.
+    pixel_size : float, default=1.0
+        Pixel to micron conversion.
+    grid_size : float, default=0.2
+        Grid cell size in micrometers.
+    min_visits : int, default=2
+        Minimum particle visits to consider cell accessible.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Network topology metrics including giant component size,
+        percolation status, bottleneck identification.
+    """
+    try:
+        import networkx as nx
+        from scipy.spatial import distance
+        
+        # Convert to spatial coordinates
+        x = tracks_df['x'].values * pixel_size
+        y = tracks_df['y'].values * pixel_size
+        
+        # Create grid
+        x_min, x_max = x.min(), x.max()
+        y_min, y_max = y.min(), y.max()
+        
+        x_bins = np.arange(x_min, x_max + grid_size, grid_size)
+        y_bins = np.arange(y_min, y_max + grid_size, grid_size)
+        
+        # Assign points to grid cells
+        x_idx = np.digitize(x, x_bins)
+        y_idx = np.digitize(y, y_bins)
+        
+        # Count visits per cell
+        cell_visits = {}
+        for xi, yi in zip(x_idx, y_idx):
+            cell = (xi, yi)
+            cell_visits[cell] = cell_visits.get(cell, 0) + 1
+        
+        # Filter cells by minimum visits
+        accessible_cells = {cell for cell, count in cell_visits.items() 
+                          if count >= min_visits}
+        
+        if len(accessible_cells) < 2:
+            return {
+                'success': False,
+                'error': 'Insufficient accessible cells for network analysis'
+            }
+        
+        # Build graph
+        G = nx.Graph()
+        G.add_nodes_from(accessible_cells)
+        
+        # Add edges between adjacent cells (8-connected neighborhood)
+        for cell in accessible_cells:
+            i, j = cell
+            # Check 8 neighbors
+            for di in [-1, 0, 1]:
+                for dj in [-1, 0, 1]:
+                    if di == 0 and dj == 0:
+                        continue
+                    neighbor = (i + di, j + dj)
+                    if neighbor in accessible_cells:
+                        G.add_edge(cell, neighbor)
+        
+        # Network analysis
+        n_nodes = G.number_of_nodes()
+        n_edges = G.number_of_edges()
+        
+        # Find connected components
+        components = list(nx.connected_components(G))
+        component_sizes = sorted([len(c) for c in components], reverse=True)
+        
+        giant_component_size = component_sizes[0] if component_sizes else 0
+        giant_component_fraction = giant_component_size / n_nodes if n_nodes > 0 else 0
+        
+        # Check if system percolates (giant component spans space)
+        # Spanning: largest component touches opposite boundaries
+        giant_component = max(components, key=len) if components else set()
+        
+        # Get boundary cells of giant component
+        if giant_component:
+            gc_cells = list(giant_component)
+            gc_x = [cell[0] for cell in gc_cells]
+            gc_y = [cell[1] for cell in gc_cells]
+            
+            x_span = (max(gc_x) - min(gc_x)) / (len(x_bins) - 1)
+            y_span = (max(gc_y) - min(gc_y)) / (len(y_bins) - 1)
+            
+            # Consider percolating if giant component spans >70% in both directions
+            percolates = (x_span > 0.7) and (y_span > 0.7)
+        else:
+            percolates = False
+            x_span = 0
+            y_span = 0
+        
+        # Network efficiency (average shortest path in giant component)
+        if len(giant_component) > 1:
+            giant_subgraph = G.subgraph(giant_component)
+            try:
+                avg_path_length = nx.average_shortest_path_length(giant_subgraph)
+                efficiency = 1.0 / avg_path_length if avg_path_length > 0 else 0
+            except:
+                efficiency = 0
+        else:
+            avg_path_length = 0
+            efficiency = 0
+        
+        # Betweenness centrality (identify bottlenecks)
+        if n_nodes > 2:
+            betweenness = nx.betweenness_centrality(G)
+            max_betweenness = max(betweenness.values()) if betweenness else 0
+            bottleneck_cells = [cell for cell, bc in betweenness.items() 
+                              if bc > 0.5 * max_betweenness][:5]  # Top 5
+        else:
+            betweenness = {}
+            bottleneck_cells = []
+        
+        results = {
+            'success': True,
+            'network_properties': {
+                'n_nodes': n_nodes,
+                'n_edges': n_edges,
+                'average_degree': 2 * n_edges / n_nodes if n_nodes > 0 else 0
+            },
+            'percolation_analysis': {
+                'percolates': percolates,
+                'giant_component_size': giant_component_size,
+                'giant_component_fraction': giant_component_fraction,
+                'x_span_fraction': x_span,
+                'y_span_fraction': y_span,
+                'n_components': len(components),
+                'component_sizes': component_sizes[:10]  # Top 10
+            },
+            'connectivity_metrics': {
+                'network_efficiency': efficiency,
+                'avg_shortest_path': avg_path_length
+            },
+            'bottlenecks': {
+                'n_bottleneck_cells': len(bottleneck_cells),
+                'bottleneck_coordinates': bottleneck_cells
+            },
+            'graph_object': G,  # For further analysis/plotting
+            'summary': {
+                'percolation_status': 'Percolating' if percolates else 'Non-percolating',
+                'giant_component': f"{giant_component_fraction:.1%} of nodes",
+                'connectivity': f"{n_edges} edges among {n_nodes} nodes"
+            }
+        }
+        
+        return results
+        
+    except ImportError:
+        return {
+            'success': False,
+            'error': 'networkx required for connectivity analysis. Install: pip install networkx'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Connectivity network analysis failed: {str(e)}'
+        }
+
+
+# ============================================================================
 # Photobleaching-Corrected Kinetics Module
 # Based on: MicroLive (Sept 2025) and other photobleaching correction methods
 # ============================================================================

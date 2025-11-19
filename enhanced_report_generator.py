@@ -502,14 +502,46 @@ class EnhancedSPTReportGenerator:
         }
         
         # === ADVANCED BIOPHYSICS 2025 FEATURES ===
-        # Percolation Analysis
-        self.available_analyses['percolation_analysis'] = {
-            'name': 'Percolation Analysis',
-            'description': 'Network connectivity, percolation threshold detection, cluster size distributions, spanning cluster identification.',
-            'function': self._analyze_percolation,
-            'visualization': self._plot_percolation,
-            'category': 'Biophysical Models',
-            'priority': 4
+        # Percolation Analysis Suite (bioRxiv 2024-2025)
+        
+        # Fractal Dimension Analysis
+        self.available_analyses['fractal_dimension'] = {
+            'name': 'Fractal Dimension Analysis',
+            'description': 'Trajectory fractal dimension (d_f) via box-counting or mass-radius scaling. Classifies chromatin interaction: d_f≈2.0 (normal), d_f≈2.5 (fractal matrix).',
+            'function': self._analyze_fractal_dimension,
+            'visualization': self._plot_fractal_dimension,
+            'category': 'Percolation Analysis',
+            'priority': 2
+        }
+        
+        # Connectivity Network
+        self.available_analyses['connectivity_network'] = {
+            'name': 'Spatial Connectivity Network',
+            'description': 'Network topology of visited cells, giant component analysis, direct percolation test. Identifies spanning clusters and bottlenecks.',
+            'function': self._analyze_connectivity_network,
+            'visualization': self._plot_connectivity_network,
+            'category': 'Percolation Analysis',
+            'priority': 2
+        }
+        
+        # Anomalous Exponent Mapping
+        self.available_analyses['anomalous_exponent_map'] = {
+            'name': 'Anomalous Exponent Map α(x,y)',
+            'description': 'Spatial heatmap of local α from MSD~t^α. Green (α≈1): percolating channels, Red (α<0.5): obstacles. Visualizes percolation paths.',
+            'function': self._analyze_anomalous_exponent,
+            'visualization': self._plot_anomalous_exponent,
+            'category': 'Percolation Analysis',
+            'priority': 2
+        }
+        
+        # Obstacle Density
+        self.available_analyses['obstacle_density'] = {
+            'name': 'Obstacle Density Inference',
+            'description': 'Mackie-Meares obstruction model to estimate chromatin crowding (φ) from D_obs/D_free ratio. Percolation proximity calculation.',
+            'function': self._analyze_obstacle_density,
+            'visualization': self._plot_obstacle_density,
+            'category': 'Percolation Analysis',
+            'priority': 3
         }
         
         # CTRW Analysis
