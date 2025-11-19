@@ -182,6 +182,26 @@ except ImportError:
     CORRELATIVE_ANALYSIS_AVAILABLE = False
     CHANGEPOINT_DETECTION_AVAILABLE = False
 
+# Import advanced tracking module
+try:
+    from advanced_tracking import ParticleFilter, AdvancedTracking, bayesian_detection_refinement
+    ADVANCED_TRACKING_AVAILABLE = True
+except ImportError:
+    ADVANCED_TRACKING_AVAILABLE = False
+
+# Import intensity analysis module
+try:
+    from intensity_analysis import (
+        extract_intensity_channels,
+        correlate_intensity_movement,
+        create_intensity_movement_plots,
+        analyze_intensity_profiles,
+        classify_intensity_behavior
+    )
+    INTENSITY_ANALYSIS_AVAILABLE = True
+except ImportError:
+    INTENSITY_ANALYSIS_AVAILABLE = False
+
 # Import report generation module
 try:
     # CORRECTED: Import the EnhancedSPTReportGenerator class from the correct file
@@ -7876,13 +7896,15 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Biophysical Models", 
             "Changepoint Detection", 
             "Correlative Analysis",
+            "Advanced Tracking",
+            "Intensity Analysis",
             "Microrheology",
             "Ornstein-Uhlenbeck",
             "HMM Analysis"
         ])
         
         # HMM Analysis tab
-        with adv_tabs[5]:
+        with adv_tabs[7]:
             st.header("Hidden Markov Model (HMM) Analysis")
             st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
 
@@ -9462,79 +9484,104 @@ elif st.session_state.active_page == "Advanced Analysis":
                     )
                     
                 with col2:
-                    min_segment_length = st.slider(
-                        "Minimum Segment Length",
-                        min_value=3,
-                        max_value=20,
-                        value=5,
-                        key="cp_min_segment_length",
-                        help="Minimum length of segments between changepoints"
+                    window_size = st.slider(
+                        "Window Size",
+                        min_value=5,
+                        max_value=50,
+                        value=10,
+                        help="Window size for calculating local motion statistics"
                     )
                     
-                    penalty = st.slider(
-                        "Penalty Parameter",
-                        min_value=0.1,
-                        max_value=10.0,
-                        value=3.0,
-                        step=0.1,
-                        help="Penalty parameter for PELT method"
+                    significance_level = st.slider(
+                        "Significance Level",
+                        min_value=0.01,
+                        max_value=0.10,
+                        value=0.05,
+                        step=0.01,
+                        help="Statistical significance level for changepoint detection"
                     )
+                
+                min_segment_length = st.slider(
+                    "Minimum Segment Length",
+                    min_value=3,
+                    max_value=20,
+                    value=5,
+                    key="cp_min_segment_length",
+                    help="Minimum length of segments between changepoints"
+                )
                 
                 # Run analysis on button click
                 if st.button("Run Changepoint Detection"):
                     with st.spinner("Running changepoint detection..."):
-                        # Run changepoint detection
-                                if st.button("Detect Changepoints", type="primary"):
-                                    with st.spinner("Detecting changepoints..."):
-                                        try:
-                                            from changepoint_detection import detect_changepoints_in_tracks
+                        try:
+                            from changepoint_detection import ChangePointDetector
+                            
+                            # Get track data
+                            tracks_df, has_data = get_track_data()
+                            if not has_data:
+                                st.error("No track data available")
+                            else:
+                                # Initialize detector
+                                detector = ChangePointDetector()
+                                
+                                # Run detection with user parameters
+                                changepoint_results = detector.detect_motion_regime_changes(
+                                    tracks_df=tracks_df,
+                                    window_size=window_size,
+                                    min_segment_length=min_segment_length,
+                                    significance_level=significance_level
+                                )
+                                
+                                if changepoint_results.get('success', True):
+                                    st.success("✓ Changepoint detection completed")
+                                    
+                                    # Display motion segments
+                                    if 'motion_segments' in changepoint_results:
+                                        st.subheader("Motion Segments")
+                                        segments_data = changepoint_results['motion_segments']
+                                        if isinstance(segments_data, pd.DataFrame) and not segments_data.empty:
+                                            st.dataframe(segments_data.head(20))
                                             
-                                            changepoint_results = detect_changepoints_in_tracks(
-                                                st.session_state.tracks_data,
-                                                method='variance',
-                                                min_segment_length=5
-                                            )
-                                            
-                                            if changepoint_results['success']:
-                                                st.success("✓ Changepoint detection completed")
-                                                
-                                                # Display results
-                                                if 'changepoint_summary' in changepoint_results:
-                                                    st.subheader("Changepoint Summary")
-                                                    summary_data = changepoint_results['changepoint_summary']
-                                                    if isinstance(summary_data, list):
-                                                        summary_df = pd.DataFrame(summary_data)
-                                                        if not summary_df.empty:
-                                                            st.dataframe(summary_df)
-                                                        else:
-                                                            st.info("No changepoints detected.")
-                                                    elif isinstance(summary_data, pd.DataFrame) and not summary_data.empty:
-                                                        st.dataframe(summary_data)
-                                                    else:
-                                                        st.info("No changepoints detected.")
-                                                
-                                                if 'track_segments' in changepoint_results:
-                                                    st.subheader("Track Segments")
-                                                    segments_data = changepoint_results['track_segments']
-                                                    if isinstance(segments_data, list):
-                                                        segments_df = pd.DataFrame(segments_data)
-                                                        if not segments_df.empty:
-                                                            st.dataframe(segments_df.head())
-                                                        else:
-                                                            st.info("No track segments available.")
-                                                    elif isinstance(segments_data, pd.DataFrame) and not segments_data.empty:
-                                                        st.dataframe(segments_data.head())
-                                                    else:
-                                                        st.info("No track segments available.")
-                                                
-                                                # Store results
-                                                st.session_state.analysis_results['changepoints'] = changepoint_results
-                                            else:
-                                                st.error(f"Changepoint detection failed: {changepoint_results.get('error', 'Unknown error')}")
-                                        except ImportError:
-                                            st.error("Changepoint detection module not available.")
-                                        except Exception as e:
-                                            st.error(f"Error in changepoint detection: {str(e)}")
+                                            # Summary statistics
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Total Segments", len(segments_data))
+                                            with col2:
+                                                st.metric("Tracks Analyzed", segments_data['track_id'].nunique())
+                                            with col3:
+                                                st.metric("Avg Segment Length", f"{segments_data['duration'].mean():.1f} frames")
+                                        else:
+                                            st.info("No motion segments detected.")
+                                    
+                                    # Display changepoints
+                                    if 'changepoints' in changepoint_results:
+                                        st.subheader("Detected Changepoints")
+                                        cp_data = changepoint_results['changepoints']
+                                        if isinstance(cp_data, pd.DataFrame) and not cp_data.empty:
+                                            st.dataframe(cp_data)
+                                        else:
+                                            st.info("No changepoints detected.")
+                                    
+                                    # Display regime classification
+                                    if 'regime_classification' in changepoint_results:
+                                        regime_data = changepoint_results['regime_classification']
+                                        if isinstance(regime_data, dict) and regime_data.get('success'):
+                                            st.subheader("Motion Regime Classification")
+                                            if 'regime_counts' in regime_data:
+                                                st.bar_chart(regime_data['regime_counts'])
+                                    
+                                    # Store results in session state
+                                    if 'analysis_results' not in st.session_state:
+                                        st.session_state.analysis_results = {}
+                                    st.session_state.analysis_results['changepoints'] = changepoint_results
+                                else:
+                                    st.error(f"Changepoint detection failed: {changepoint_results.get('error', 'Unknown error')}")
+                        except ImportError:
+                            st.error("Changepoint detection module not available.")
+                        except Exception as e:
+                            st.error(f"Error in changepoint detection: {str(e)}")
+                            import traceback
+                            st.text(traceback.format_exc())
             else:
                 st.warning("Changepoint detection module is not available. Make sure the appropriate files are in the correct location.")
         
@@ -9584,104 +9631,545 @@ elif st.session_state.active_page == "Advanced Analysis":
                 else:
                     st.warning("No intensity channels detected in the data.")
                 
+                # Analysis parameters
+                st.subheader("Analysis Parameters")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    lag_range = st.slider(
+                        "Lag Range (frames)",
+                        min_value=1,
+                        max_value=20,
+                        value=5,
+                        help="Range of time lags for temporal correlation analysis"
+                    )
+                
+                with col2:
+                    min_track_length = st.number_input(
+                        "Minimum Track Length",
+                        min_value=5,
+                        max_value=100,
+                        value=10,
+                        help="Minimum number of frames for analysis"
+                    )
+                
                 # Run correlative analysis
                 if st.button("Run Correlative Analysis", type="primary"):
                     with st.spinner("Running correlative analysis..."):
                         try:
-                            from correlative_analysis import analyze_motion_intensity_correlation
+                            from correlative_analysis import CorrelativeAnalyzer
                             
-                            # Check if we have intensity data (any intensity column)
-                            intensity_columns = [col for col in st.session_state.tracks_data.columns 
-                                               if 'intensity' in col.lower() or 'ch' in col.lower()]
-                            if intensity_columns:
-                                corr_results = analyze_motion_intensity_correlation(
-                                    st.session_state.tracks_data,
-                                     pixel_size=units['pixel_size'],
-                                    frame_interval=units['frame_interval']
-                               )
+                            # Get track data
+                            tracks_df, has_data = get_track_data()
+                            if not has_data:
+                                st.error("No track data available")
+                            else:
+                                # Check if we have intensity data
+                                intensity_columns = [col for col in tracks_df.columns 
+                                                   if 'intensity' in col.lower() or 'ch' in col.lower()]
                                 
-                                if corr_results['success']:
+                                if not intensity_columns:
+                                    st.warning("No intensity channels detected in the data. Load data with intensity information.")
+                                else:
+                                    # Initialize analyzer
+                                    analyzer = CorrelativeAnalyzer()
+                                    
+                                    # Run analysis
+                                    corr_results = analyzer.analyze_intensity_motion_coupling(
+                                        tracks_df=tracks_df,
+                                        intensity_columns=intensity_columns,
+                                        lag_range=lag_range
+                                    )
+                                    
                                     st.success("✓ Correlative analysis completed")
                                     
-                                    # Display correlation results
-                                    if 'correlation_stats' in corr_results:
-                                        st.subheader("Correlation Statistics")
-                                        stats_data = corr_results['correlation_stats']
-                                        if isinstance(stats_data, dict):
-                                            stats_df = pd.DataFrame([stats_data])
-                                            st.dataframe(stats_df)
-                                        elif isinstance(stats_data, list) and stats_data:
-                                            stats_df = pd.DataFrame(stats_data)
-                                            st.dataframe(stats_df)
-                                        else:
-                                            st.info("No correlation statistics available.")
-                                    
-                                    # Display track coupling results with custom labels
-                                    if 'track_coupling' in corr_results:
+                                    # Display track coupling results
+                                    if 'track_coupling' in corr_results and corr_results['track_coupling']:
                                         st.subheader("Track Coupling Analysis")
-                                        coupling_data = corr_results['track_coupling']
-                                        if isinstance(coupling_data, list) and coupling_data:
-                                            coupling_df = pd.DataFrame(coupling_data)
-                                            # Replace channel names with custom labels in column headers
-                                            channel_labels = st.session_state.get('channel_labels', {})
-                                            if channel_labels:
-                                                new_columns = []
-                                                for col in coupling_df.columns:
-                                                    for original_channel, label in channel_labels.items():
-                                                        if original_channel in col and label:
-                                                            col = col.replace(original_channel, label)
-                                                    new_columns.append(col)
-                                                coupling_df.columns = new_columns
-                                            st.dataframe(coupling_df.head(20))
-                                        elif isinstance(coupling_data, pd.DataFrame) and not coupling_data.empty:
-                                            # Apply same labeling to DataFrame
-                                            channel_labels = st.session_state.get('channel_labels', {})
-                                            if channel_labels:
-                                                new_columns = []
-                                                for col in coupling_data.columns:
-                                                    for original_channel, label in channel_labels.items():
-                                                        if original_channel in col and label:
-                                                            col = col.replace(original_channel, label)
-                                                    new_columns.append(col)
-                                                coupling_data.columns = new_columns
-                                            st.dataframe(coupling_data.head(20))
-                                        else:
-                                            st.info("No track coupling data available.")
+                                        coupling_df = pd.DataFrame(corr_results['track_coupling'])
+                                        
+                                        # Apply custom channel labels if available
+                                        channel_labels = st.session_state.get('channel_labels', {})
+                                        if channel_labels:
+                                            new_columns = []
+                                            for col in coupling_df.columns:
+                                                new_col = col
+                                                for original_channel, label in channel_labels.items():
+                                                    if original_channel in col and label:
+                                                        new_col = new_col.replace(original_channel, label)
+                                                new_columns.append(new_col)
+                                            coupling_df.columns = new_columns
+                                        
+                                        st.dataframe(coupling_df.head(20))
+                                        
+                                        # Summary statistics
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric("Tracks Analyzed", len(coupling_df))
+                                        with col2:
+                                            corr_cols = [c for c in coupling_df.columns if 'correlation' in c.lower()]
+                                            if corr_cols:
+                                                mean_corr = coupling_df[corr_cols[0]].mean()
+                                                st.metric("Mean Correlation", f"{mean_corr:.3f}")
+                                        with col3:
+                                            st.metric("Intensity Channels", len(intensity_columns))
                                     
-                                    # Display intensity motion correlation with custom labels
-                                    if 'intensity_motion_correlation' in corr_results:
-                                        st.subheader("Intensity-Motion Correlation")
-                                        correlation_data = corr_results['intensity_motion_correlation']
-                                        if isinstance(correlation_data, dict):
-                                            # Use custom labels if available
-                                            channel_labels = st.session_state.get('channel_labels', {})
-                                            for channel, corr_value in correlation_data.items():
-                                                display_name = channel_labels.get(channel, channel)
-                                                if channel_labels.get(channel):
-                                                    label_text = f"Correlation ({display_name})"
-                                                    help_text = f"Original channel: {channel}"
-                                                else:
-                                                    label_text = f"Correlation ({channel})"
-                                                    help_text = None
-                                                st.metric(label_text, f"{corr_value:.4f}", help=help_text)
-                                        else:
-                                            st.info("No intensity-motion correlation available.")
+                                    # Display ensemble correlations
+                                    if 'ensemble_correlations' in corr_results and corr_results['ensemble_correlations']:
+                                        st.subheader("Ensemble Correlations")
+                                        
+                                        for channel, correlation in corr_results['ensemble_correlations'].items():
+                                            display_name = st.session_state.get('channel_labels', {}).get(channel, channel)
+                                            st.metric(f"{display_name}", f"{correlation:.3f}")
+                                    
+                                    # Display lag correlations
+                                    if 'lag_correlations' in corr_results and corr_results['lag_correlations']:
+                                        st.subheader("Temporal Cross-Correlation")
+                                        
+                                        import plotly.graph_objects as go
+                                        fig = go.Figure()
+                                        
+                                        for channel, lag_data in corr_results['lag_correlations'].items():
+                                            if lag_data:
+                                                display_name = st.session_state.get('channel_labels', {}).get(channel, channel)
+                                                fig.add_trace(go.Scatter(
+                                                    x=list(lag_data.keys()),
+                                                    y=list(lag_data.values()),
+                                                    mode='lines+markers',
+                                                    name=display_name
+                                                ))
+                                        
+                                        fig.update_layout(
+                                            title="Intensity-Motion Cross-Correlation vs Lag",
+                                            xaxis_title="Lag (frames)",
+                                            yaxis_title="Correlation Coefficient",
+                                            hovermode='x unified'
+                                        )
+                                        st.plotly_chart(fig, use_container_width=True)
                                     
                                     # Store results
+                                    if 'analysis_results' not in st.session_state:
+                                        st.session_state.analysis_results = {}
                                     st.session_state.analysis_results['correlative'] = corr_results
-                                else:
-                                    st.error(f"Correlative analysis failed: {corr_results.get('error', 'Unknown error')}")
-                            else:
-                                st.warning(f"Intensity data not available in tracks. Found columns: {list(st.session_state.tracks_data.columns)}. Please load data with intensity information.")
+                        
                         except ImportError:
                             st.error("Correlative analysis module not available.")
                         except Exception as e:
                             st.error(f"Error in correlative analysis: {str(e)}")
+                            import traceback
+                            st.text(traceback.format_exc())
             else:
                 st.warning("Correlative analysis module is not available. Make sure the appropriate files are in the correct location.")
         
-        # Microrheology Analysis tab
+        # Advanced Tracking tab
         with adv_tabs[3]:
+            st.header("Advanced Tracking")
+            st.write("Advanced particle tracking using Bayesian inference and particle filtering.")
+            
+            if ADVANCED_TRACKING_AVAILABLE:
+                # Tracking method selection
+                st.subheader("Tracking Method")
+                tracking_method = st.selectbox(
+                    "Select Method",
+                    ["Particle Filter", "Bayesian Detection Refinement"],
+                    help="Choose advanced tracking algorithm"
+                )
+                
+                if tracking_method == "Particle Filter":
+                    st.subheader("Particle Filter Parameters")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        n_particles = st.slider(
+                            "Number of Particles",
+                            min_value=50,
+                            max_value=1000,
+                            value=200,
+                            step=50,
+                            help="Number of particles in the filter"
+                        )
+                        
+                        motion_std = st.number_input(
+                            "Motion Noise (σ)",
+                            min_value=0.1,
+                            max_value=10.0,
+                            value=1.0,
+                            step=0.1,
+                            help="Standard deviation of motion model noise"
+                        )
+                    
+                    with col2:
+                        measurement_std = st.number_input(
+                            "Measurement Noise (σ)",
+                            min_value=0.1,
+                            max_value=10.0,
+                            value=0.5,
+                            step=0.1,
+                            help="Standard deviation of measurement noise"
+                        )
+                        
+                        max_distance = st.number_input(
+                            "Max Linking Distance (pixels)",
+                            min_value=1.0,
+                            max_value=50.0,
+                            value=10.0,
+                            step=1.0,
+                            help="Maximum distance for particle linking"
+                        )
+                    
+                    if st.button("Run Particle Filter Tracking"):
+                        with st.spinner("Running particle filter tracking..."):
+                            try:
+                                from advanced_tracking import ParticleFilter, AdvancedTracking
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    # Initialize tracking
+                                    tracker = AdvancedTracking()
+                                    
+                                    # Create detections from track data
+                                    detections = tracks_df[['frame', 'x', 'y']].copy()
+                                    
+                                    # Run particle filter
+                                    pf = ParticleFilter(
+                                        n_particles=n_particles,
+                                        motion_noise=motion_std,
+                                        measurement_noise=measurement_std
+                                    )
+                                    
+                                    # Track particles
+                                    results = tracker.track_with_particle_filter(
+                                        detections=detections,
+                                        n_particles=n_particles,
+                                        motion_std=motion_std,
+                                        measurement_std=measurement_std,
+                                        max_distance=max_distance
+                                    )
+                                    
+                                    if results.get('success', False):
+                                        st.success("✓ Particle filter tracking completed")
+                                        
+                                        # Display statistics
+                                        if 'statistics' in results:
+                                            st.subheader("Tracking Statistics")
+                                            stats = results['statistics']
+                                            
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Total Tracks", stats.get('n_tracks', 0))
+                                            with col2:
+                                                st.metric("Total Detections", stats.get('n_detections', 0))
+                                            with col3:
+                                                st.metric("Mean Track Length", f"{stats.get('mean_track_length', 0):.1f}")
+                                        
+                                        # Store results
+                                        if 'analysis_results' not in st.session_state:
+                                            st.session_state.analysis_results = {}
+                                        st.session_state.analysis_results['particle_filter'] = results
+                                        
+                                        # Display tracks if available
+                                        if 'tracks' in results:
+                                            st.subheader("Refined Tracks")
+                                            st.dataframe(results['tracks'].head(20))
+                                    else:
+                                        st.error(f"Tracking failed: {results.get('error', 'Unknown error')}")
+                            
+                            except ImportError:
+                                st.error("Advanced tracking module not available.")
+                            except Exception as e:
+                                st.error(f"Error in particle filter tracking: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
+                
+                else:  # Bayesian Detection Refinement
+                    st.subheader("Bayesian Refinement Parameters")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        prior_weight = st.slider(
+                            "Prior Weight",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.3,
+                            step=0.05,
+                            help="Weight of prior information in Bayesian update"
+                        )
+                        
+                        localization_precision = st.number_input(
+                            "Localization Precision (nm)",
+                            min_value=1.0,
+                            max_value=100.0,
+                            value=20.0,
+                            step=1.0,
+                            help="Expected localization precision in nanometers"
+                        )
+                    
+                    with col2:
+                        refinement_iterations = st.slider(
+                            "Refinement Iterations",
+                            min_value=1,
+                            max_value=10,
+                            value=3,
+                            help="Number of Bayesian refinement iterations"
+                        )
+                    
+                    if st.button("Run Bayesian Refinement"):
+                        with st.spinner("Running Bayesian detection refinement..."):
+                            try:
+                                from advanced_tracking import bayesian_detection_refinement
+                                
+                                # Get track data
+                                tracks_df, has_data = get_track_data()
+                                if not has_data:
+                                    st.error("No track data available")
+                                else:
+                                    # Create detections dataframe
+                                    detections = tracks_df[['frame', 'x', 'y']].copy()
+                                    
+                                    # Run refinement
+                                    refined_detections = bayesian_detection_refinement(
+                                        detections=detections,
+                                        prior_weight=prior_weight,
+                                        localization_precision=localization_precision,
+                                        n_iterations=refinement_iterations
+                                    )
+                                    
+                                    st.success("✓ Bayesian refinement completed")
+                                    
+                                    # Display refined detections
+                                    st.subheader("Refined Detections")
+                                    st.dataframe(refined_detections.head(20))
+                                    
+                                    # Calculate improvement statistics
+                                    if 'x_refined' in refined_detections.columns:
+                                        dx = refined_detections['x'] - refined_detections['x_refined']
+                                        dy = refined_detections['y'] - refined_detections['y_refined']
+                                        displacement = np.sqrt(dx**2 + dy**2)
+                                        
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric("Mean Adjustment", f"{displacement.mean():.3f} px")
+                                        with col2:
+                                            st.metric("Max Adjustment", f"{displacement.max():.3f} px")
+                                        with col3:
+                                            st.metric("Detections Refined", len(refined_detections))
+                                    
+                                    # Store results
+                                    if 'analysis_results' not in st.session_state:
+                                        st.session_state.analysis_results = {}
+                                    st.session_state.analysis_results['bayesian_refinement'] = {
+                                        'refined_detections': refined_detections,
+                                        'parameters': {
+                                            'prior_weight': prior_weight,
+                                            'localization_precision': localization_precision,
+                                            'refinement_iterations': refinement_iterations
+                                        }
+                                    }
+                            
+                            except ImportError:
+                                st.error("Advanced tracking module not available.")
+                            except Exception as e:
+                                st.error(f"Error in Bayesian refinement: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
+            else:
+                st.warning("Advanced tracking module is not available.")
+        
+        # Intensity Analysis tab
+        with adv_tabs[4]:
+            st.header("Intensity Analysis")
+            st.write("Analyze intensity-motion correlations and intensity-based behavior classification.")
+            
+            if INTENSITY_ANALYSIS_AVAILABLE:
+                # Get track data
+                tracks_df, has_data = get_track_data()
+                
+                if not has_data:
+                    st.warning("No track data available. Please load data first.")
+                else:
+                    # Detect intensity channels
+                    intensity_columns = [col for col in tracks_df.columns 
+                                       if 'intensity' in col.lower() or 'ch' in col.lower()]
+                    
+                    if not intensity_columns:
+                        st.warning("No intensity channels detected. Load data with intensity information.")
+                    else:
+                        st.success(f"Found {len(intensity_columns)} intensity channel(s)")
+                        
+                        # Analysis selection
+                        st.subheader("Analysis Type")
+                        analysis_type = st.selectbox(
+                            "Select Analysis",
+                            ["Intensity-Movement Correlation", "Intensity Profiles", "Intensity Behavior Classification"],
+                            help="Choose intensity analysis method"
+                        )
+                        
+                        if analysis_type == "Intensity-Movement Correlation":
+                            st.subheader("Correlation Parameters")
+                            
+                            selected_channels = st.multiselect(
+                                "Select Intensity Channels",
+                                intensity_columns,
+                                default=intensity_columns[:2] if len(intensity_columns) >= 2 else intensity_columns
+                            )
+                            
+                            if st.button("Run Intensity-Movement Correlation"):
+                                with st.spinner("Analyzing intensity-movement correlation..."):
+                                    try:
+                                        from intensity_analysis import correlate_intensity_movement, create_intensity_movement_plots
+                                        
+                                        units = get_units()
+                                        
+                                        # Run correlation analysis
+                                        results = correlate_intensity_movement(
+                                            tracks_df=tracks_df,
+                                            intensity_channels=selected_channels,
+                                            pixel_size=units.get('pixel_size', 0.1),
+                                            frame_interval=units.get('frame_interval', 0.1)
+                                        )
+                                        
+                                        if results.get('success', True):
+                                            st.success("✓ Correlation analysis completed")
+                                            
+                                            # Display correlation statistics
+                                            if 'correlation_coefficients' in results:
+                                                st.subheader("Correlation Coefficients")
+                                                corr_df = pd.DataFrame([results['correlation_coefficients']])
+                                                st.dataframe(corr_df)
+                                            
+                                            # Create and display plots
+                                            plots = create_intensity_movement_plots(results)
+                                            
+                                            if 'correlation_heatmap' in plots:
+                                                st.subheader("Correlation Heatmap")
+                                                st.plotly_chart(plots['correlation_heatmap'], use_container_width=True)
+                                            
+                                            if 'time_series' in plots:
+                                                st.subheader("Time Series")
+                                                st.plotly_chart(plots['time_series'], use_container_width=True)
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['intensity_movement'] = results
+                                        else:
+                                            st.error(f"Analysis failed: {results.get('error', 'Unknown error')}")
+                                    
+                                    except Exception as e:
+                                        st.error(f"Error in intensity-movement correlation: {str(e)}")
+                                        import traceback
+                                        st.text(traceback.format_exc())
+                        
+                        elif analysis_type == "Intensity Profiles":
+                            st.subheader("Profile Parameters")
+                            
+                            normalize = st.checkbox(
+                                "Normalize Intensities",
+                                value=True,
+                                help="Normalize intensities to [0, 1] range"
+                            )
+                            
+                            if st.button("Analyze Intensity Profiles"):
+                                with st.spinner("Analyzing intensity profiles..."):
+                                    try:
+                                        from intensity_analysis import analyze_intensity_profiles
+                                        
+                                        units = get_units()
+                                        
+                                        results = analyze_intensity_profiles(
+                                            tracks_df=tracks_df,
+                                            intensity_channels=intensity_columns,
+                                            normalize=normalize
+                                        )
+                                        
+                                        if results.get('success', True):
+                                            st.success("✓ Profile analysis completed")
+                                            
+                                            # Display profile statistics
+                                            if 'profile_stats' in results:
+                                                st.subheader("Profile Statistics")
+                                                st.dataframe(pd.DataFrame(results['profile_stats']))
+                                            
+                                            # Display profiles
+                                            if 'profiles' in results:
+                                                st.subheader("Intensity Profiles")
+                                                st.line_chart(results['profiles'])
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['intensity_profiles'] = results
+                                        else:
+                                            st.error(f"Analysis failed: {results.get('error', 'Unknown error')}")
+                                    
+                                    except Exception as e:
+                                        st.error(f"Error in intensity profile analysis: {str(e)}")
+                                        import traceback
+                                        st.text(traceback.format_exc())
+                        
+                        else:  # Intensity Behavior Classification
+                            st.subheader("Classification Parameters")
+                            
+                            n_clusters = st.slider(
+                                "Number of Behavior Classes",
+                                min_value=2,
+                                max_value=5,
+                                value=3,
+                                help="Number of distinct intensity behaviors to identify"
+                            )
+                            
+                            if st.button("Classify Intensity Behavior"):
+                                with st.spinner("Classifying intensity behavior..."):
+                                    try:
+                                        from intensity_analysis import classify_intensity_behavior
+                                        
+                                        results = classify_intensity_behavior(
+                                            tracks_df=tracks_df,
+                                            intensity_channels=intensity_columns,
+                                            n_clusters=n_clusters
+                                        )
+                                        
+                                        if results.get('success', True):
+                                            st.success("✓ Classification completed")
+                                            
+                                            # Display classification results
+                                            if 'classified_tracks' in results:
+                                                st.subheader("Classified Tracks")
+                                                classified_df = results['classified_tracks']
+                                                st.dataframe(classified_df.head(20))
+                                                
+                                                # Show distribution
+                                                if 'cluster' in classified_df.columns:
+                                                    st.subheader("Behavior Distribution")
+                                                    cluster_counts = classified_df['cluster'].value_counts()
+                                                    st.bar_chart(cluster_counts)
+                                            
+                                            # Display cluster centers
+                                            if 'cluster_centers' in results:
+                                                st.subheader("Cluster Centers")
+                                                st.dataframe(pd.DataFrame(results['cluster_centers']))
+                                            
+                                            # Store results
+                                            if 'analysis_results' not in st.session_state:
+                                                st.session_state.analysis_results = {}
+                                            st.session_state.analysis_results['intensity_classification'] = results
+                                        else:
+                                            st.error(f"Classification failed: {results.get('error', 'Unknown error')}")
+                                    
+                                    except Exception as e:
+                                        st.error(f"Error in intensity behavior classification: {str(e)}")
+                                        import traceback
+                                        st.text(traceback.format_exc())
+            else:
+                st.warning("Intensity analysis module is not available.")
+        
+        # Microrheology Analysis tab
+        with adv_tabs[5]:
             st.header("Microrheology Analysis")
             
             # Parameters
@@ -9888,7 +10376,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.subheader("Frequency Sweep Data")
                             st.dataframe(results['frequency_sweep'])
 
-            with adv_tabs[4]:
+            with adv_tabs[6]:
                 st.header("Ornstein-Uhlenbeck Analysis")
                 st.write("Analyze tracks assuming an Ornstein-Uhlenbeck process, which models a particle in a harmonic potential.")
 
