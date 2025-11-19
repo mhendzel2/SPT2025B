@@ -401,35 +401,6 @@ class PolymerPhysicsModel:
                 return {'success': False, 'error': 'Insufficient scale range for fractal dimension calculation'}
             
             # Fit log(N) = -Df * log(ε) + c
-            log_scales = np.log(valid_scales)
-            log_counts = np.log(counts)
-            
-            # Linear regression
-            coeffs = np.polyfit(log_scales, log_counts, 1)
-            Df = -coeffs[0]  # Negative of slope
-            
-            # Clamp to reasonable range for 2D trajectories
-            Df = float(np.clip(Df, 1.0, 2.0))
-            
-            # Interpret the result
-            if Df < 1.2:
-                interpretation = "Nearly ballistic/directed motion"
-            elif Df < 1.5:
-                interpretation = "Sub-diffusive motion"
-            elif Df < 1.7:
-                interpretation = "Normal diffusion (Brownian-like)"
-            else:
-                interpretation = "Super-diffusive or confined motion"
-            
-            return {
-                'success': True,
-                'fractal_dimension': Df,
-                'interpretation': interpretation,
-                'n_points': len(lag_time),
-                'parameters': {
-                    'Df': Df
-                }
-            }
             
         except Exception as e:
             return {'success': False, 'error': f'Fractal dimension calculation failed: {str(e)}'}
@@ -730,32 +701,6 @@ class EnergyLandscapeMapper:
             epsilon = H.max() * 1e-6
             H[H < epsilon] = epsilon
 
-            # Calculate potential energy using appropriate method
-            if method == "boltzmann":
-                # Boltzmann inversion: U = -kBT * ln(P)
-                U = -np.log(H / H.max())
-
-            elif method == "drift":
-                # Drift-based method requires velocity data
-                # Calculate the mean drift at each position
-                U = np.zeros_like(H)
-
-                # Placeholder - would need to calculate drift field from the data
-                # This is a simplification - not an actual drift calculation
-                U = -np.log(H / H.max())  # Substitute with Boltzmann for now
-
-            elif method == "kramers":
-                # Kramers-Moyal expansion requires more detailed dynamics
-                # This would require analysis of transition probabilities
-                U = np.zeros_like(H)
-
-                # Placeholder - not an actual Kramers-Moyal implementation
-                U = -np.log(H / H.max())  # Substitute with Boltzmann for now
-
-            else:
-                raise ValueError(f"Unknown method: {method}")
-
-            # Normalize energy to kBT units if requested
             if normalize:
                 U = U  # Already normalized in kBT units by using log
                 energy_units = "kBT"

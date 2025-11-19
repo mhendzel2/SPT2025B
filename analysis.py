@@ -19,138 +19,92 @@ import scipy.optimize as optimize
 from scipy.stats import norm, linregress, pearsonr
 from scipy import spatial
 from scipy.spatial import distance
-try:
-    from sklearn.cluster import DBSCAN, KMeans, OPTICS
-    from sklearn.mixture import GaussianMixture
-    from sklearn.neighbors import KDTree, NearestNeighbors
-except Exception:  # Optional dependencies
-    DBSCAN = KMeans = OPTICS = GaussianMixture = KDTree = NearestNeighbors = None
+from sklearn.cluster import DBSCAN, KMeans, OPTICS
+from sklearn.mixture import GaussianMixture
+from sklearn.neighbors import KDTree, NearestNeighbors
 from scipy.cluster.hierarchy import fcluster, linkage
-
-# Import consolidated MSD calculation (single source of truth)
-from msd_calculation import calculate_msd, calculate_msd_ensemble, fit_msd_linear
 
 
 # --- Diffusion Analysis ---
-# Note: calculate_msd is now imported from msd_calculation.py (consolidated module)
 
-def calculate_velocity(tracks_df: pd.DataFrame, 
-                      pixel_size: float = 1.0, 
-                      frame_interval: float = 1.0,
-                      min_track_length: int = 5,
-                      window_size: int = 1) -> pd.DataFrame:
+def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
+                 frame_interval: float = 1.0, min_track_length: int = 5) -> pd.DataFrame:
     """
-    Calculate velocity for particle tracks.
-
+    Calculate mean squared displacement (MSD) for all tracks.
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
-        DataFrame containing track data with columns 'track_id', 'frame', 'x', 'y'
-    pixel_size : float, default=1.0
+        Track data in standard format with track_id, frame, x, y columns
+    max_lag : int
+        Maximum lag time (in frames) for MSD calculation
+    pixel_size : float
         Pixel size in micrometers
-    frame_interval : float, default=1.0
-        Frame interval in seconds
-    min_track_length : int, default=5
+    frame_interval : float
+        Time between frames in seconds
+    min_track_length : int
         Minimum track length to include in analysis
-    window_size : int, default=1
-        Window size for velocity calculation (1 = instantaneous velocity)
-
+        
     Returns
     -------
     pd.DataFrame
-        Velocity data with columns 'track_id', 'frame', 'vx', 'vy', 'speed', 'direction'
+        DataFrame with MSD values for each track at different lag times (columns: track_id, lag_time, msd, n_points)
     """
-    # Validate input
-    if tracks_df is None or tracks_df.empty:
-        return pd.DataFrame(columns=['track_id', 'frame', 'vx', 'vy', 'speed', 'direction'])
-
-    required_columns = ['track_id', 'frame', 'x', 'y']
-    if not all(col in tracks_df.columns for col in required_columns):
-        return pd.DataFrame(columns=['track_id', 'frame', 'vx', 'vy', 'speed', 'direction'])
-
-    velocity_results = []
-
     # Group by track_id
-    for track_id, track_data in tracks_df.groupby('track_id'):
-        # Sort by frame
-        track = track_data.sort_values('frame').copy()
-
+    grouped = tracks_df.groupby('track_id')
+    
+    # Initialize results dictionary
+    msd_results = {'track_id': [], 'lag_time': [], 'msd': [], 'n_points': []}
+    
+    for track_id, track_data in grouped:
         # Skip short tracks
-        if len(track) < min_track_length:
+        if len(track_data) < min_track_length:
             continue
-
-        # Convert to physical units
-        x = track['x'].values * pixel_size
-        y = track['y'].values * pixel_size
-        frames = track['frame'].values
-
-        # Calculate velocities with specified window size
-        for i in range(window_size, len(track)):
-            # Calculate displacement over window
-            dx = x[i] - x[i - window_size]
-            dy = y[i] - y[i - window_size]
             
-            # Calculate time interval
-            dt = (frames[i] - frames[i - window_size]) * frame_interval
+        # Sort by frame
+        track_data = track_data.sort_values('frame')
+        
+        # Extract positions
+        x = track_data['x'].values * pixel_size
+        y = track_data['y'].values * pixel_size
+        frames = track_data['frame'].values
+        
+        # Calculate MSD for each lag time
+        for lag in range(1, min(max_lag + 1, len(track_data))):
+            # Calculate squared displacements
+            sd_list = []
+            lag_time_list = []
             
-            if dt > 0:
-                # Calculate velocity components
-                vx = dx / dt
-                vy = dy / dt
+            for i in range(len(track_data) - lag):
+                dx = x[i + lag] - x[i]
+                dy = y[i + lag] - y[i]
+                sd = dx**2 + dy**2
+                dt = (frames[i + lag] - frames[i]) * frame_interval
                 
-                # Calculate speed and direction
-                speed = np.sqrt(vx**2 + vy**2)
-                direction = np.arctan2(vy, vx)
-                
-                velocity_results.append({
-                    'track_id': track_id,
-                    'frame': frames[i],
-                    'vx': vx,
-                    'vy': vy,
-                    'speed': speed,
-                    'direction': direction
-                })
+                sd_list.append(sd)
+                lag_time_list.append(dt)
+            
+            if sd_list:
+                # Store results
+                msd_results['track_id'].append(track_id)
+                # Use actual time difference in seconds
+                mean_lag_time = np.mean(lag_time_list)
+                msd_results['lag_time'].append(mean_lag_time)
+                msd_results['msd'].append(np.mean(sd_list))
+                msd_results['n_points'].append(len(sd_list))
+    
+    # Convert to DataFrame
+    msd_df = pd.DataFrame(msd_results)
+    
+    return msd_df
 
-    return pd.DataFrame(velocity_results)
-
-
-def _calculate_goodness_of_fit(y_true, y_pred, n_params):
-    """Calculate R-squared, AIC, and BIC."""
-    # R-squared
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-
-    # AIC and BIC
-    n_samples = len(y_true)
-    rss = np.sum((y_true - y_pred) ** 2)
-    if rss == 0:
-        log_likelihood = 0
-    else:
-        log_likelihood = -n_samples / 2 * np.log(2 * np.pi) - n_samples / 2 * np.log(rss / n_samples) - n_samples / 2
-
-    aic = 2 * n_params - 2 * log_likelihood
-    bic = n_params * np.log(n_samples) - 2 * log_likelihood
-
-    return {'r_squared': r_squared, 'aic': aic, 'bic': bic}
-
-def _calculate_confidence_interval(value, std_err, n_samples, alpha=0.95):
-    """Calculate the confidence interval for a given value."""
-    if n_samples < 2 or std_err is np.nan:
-        return np.nan, np.nan
-
-    from scipy.stats import t
-    t_val = t.ppf((1 + alpha) / 2, n_samples - 1)
-    margin_of_error = t_val * std_err
-    return value - margin_of_error, value + margin_of_error
-
-def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0,
-                     frame_interval: float = 1.0, min_track_length: int = 5,
-                     fit_method: str = 'linear', analyze_anomalous: bool = True,
+def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
+                     frame_interval: float = 1.0, min_track_length: int = 5, 
+                     fit_method: str = 'linear', analyze_anomalous: bool = True, 
                      check_confinement: bool = True) -> Dict[str, Any]:
     """
     Perform comprehensive diffusion analysis on track data.
-
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
@@ -169,7 +123,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
         Whether to analyze anomalous diffusion
     check_confinement : bool
         Whether to check for confined diffusion
-
+        
     Returns
     -------
     dict
@@ -177,20 +131,20 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
     """
     # Calculate MSD
     msd_df = calculate_msd(
-        tracks_df,
-        max_lag=max_lag,
-        pixel_size=pixel_size,
-        frame_interval=frame_interval,
+        tracks_df, 
+        max_lag=max_lag, 
+        pixel_size=pixel_size, 
+        frame_interval=frame_interval, 
         min_track_length=min_track_length
     )
-
+    
     if msd_df.empty:
         return {
             'success': False,
             'error': 'No tracks of sufficient length for analysis',
             'msd_data': msd_df
         }
-
+    
     # Initialize results dict
     results = {
         'success': True,
@@ -198,80 +152,92 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
         'track_results': [],
         'ensemble_results': {}
     }
-
+    
     # Analyze each track individually
     track_results = []
-
+    
     for track_id, track_msd in msd_df.groupby('track_id'):
         # Sort by lag time
         track_msd = track_msd.sort_values('lag_time')
-
+        
         # Extract lag times and MSD values
         lag_times = track_msd['lag_time'].values
         msd_values = track_msd['msd'].values
-
+        
         # Initialize track result dict
         track_result = {'track_id': track_id}
-
+        
         # Standard diffusion coefficient (short time)
         # Use only the first few points for initial diffusion coefficient
         short_lag_cutoff = min(4, len(lag_times))
-
+        
         # Linear fit: MSD = 4*D*t (2D) or MSD = 6*D*t (3D)
         # Here we use 2D (4*D*t)
         if fit_method == 'linear':
             # Linear fit
             if short_lag_cutoff >= 2:
                 slope, intercept, r_value, p_value, std_err = linregress(
-                    lag_times[:short_lag_cutoff],
+                    lag_times[:short_lag_cutoff], 
                     msd_values[:short_lag_cutoff]
                 )
                 D_short = slope / 4  # µm²/s
                 D_err = std_err / 4
-                y_pred = slope * lag_times[:short_lag_cutoff] + intercept
-                gof = _calculate_goodness_of_fit(msd_values[:short_lag_cutoff], y_pred, 2)
-                track_result.update(gof)
             else:
-                D_short, D_err = np.nan, np.nan
-
-        elif fit_method == 'weighted' or fit_method == 'nonlinear':
+                D_short = np.nan
+                D_err = np.nan
+                
+        elif fit_method == 'weighted':
             if short_lag_cutoff >= 2:
                 def linear_func_with_offset(t, D, offset):
                     return 4 * D * t + offset
                 try:
-                    if fit_method == 'weighted':
-                        sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
-                        sigma_vals[sigma_vals == 0] = 1e-9
-                    else:
-                        sigma_vals = None
-
+                    # Weights inversely proportional to lag time (variance ~ t)
+                    # So, sigma ~ sqrt(t) for curve_fit
+                    sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
+                    # Ensure sigma_vals are not zero
+                    sigma_vals[sigma_vals == 0] = 1e-9
+                    
                     popt, pcov = optimize.curve_fit(
-                        linear_func_with_offset,
-                        lag_times[:short_lag_cutoff],
+                        linear_func_with_offset, 
+                        lag_times[:short_lag_cutoff], 
                         msd_values[:short_lag_cutoff],
                         sigma=sigma_vals,
-                        absolute_sigma=True if sigma_vals is not None else False
+                        absolute_sigma=True
                     )
-                    D_short = popt[0]
+                    D_short = popt[0]  # µm²/s
                     D_err = np.sqrt(pcov[0, 0])
-                    y_pred = linear_func_with_offset(lag_times[:short_lag_cutoff], *popt)
-                    gof = _calculate_goodness_of_fit(msd_values[:short_lag_cutoff], y_pred, 2)
-                    track_result.update(gof)
                 except (RuntimeError, ValueError):
-                    D_short, D_err = np.nan, np.nan
+                    D_short = np.nan
+                    D_err = np.nan
             else:
-                D_short, D_err = np.nan, np.nan
-        else:
-            D_short, D_err = np.nan, np.nan
-
+                D_short = np.nan
+                D_err = np.nan
+                
+        elif fit_method == 'nonlinear':
+            # Nonlinear fit for MSD = 4*D*t + offset
+            if short_lag_cutoff >= 3:
+                def msd_func(t, D, offset):
+                    return 4 * D * t + offset
+                
+                try:
+                    popt, pcov = optimize.curve_fit(
+                        msd_func, 
+                        lag_times[:short_lag_cutoff], 
+                        msd_values[:short_lag_cutoff]
+                    )
+                    D_short = popt[0]  # µm²/s
+                    D_err = np.sqrt(pcov[0, 0])
+                except:
+                    D_short = np.nan
+                    D_err = np.nan
+            else:
+                D_short = np.nan
+                D_err = np.nan
+        
         # Store diffusion coefficient results
         track_result['diffusion_coefficient'] = D_short
         track_result['diffusion_coefficient_error'] = D_err
-        if not np.isnan(D_short) and not np.isnan(D_err):
-            ci_lower, ci_upper = _calculate_confidence_interval(D_short, D_err, short_lag_cutoff)
-            track_result['diffusion_coefficient_ci_lower'] = ci_lower
-            track_result['diffusion_coefficient_ci_upper'] = ci_upper
-
+        
         # Analyze anomalous diffusion
         if analyze_anomalous and len(lag_times) >= 5:
             # Fit MSD = c * t^alpha using log-log
@@ -279,29 +245,25 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             valid_indices = (lag_times > 0) & (msd_values > 0)
             log_lag_valid = np.log(lag_times[valid_indices])
             log_msd_valid = np.log(msd_values[valid_indices])
-
+            
             if len(log_lag_valid) >= 2:  # Need at least 2 points for linregress
                 try:
                     slope, intercept, r_value, p_value, std_err_slope = linregress(log_lag_valid, log_msd_valid)
-
+                    
                     # Alpha is the slope in log-log space
                     alpha = slope
-
+                    alpha_err = std_err_slope
+                    
                     # Categorize diffusion type
                     diffusion_type = 'normal'
                     if alpha < 0.9:
                         diffusion_type = 'subdiffusive'
                     elif alpha > 1.1:
                         diffusion_type = 'superdiffusive'
-
+                        
                     track_result['alpha'] = alpha
-                    track_result['alpha_error'] = std_err_slope
+                    track_result['alpha_error'] = alpha_err
                     track_result['diffusion_type'] = diffusion_type
-
-                    ci_lower, ci_upper = _calculate_confidence_interval(alpha, std_err_slope, len(log_lag_valid))
-                    track_result['alpha_ci_lower'] = ci_lower
-                    track_result['alpha_ci_upper'] = ci_upper
-
                 except ValueError:
                     track_result['alpha'] = np.nan
                     track_result['alpha_error'] = np.nan
@@ -310,26 +272,26 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                 track_result['alpha'] = np.nan
                 track_result['alpha_error'] = np.nan
                 track_result['diffusion_type'] = 'unknown'
-
+        
         # Check for confined diffusion
         if check_confinement and len(lag_times) >= 8:
             # Look for plateau in MSD curve
             # Simple approach: check if MSD stops increasing with lag time
-
+            
             # Calculate slope at different regions of the curve
             early_region = min(3, len(lag_times)-1)
             late_region = min(8, len(lag_times))
-
+            
             early_slope, _, _, _, _ = linregress(
-                lag_times[:early_region],
+                lag_times[:early_region], 
                 msd_values[:early_region]
             )
-
+            
             late_slope, _, _, _, _ = linregress(
-                lag_times[early_region:late_region],
+                lag_times[early_region:late_region], 
                 msd_values[early_region:late_region]
             )
-
+            
             # Check for significant decrease in slope
             if late_slope < 0.3 * early_slope:
                 confined = True
@@ -339,15 +301,15 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             else:
                 confined = False
                 confinement_radius = np.nan
-
+                
             track_result['confined'] = confined
             track_result['confinement_radius'] = confinement_radius
-
+            
         track_results.append(track_result)
-
+    
     # Combine track results
     results['track_results'] = pd.DataFrame(track_results)
-
+    
     # Ensemble statistics
     if not results['track_results'].empty:
         # Ensemble averages
@@ -358,57 +320,30 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
             'n_tracks': len(results['track_results'])
         }
         
-        # Add top-level keys for display compatibility
-        results['diffusion_coefficient'] = results['track_results']['diffusion_coefficient'].mean()
-        results['n_tracks'] = len(results['track_results'])
-
-        if analyze_anomalous and 'alpha' in results['track_results'].columns:
+        if analyze_anomalous:
             results['ensemble_results']['mean_alpha'] = results['track_results']['alpha'].mean()
             results['ensemble_results']['median_alpha'] = results['track_results']['alpha'].median()
             results['ensemble_results']['std_alpha'] = results['track_results']['alpha'].std()
             
-            # Add top-level alpha for display
-            results['alpha'] = results['track_results']['alpha'].mean()
-
             # Count diffusion types
-            if 'diffusion_type' in results['track_results'].columns:
-                type_counts = results['track_results']['diffusion_type'].value_counts()
-                for diff_type in ['normal', 'subdiffusive', 'superdiffusive', 'unknown']:
-                    if diff_type in type_counts:
-                        results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
-                        results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
-                    else:
-                        results['ensemble_results'][f'{diff_type}_count'] = 0
-                        results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
-
-        if check_confinement and 'confined' in results['track_results'].columns:
+            type_counts = results['track_results']['diffusion_type'].value_counts()
+            for diff_type in ['normal', 'subdiffusive', 'superdiffusive']:
+                if diff_type in type_counts:
+                    results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
+                    results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
+                else:
+                    results['ensemble_results'][f'{diff_type}_count'] = 0
+                    results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
+        
+        if check_confinement:
             confined_tracks = results['track_results'][results['track_results']['confined'] == True]
             results['ensemble_results']['confined_count'] = len(confined_tracks)
-            if len(results['track_results']) > 0:
-                results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
-            else:
-                results['ensemble_results']['confined_fraction'] = 0
-
+            results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
+            
             if len(confined_tracks) > 0:
                 results['ensemble_results']['mean_confinement_radius'] = confined_tracks['confinement_radius'].mean()
                 results['ensemble_results']['median_confinement_radius'] = confined_tracks['confinement_radius'].median()
-                # Add top-level confinement_radius for display
-                results['confinement_radius'] = confined_tracks['confinement_radius'].mean()
-        
-        # Calculate fitting quality (R²) from track results
-        if 'r_squared' in results['track_results'].columns:
-            # Use mean R² across all tracks as overall fitting quality
-            results['fitting_quality'] = results['track_results']['r_squared'].mean()
-        elif 'chi_squared' in results['track_results'].columns:
-            # If we have chi-squared, convert to R² equivalent
-            # Lower chi-squared means better fit
-            mean_chi_sq = results['track_results']['chi_squared'].mean()
-            # Approximate R² from chi-squared (this is a rough estimate)
-            results['fitting_quality'] = max(0, 1 - mean_chi_sq / (mean_chi_sq + 1))
-        else:
-            # Default to a reasonable value if no fit quality metric available
-            results['fitting_quality'] = 0.85
-
+    
     return results
 
 
@@ -555,17 +490,53 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
             # Calculate velocity autocorrelation
             max_lag = min(10, len(vx) - 1)
             vel_autocorr = []
+            vel_autocorr_raw = [] # New: Raw physical VACF
+
+            # Pre-calculate variances for normalization
+            vx_std = np.std(vx)
+            vy_std = np.std(vy)
+            
+            # Check for zero variance (stationary particle) to avoid division by zero
+            if vx_std == 0: vx_std = 1e-10
+            if vy_std == 0: vy_std = 1e-10
 
             for lag in range(max_lag + 1):
                 if lag == 0:
-                    vel_autocorr.append(1.0)  # Normalized autocorrelation at lag 0
+                    vel_autocorr.append(1.0)
+                    # Raw VACF at lag 0 is mean squared velocity (approx)
+                    raw_corr = np.mean(vx**2 + vy**2)
+                    vel_autocorr_raw.append(raw_corr)
                 else:
                     # Calculate correlation between v(t) and v(t+lag)
-                    corr_x = np.corrcoef(vx[:-lag], vx[lag:])[0, 1]
-                    corr_y = np.corrcoef(vy[:-lag], vy[lag:])[0, 1]
-                    # Average of x and y components
-                    avg_corr = (corr_x + corr_y) / 2
+                    # 1. Normalized (Pearson) - existing metric
+                    # We need to handle edge cases where slice has 0 variance
+                    vx_slice1 = vx[:-lag]
+                    vx_slice2 = vx[lag:]
+                    vy_slice1 = vy[:-lag]
+                    vy_slice2 = vy[lag:]
+                    
+                    if len(vx_slice1) > 1:
+                        if np.std(vx_slice1) > 0 and np.std(vx_slice2) > 0:
+                            corr_x = np.corrcoef(vx_slice1, vx_slice2)[0, 1]
+                        else:
+                            corr_x = 0.0
+                            
+                        if np.std(vy_slice1) > 0 and np.std(vy_slice2) > 0:
+                            corr_y = np.corrcoef(vy_slice1, vy_slice2)[0, 1]
+                        else:
+                            corr_y = 0.0
+                            
+                        avg_corr = (corr_x + corr_y) / 2
+                    else:
+                        avg_corr = 0.0
+                        
                     vel_autocorr.append(avg_corr)
+                    
+                    # 2. Raw physical VACF: <v(t) . v(t+tau)>
+                    # Dot product of velocity vectors at time t and t+tau
+                    dot_products = vx_slice1 * vx_slice2 + vy_slice1 * vy_slice2
+                    raw_corr = np.mean(dot_products)
+                    vel_autocorr_raw.append(raw_corr)
 
             # Calculate correlation time (lag where autocorr drops below 1/e)
             corr_threshold = 1/np.e
@@ -577,6 +548,7 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
                 corr_time = max_lag * frame_interval
 
             track_result['velocity_autocorr'] = vel_autocorr
+            track_result['velocity_autocorr_raw'] = vel_autocorr_raw # Store raw values
             track_result['correlation_time'] = corr_time
 
         # Motion classification
@@ -681,16 +653,16 @@ def analyze_motion(tracks_df: pd.DataFrame, window_size: int = 5,
 
 # --- Clustering Analysis ---
 
-def analyze_clustering(tracks_df: pd.DataFrame,
-                      method: str = 'DBSCAN',
-                      epsilon: float = 0.5,
+def analyze_clustering(tracks_df: pd.DataFrame, 
+                      method: str = 'DBSCAN', 
+                      epsilon: float = 0.5, 
                       min_samples: int = 3,
-                      track_clusters: bool = True,
+                      track_clusters: bool = True, 
                       analyze_dynamics: bool = True,
                       pixel_size: float = 1.0) -> Dict[str, Any]:
     """
     Perform spatial clustering analysis on particles.
-
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
@@ -707,7 +679,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
         Whether to analyze cluster dynamics
     pixel_size : float
         Pixel size in micrometers
-
+        
     Returns
     -------
     dict
@@ -717,22 +689,22 @@ def analyze_clustering(tracks_df: pd.DataFrame,
     tracks_df_um = tracks_df.copy()
     tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
     tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
+    
     # Get unique frames
     frames = sorted(tracks_df_um['frame'].unique())
-
+    
     # Initialize results
     frame_results = []
     all_clusters = []
-
+    
     # Analyze each frame
     for frame in frames:
         # Get particles in this frame
         frame_data = tracks_df_um[tracks_df_um['frame'] == frame]
-
+        
         # Create default empty structures
         cluster_stats = []
-
+        
         if len(frame_data) < min_samples:
             # Not enough points for clustering, but still record frame result with zero clusters
             frame_result = {
@@ -745,45 +717,38 @@ def analyze_clustering(tracks_df: pd.DataFrame,
             }
             frame_results.append(frame_result)
             continue
-
+            
         # Get coordinates
         coords = frame_data[['x', 'y']].values
-
+        
         # Apply clustering based on method
         if method == 'DBSCAN':
             clustering = DBSCAN(eps=epsilon, min_samples=min_samples)
             labels = clustering.fit_predict(coords)
-
+            
         elif method == 'OPTICS':
             clustering = OPTICS(min_samples=min_samples, max_eps=epsilon)
             labels = clustering.fit_predict(coords)
-
+            
         elif method == 'Hierarchical':
             from scipy.cluster.hierarchy import fcluster, linkage
-            from scipy.spatial.distance import pdist
-
+            
             # Perform hierarchical clustering
             Z = linkage(coords, method='ward')
-
-            # Use distance threshold for noise detection
-            distances = pdist(coords)
-            if len(distances) > 0:
-                # Use 75th percentile of distances as threshold
-                threshold = np.percentile(distances, 75)
-                labels = fcluster(Z, threshold, criterion='distance') - 1
-            else:
-                labels = np.array([0] * len(coords))
-
+            labels = fcluster(Z, t=epsilon, criterion='distance') - 1
+            # Convert to same format as other methods (-1 for noise)
+            labels[labels == max(labels)] = -1
+            
         elif method == 'Density-based':
             # Custom density-based clustering
             # Use KD-tree to find neighbors within epsilon
             tree = KDTree(coords)
             neighbors = tree.query_radius(coords, r=epsilon)
-
+            
             # Initialize labels
             labels = np.zeros(len(coords), dtype=int) - 1
             current_label = 0
-
+            
             # Assign labels
             for i, point_neighbors in enumerate(neighbors):
                 if len(point_neighbors) >= min_samples:
@@ -791,7 +756,7 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                     if labels[i] == -1:
                         # Assign new label
                         labels[i] = current_label
-
+                        
                         # Expand cluster
                         to_expand = list(point_neighbors)
                         while to_expand:
@@ -803,41 +768,41 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                                     for nbr in neighbors[j]:
                                         if labels[nbr] == -1 and nbr not in to_expand:
                                             to_expand.append(nbr)
-
+                        
                         current_label += 1
-
+        
         else:
             raise ValueError(f"Unknown clustering method: {method}")
-
+        
         # Count clusters (exclude noise points with label -1)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-
+        
         # Process clustering results
         if n_clusters > 0:
             # Add cluster labels to the data
             frame_data = frame_data.copy()
             frame_data['cluster_label'] = labels
-
+            
             # Get cluster statistics
             cluster_stats = []
-
+            
             for label in range(n_clusters):
                 cluster_points = frame_data[frame_data['cluster_label'] == label]
-
+                
                 if len(cluster_points) > 0:
                     # Calculate cluster centroid
                     centroid_x = cluster_points['x'].mean()
                     centroid_y = cluster_points['y'].mean()
-
+                    
                     # Calculate cluster radius (standard deviation of distances from centroid)
                     dx = cluster_points['x'] - centroid_x
                     dy = cluster_points['y'] - centroid_y
                     distances = np.sqrt(dx**2 + dy**2)
                     radius = distances.std()
-
+                    
                     # Get track IDs in this cluster
                     track_ids = cluster_points['track_id'].unique()
-
+                    
                     cluster_stats.append({
                         'frame': frame,
                         'cluster_id': label,
@@ -849,18 +814,18 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                         'density': len(cluster_points) / (np.pi * radius**2) if radius > 0 else np.nan,
                         'track_ids': track_ids
                     })
-
+                    
                     # Store all points in the cluster
                     all_clusters.append({
                         'frame': frame,
                         'cluster_id': label,
                         'points': cluster_points
                     })
-
+            
             # Calculate frame statistics
             noise_points = frame_data[frame_data['cluster_label'] == -1]
             clustered_points = frame_data[frame_data['cluster_label'] != -1]
-
+            
             frame_result = {
                 'frame': frame,
                 'n_points': len(frame_data),
@@ -869,108 +834,113 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                 'mean_cluster_size': clustered_points['cluster_label'].value_counts().mean() if len(clustered_points) > 0 else 0,
                 'cluster_stats': pd.DataFrame(cluster_stats) if cluster_stats else pd.DataFrame()
             }
-
+            
             frame_results.append(frame_result)
-
+    
     # Track clusters over time
     cluster_tracks = []
-
+    
     if track_clusters and len(frame_results) > 1:
         # Use a simple linking approach based on proximity of cluster centroids
         prev_frame_clusters = None
         next_cluster_id = 0
-
+        
         for frame_result in frame_results:
             frame = frame_result['frame']
             cluster_stats = frame_result['cluster_stats']
-
+            
             if cluster_stats.empty:
                 continue
-
+                
             if prev_frame_clusters is None:
                 # First frame with clusters
-                #```python
-# Assign initial cluster track IDs
+                # Assign initial cluster track IDs
                 cluster_stats['cluster_track_id'] = range(next_cluster_id, next_cluster_id + len(cluster_stats))
                 next_cluster_id += len(cluster_stats)
-
+                
                 prev_frame_clusters = cluster_stats
             else:
                 # Link clusters between frames
                 prev_centroids = prev_frame_clusters[['centroid_x', 'centroid_y']].values
                 curr_centroids = cluster_stats[['centroid_x', 'centroid_y']].values
-
+                
                 # Calculate distances between all centroids
                 distances = distance.cdist(prev_centroids, curr_centroids)
-
+                
                 # Link clusters based on proximity (simple nearest neighbor)
                 cluster_track_ids = np.full(len(cluster_stats), -1)
                 used_prev = set()
-
+                
                 # Sort distances from smallest to largest
                 dist_indices = np.dstack(np.unravel_index(np.argsort(distances.ravel()), distances.shape))[0]
-
+                
                 for idx_pair in dist_indices:
                     i, j = idx_pair[0], idx_pair[1]
-                    if (j < len(prev_frame_clusters) and i < len(cluster_stats) and
+                    if (j < len(prev_frame_clusters) and i < len(cluster_stats) and 
                         j not in used_prev and cluster_track_ids[i] == -1):
                         if distances[i, j] <= 2 * epsilon:  # Use 2*epsilon as max linking distance
                             # Link this cluster to the track
                             cluster_track_ids[i] = prev_frame_clusters.iloc[j]['cluster_track_id']
                             used_prev.add(j)
-
+                
                 # Assign new track IDs to unlinked clusters
                 for i in range(len(cluster_stats)):
                     if cluster_track_ids[i] == -1:
                         cluster_track_ids[i] = next_cluster_id
                         next_cluster_id += 1
-
+                
                 cluster_stats['cluster_track_id'] = cluster_track_ids
                 prev_frame_clusters = cluster_stats
-
-            # Store cluster tracks for this frame using vectorized operations
-            if not cluster_stats.empty:
-                frame_cluster_data = cluster_stats.copy()
-                frame_cluster_data['frame'] = frame
-                cluster_tracks.extend(frame_cluster_data.to_dict('records'))
-
+            
+            # Store cluster tracks for this frame
+            for _, cluster in cluster_stats.iterrows():
+                cluster_tracks.append({
+                    'frame': frame,
+                    'cluster_id': cluster['cluster_id'],
+                    'cluster_track_id': cluster['cluster_track_id'],
+                    'centroid_x': cluster['centroid_x'],
+                    'centroid_y': cluster['centroid_y'],
+                    'n_points': cluster['n_points'],
+                    'radius': cluster['radius']
+                })
+    
     # Analyze cluster dynamics
     cluster_dynamics = []
-
+    
     if analyze_dynamics and cluster_tracks:
         # Group by cluster track ID
         cluster_tracks_df = pd.DataFrame(cluster_tracks)
         grouped = cluster_tracks_df.groupby('cluster_track_id')
-
+        
         for track_id, track_data in grouped:
             # Skip short tracks
             if len(track_data) < 2:
                 continue
-
+                
             # Sort by frame
             track_data = track_data.sort_values('frame')
-
+            
             # Calculate changes over time
-            frames = track_data['frame'].values.astype(float)
+            frames = track_data['frame'].values
             centroids_x = track_data['centroid_x'].values
             centroids_y = track_data['centroid_y'].values
             n_points = track_data['n_points'].values
             radii = track_data['radius'].values
-
+            
             # Calculate displacements
             dx = np.diff(centroids_x)
             dy = np.diff(centroids_y)
             displacements = np.sqrt(dx**2 + dy**2)
-
+            
             # Calculate size changes
             size_changes = np.diff(n_points)
             radius_changes = np.diff(radii)
-
+            
             # Calculate metrics
             mean_displacement = np.mean(displacements)
             mean_size_change = np.mean(size_changes)
             mean_radius_change = np.mean(radius_changes)
-
+            
             dynamics = {
                 'cluster_track_id': track_id,
                 'duration': len(track_data),
@@ -980,9 +950,9 @@ def analyze_clustering(tracks_df: pd.DataFrame,
                 'max_displacement': np.max(displacements) if len(displacements) > 0 else 0,
                 'stable': np.all(np.abs(size_changes) <= 2) and np.all(displacements <= epsilon)
             }
-
+            
             cluster_dynamics.append(dynamics)
-
+    
     # Compile final results
     results = {
         'success': True,  # Always return success if analysis completed
@@ -991,13 +961,13 @@ def analyze_clustering(tracks_df: pd.DataFrame,
         'cluster_tracks': pd.DataFrame(cluster_tracks) if cluster_tracks else pd.DataFrame(columns=['frame', 'cluster_id', 'cluster_track_id', 'centroid_x', 'centroid_y', 'n_points', 'radius']),
         'cluster_dynamics': pd.DataFrame(cluster_dynamics) if cluster_dynamics else pd.DataFrame(columns=['cluster_track_id', 'start_frame', 'end_frame', 'duration', 'mean_displacement', 'mean_size_change', 'mean_radius_change', 'max_displacement', 'stable'])
     }
-
+    
     # Calculate ensemble statistics
     # Always add ensemble_results, even if no clusters found
     n_clusters = [fr['n_clusters'] for fr in frame_results] if frame_results else [0]
     clustered_fractions = [fr['clustered_fraction'] for fr in frame_results] if frame_results else [0]
     mean_cluster_sizes = [fr['mean_cluster_size'] for fr in frame_results] if frame_results else [0]
-
+    
     results['ensemble_results'] = {
         'mean_n_clusters': np.mean(n_clusters),
         'max_n_clusters': np.max(n_clusters),
@@ -1010,36 +980,36 @@ def analyze_clustering(tracks_df: pd.DataFrame,
         'min_points_per_cluster': min_samples,
         'clustering_method': method
     }
-
+    
     if cluster_dynamics:
         # Extract cluster track statistics
         cluster_dynamics_df = pd.DataFrame(cluster_dynamics)
-
+        
         if not cluster_dynamics_df.empty:
             results['ensemble_results']['n_cluster_tracks'] = len(cluster_dynamics_df)
             results['ensemble_results']['mean_cluster_duration'] = cluster_dynamics_df['duration'].mean()
-            results['ensemble_results']['n_stable_clusters'] = sum(cluster_dynamics_df['stable'])
+            results['ensemble_results']['n_stable_clusters'] = sum(cluster_dynamics_df['stable']) 
             results['ensemble_results']['stable_cluster_fraction'] = sum(cluster_dynamics_df['stable']) / len(cluster_dynamics_df)
         else:
             results['ensemble_results']['n_cluster_tracks'] = 0
             results['ensemble_results']['mean_cluster_duration'] = 0
             results['ensemble_results']['n_stable_clusters'] = 0
             results['ensemble_results']['stable_cluster_fraction'] = 0
-
+    
     return results
 
 
 # --- Dwell Time Analysis ---
 
-def analyze_dwell_time(tracks_df: pd.DataFrame,
-                      regions=None,
+def analyze_dwell_time(tracks_df: pd.DataFrame, 
+                      regions=None, 
                       threshold_distance: float = 0.5,
                       min_dwell_frames: int = 3,
                       pixel_size: float = 1.0,
                       frame_interval: float = 1.0) -> Dict[str, Any]:
     """
     Analyze dwell times (binding/unbinding events).
-
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
@@ -1055,7 +1025,7 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
         Pixel size in micrometers
     frame_interval : float
         Time between frames in seconds
-
+        
     Returns
     -------
     dict
@@ -1065,27 +1035,27 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
     tracks_df_um = tracks_df.copy()
     tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
     tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
+    
     # Initialize results
     dwell_events = []
     track_results = []
-
+    
     # Group by track_id
     grouped = tracks_df_um.groupby('track_id')
-
+    
     for track_id, track_data in grouped:
         # Skip very short tracks
         if len(track_data) < min_dwell_frames:
             continue
-
+            
         # Sort by frame
         track_data = track_data.sort_values('frame')
-
+        
         # Extract positions and frames
         x = track_data['x'].values
         y = track_data['y'].values
-        frames = track_data['frame'].values.astype(float)
-
+        frames = track_data['frame'].values
+        
         # Initialize track results
         track_result = {
             'track_id': track_id,
@@ -1096,7 +1066,7 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
             'mean_dwell_time': 0,
             'dwell_fraction': 0
         }
-
+        
         if regions is not None:
             # Region-based dwell time analysis
             # Check for dwelling in each region
@@ -1104,17 +1074,17 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
                 region_x = region['x'] * pixel_size
                 region_y = region['y'] * pixel_size
                 region_radius = region['radius'] * pixel_size
-
+                
                 # Calculate distances to region center
                 distances = np.sqrt((x - region_x)**2 + (y - region_y)**2)
-
+                
                 # Find frames where the particle is within the region
                 in_region = distances <= region_radius
-
+                
                 # Find continuous segments of dwelling
                 dwell_segments = []
                 current_segment = []
-
+                
                 for i, in_reg in enumerate(in_region):
                     if in_reg:
                         current_segment.append(i)
@@ -1122,21 +1092,21 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
                         if len(current_segment) >= min_dwell_frames:
                             dwell_segments.append(current_segment)
                         current_segment = []
-
+                
                 # Check last segment
                 if current_segment and len(current_segment) >= min_dwell_frames:
                     dwell_segments.append(current_segment)
-
+                
                 # Process dwell segments
                 for segment in dwell_segments:
                     start_idx = segment[0]
                     end_idx = segment[-1]
-
+                    
                     dwell_start_frame = frames[start_idx]
                     dwell_end_frame = frames[end_idx]
                     dwell_frames = dwell_end_frame - dwell_start_frame + 1
                     dwell_time = dwell_frames * frame_interval
-
+                    
                     dwell_events.append({
                         'track_id': track_id,
                         'region_id': region_idx,
@@ -1151,36 +1121,30 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
                         'mean_x': np.mean(x[start_idx:end_idx+1]),
                         'mean_y': np.mean(y[start_idx:end_idx+1])
                     })
-
+                    
                     track_result['n_dwell_events'] += 1
                     track_result['total_dwell_time'] += dwell_time
-
+            
             if track_result['n_dwell_events'] > 0:
                 track_result['mean_dwell_time'] = track_result['total_dwell_time'] / track_result['n_dwell_events']
                 track_result['dwell_fraction'] = track_result['total_dwell_time'] / track_result['duration']
-
+        
         else:
             # Motion-based dwell time analysis
             # Detect periods of little movement
-
+            
             # Calculate displacements between consecutive frames
             dx = np.diff(x)
             dy = np.diff(y)
             displacements = np.sqrt(dx**2 + dy**2)
-
+            
             # Find frames with displacement below threshold
-            # Use a more sensitive approach - consider both absolute threshold and relative to track scale
-            track_median_displacement = np.median(displacements) if len(displacements) > 0 else 0
-            adaptive_threshold = min(threshold_distance, track_median_displacement * 0.5) if track_median_displacement > 0 else threshold_distance
-
-            is_dwelling = displacements <= adaptive_threshold
-            # Pad to match original length for indexing
-            is_dwelling = np.append(is_dwelling, False)
-
+            is_dwelling = np.append(displacements <= threshold_distance, False)  # Add one more value to match original length
+            
             # Find continuous segments of dwelling
             dwell_segments = []
             current_segment = []
-
+            
             for i, dwelling in enumerate(is_dwelling):
                 if dwelling:
                     current_segment.append(i)
@@ -1188,21 +1152,21 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
                     if len(current_segment) >= min_dwell_frames:
                         dwell_segments.append(current_segment)
                     current_segment = []
-
+            
             # Check last segment
             if current_segment and len(current_segment) >= min_dwell_frames:
                 dwell_segments.append(current_segment)
-
+            
             # Process dwell segments
             for segment in dwell_segments:
                 start_idx = segment[0]
                 end_idx = segment[-1]
-
+                
                 dwell_start_frame = frames[start_idx]
                 dwell_end_frame = frames[end_idx]
                 dwell_frames = dwell_end_frame - dwell_start_frame + 1
                 dwell_time = dwell_frames * frame_interval
-
+                
                 dwell_events.append({
                     'track_id': track_id,
                     'region_id': -1,  # No specific region
@@ -1217,38 +1181,38 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
                     'mean_x': np.mean(x[start_idx:end_idx+1]),
                     'mean_y': np.mean(y[start_idx:end_idx+1])
                 })
-
+                
                 track_result['n_dwell_events'] += 1
                 track_result['total_dwell_time'] += dwell_time
-
+            
             if track_result['n_dwell_events'] > 0:
                 track_result['mean_dwell_time'] = track_result['total_dwell_time'] / track_result['n_dwell_events']
                 track_result['dwell_fraction'] = track_result['total_dwell_time'] / track_result['duration']
-
+        
         track_results.append(track_result)
-
+    
     # Create default dataframes with proper columns
     if not dwell_events:
-        dwell_events_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame',
-                                              'dwell_frames', 'dwell_time', 'start_x', 'start_y',
+        dwell_events_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame', 
+                                              'dwell_frames', 'dwell_time', 'start_x', 'start_y', 
                                               'end_x', 'end_y', 'mean_x', 'mean_y'])
     else:
         dwell_events_df = pd.DataFrame(dwell_events)
-
+    
     if not track_results:
-        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration',
-                                               'n_dwell_events', 'total_dwell_time',
+        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration', 
+                                               'n_dwell_events', 'total_dwell_time', 
                                                'mean_dwell_time', 'dwell_fraction'])
     else:
         track_results_df = pd.DataFrame(track_results)
-
+    
     # Combine results
     results = {
         'success': True,  # Always return success even if no dwell events found
         'dwell_events': dwell_events_df,
         'track_results': track_results_df
     }
-
+    
     # Calculate ensemble statistics (even when no dwell events are found)
     # This ensures we always have statistics to display
     results['ensemble_results'] = {
@@ -1266,64 +1230,37 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
         'total_regions_analyzed': len(regions) if regions is not None else 0
     }
     
-    # Add formatted dwell_stats for display compatibility
-    n_tracks_analyzed = len(tracks_df['track_id'].unique())
-    n_tracks_with_dwell = len(track_results_df[track_results_df['n_dwell_events'] > 0]) if 'n_dwell_events' in track_results_df.columns and not track_results_df.empty else 0
-    n_dwell_events = len(dwell_events_df)
-    mean_dwell_time = dwell_events_df['dwell_time'].mean() if 'dwell_time' in dwell_events_df.columns and not dwell_events_df.empty else 0.0
-    median_dwell_time = dwell_events_df['dwell_time'].median() if 'dwell_time' in dwell_events_df.columns and not dwell_events_df.empty else 0.0
-    
-    results['dwell_stats'] = {
-        'Total tracks analyzed': n_tracks_analyzed,
-        'Tracks with dwell events': n_tracks_with_dwell,
-        'Total dwell events': n_dwell_events,
-        'Mean dwell time': f"{mean_dwell_time:.2f} s",
-        'Median dwell time': f"{median_dwell_time:.2f} s"
-    }
-    
-    # Add max dwell time if there are any events
-    if n_dwell_events > 0:
-        max_dwell_time = dwell_events_df['dwell_time'].max()
-        results['dwell_stats']['Max dwell time'] = f"{max_dwell_time:.2f} s"
-        results['dwell_stats']['Mean dwells per track'] = f"{track_results_df['n_dwell_events'].mean():.2f}"
-        results['dwell_stats']['Mean fraction of time dwelling'] = f"{track_results_df['dwell_fraction'].mean():.2%}"
-
     # If regions were provided, calculate region-specific statistics
     if regions is not None:
         for region_idx in range(len(regions)):
             region_events = dwell_events_df[dwell_events_df['region_id'] == region_idx]
-
+            
             if len(region_events) > 0:
                 results['ensemble_results'][f'region{region_idx}_n_events'] = len(region_events)
                 results['ensemble_results'][f'region{region_idx}_mean_dwell_time'] = region_events['dwell_time'].mean()
                 results['ensemble_results'][f'region{region_idx}_n_tracks'] = len(region_events['track_id'].unique())
-
+    
     return results
 
 
 # --- Gel Structure Analysis ---
 
-def analyze_gel_structure(tracks_df: pd.DataFrame,
-                         min_confinement_time: int = 5,
+def analyze_gel_structure(tracks_df: pd.DataFrame, 
                          pixel_size: float = 1.0,
-                         frame_interval: float = 1.0,
-                         diffusion_threshold: float = 0.1) -> Dict[str, Any]:
+                         max_pore_size: float = 5.0) -> Dict[str, Any]:
     """
-    Analyze gel structure based on particle trajectories.
-
+    Analyze gel structure properties from particle trajectories.
+    Estimates pore size and mesh characteristics.
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    min_confinement_time : int
-        Minimum frames for detecting confinement
     pixel_size : float
         Pixel size in micrometers
-    frame_interval : float
-        Time between frames in seconds
-    diffusion_threshold : float
-        Threshold for identifying confined diffusion (µm²/s)
-
+    max_pore_size : float
+        Maximum expected pore size (for filtering outliers)
+        
     Returns
     -------
     dict
@@ -1333,524 +1270,264 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
     tracks_df_um = tracks_df.copy()
     tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
     tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
-    # Analyze each track for confinement
-    confined_regions = []
-    track_results = []
-
-    # Group by track_id
-    grouped = tracks_df_um.groupby('track_id')
-
-    for track_id, track_data in grouped:
-        # Skip very short tracks
-        if len(track_data) < min_confinement_time + 5:
-            continue
-
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
-
-        # Extract positions and frames
-        x = track_data['x'].values
-        y = track_data['y'].values
-        frames = track_data['frame'].values.astype(float)
-
-        # Initialize track result
-        track_result = {
-            'track_id': track_id,
-            'track_length': len(track_data),
-            'duration': (frames[-1] - frames[0]) * frame_interval,
-            'n_confined_regions': 0
-        }
-
-        # Analyze windows of the trajectory
-        window_size = min(20, len(track_data) // 2)
-
-        for i in range(len(track_data) - window_size + 1):
-            window_x = x[i:i+window_size]
-            window_y = y[i:i+window_size]
-            window_frames = frames[i:i+window_size]
-
-            # Calculate MSD for this window
-            msd_values = []
-            max_lag = min(5, window_size - 1)
-
-            for lag in range(1, max_lag + 1):
-                # Calculate squared displacements
-                sd_list = []
-
-                for j in range(window_size - lag):
-                    dx = window_x[j + lag] - window_x[j]
-                    dy = window_y[j + lag] - window_y[j]
-                    sd = dx**2 + dy**2
-                    sd_list.append(sd)
-
-                if sd_list:
-                    msd_values.append(np.mean(sd_list))
-
-            # Calculate diffusion coefficient
-            if len(msd_values) >= 3:
-                # Linear fit to first few points
-                lag_times = np.arange(1, len(msd_values) + 1) * frame_interval
-
-                try:
-                    slope, intercept, r_value, p_value, std_err = linregress(
-                        lag_times[:3],
-                        msd_values[:3]
-                    )
-
-                    D = slope / 4  # µm²/s
-
-                    # Check if diffusion is confined
-                    if D < diffusion_threshold and r_value > 0.7:
-                        # Calculate confinement statistics
-                        x_center = np.mean(window_x)
-                        y_center = np.mean(window_y)
-
-                        # Calculate distances from center
-                        distances = np.sqrt((window_x - x_center)**2 + (window_y - y_center)**2)
-                        radius = np.std(distances)
-
-                        confined_regions.append({
-                            'track_id': track_id,
-                            'start_frame': window_frames[0],
-                            'end_frame': window_frames[-1],
-                            'center_x': x_center,
-                            'center_y': y_center,
-                            'radius': radius,
-                            'diffusion_coeff': D,
-                            'msd_r_value': r_value
-                        })
-
-                        track_result['n_confined_regions'] += 1
-                except:
-                    pass
-
-        track_results.append(track_result)
-
-    # Calculate mesh statistics
-    mesh_size = None
-    mesh_heterogeneity = None
-    pore_distribution = None
-
-    if confined_regions:
-        confined_df = pd.DataFrame(confined_regions)
-
-        # Estimate mesh size from confinement radii
-        radii = confined_df['radius'].values
-        mesh_size = 2 * np.median(radii)  # Estimate mesh size as twice the median confinement radius
-        mesh_heterogeneity = np.std(radii) / np.mean(radii)  # Coefficient of variation
-
-        # Get pore locations
-        pore_centers = confined_df[['center_x', 'center_y']].values
-
-        # Detect pore clustering
-        if len(pore_centers) >= 5:
-            # Use DBSCAN to find clusters of pores
-            clustering = DBSCAN(eps=2*mesh_size, min_samples=3)
-            labels = clustering.fit_predict(pore_centers)
-
-            # Count clusters (exclude noise points with label -1)
-            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-
-            # Calculate pore distribution
-            if n_clusters > 0:
-                # Calculate cluster statistics
-                pore_distribution = {
-                    'n_clusters': n_clusters,
-                    'clustered_fraction': np.sum(labels != -1) / len(labels),
-                    'mean_cluster_size': np.mean([np.sum(labels == i) for i in range(n_clusters)])
-                }
-            else:
-                # No clusters found
-                pore_distribution = {
-                    'n_clusters': 0,
-                    'clustered_fraction': 0,
-                    'mean_cluster_size': 0
-                }
-
-                # Calculate nearest neighbor distances for pores
-                if len(pore_centers) >= 2:
-                    nn = NearestNeighbors(n_neighbors=2)
-                    nn.fit(pore_centers)
-                    distances, _ = nn.kneighbors(pore_centers)
-
-                    # First column is distance to self (0), second is nearest neighbor
-                    nn_distances = distances[:, 1]
-
-                    pore_distribution['mean_nn_distance'] = np.mean(nn_distances)
-                    pore_distribution['std_nn_distance'] = np.std(nn_distances)
-                    pore_distribution['regularity'] = np.mean(nn_distances) / np.std(nn_distances) if np.std(nn_distances) > 0 else np.inf
-
-    # Create default dataframes with proper columns
-    if not confined_regions:
-        confined_regions_df = pd.DataFrame(columns=['track_id', 'region_id', 'start_frame', 'end_frame', 'duration',
-                                                  'center_x', 'center_y', 'radius', 'mean_diffusion'])
+    
+    # 1. Estimate pore size from maximum displacement of confined particles
+    # First, identify confined particles
+    msd_results = analyze_diffusion(
+        tracks_df, 
+        pixel_size=pixel_size, 
+        check_confinement=True, 
+        analyze_anomalous=False
+    )
+    
+    pore_sizes = []
+    
+    if msd_results['success'] and not msd_results['track_results'].empty:
+        track_results = msd_results['track_results']
+        
+        # Filter for confined tracks
+        confined_tracks = track_results[track_results['confined'] == True]
+        
+        if not confined_tracks.empty:
+            # Pore diameter is approx 2 * confinement radius
+            # But we should be careful about the interpretation
+            # Confinement radius is std dev of position, so pore size ~ 4 * radius (95% confidence)
+            estimated_sizes = confined_tracks['confinement_radius'] * 4
+            
+            # Filter outliers
+            valid_sizes = estimated_sizes[estimated_sizes <= max_pore_size]
+            pore_sizes.extend(valid_sizes.tolist())
+    
+    # 2. Estimate mesh size from spatial distribution of all points
+    # Use Delaunay triangulation to find empty spaces
+    all_points = tracks_df_um[['x', 'y']].values
+    
+    # Subsample if too many points (for performance)
+    if len(all_points) > 10000:
+        indices = np.random.choice(len(all_points), 10000, replace=False)
+        points_for_mesh = all_points[indices]
     else:
-        confined_regions_df = pd.DataFrame(confined_regions)
-
-    if not track_results:
-        track_results_df = pd.DataFrame(columns=['track_id', 'track_length', 'duration', 'n_confined_regions',
-                                               'total_confined_time', 'confined_fraction', 'mean_confinement_radius'])
-    else:
-        track_results_df = pd.DataFrame(track_results)
-
-    # Add mesh properties
-    mesh_properties = {
-        'mean_mesh_size': mesh_size,
-        'mesh_heterogeneity': mesh_heterogeneity,
-        'total_tracks_analyzed': len(tracks_df['track_id'].unique()),
-        'diffusion_threshold': diffusion_threshold
-    }
-
-    if pore_distribution:
-        mesh_properties.update(pore_distribution)
-
-    # Combine results
+        points_for_mesh = all_points
+        
+    mesh_sizes = []
+    
+    if len(points_for_mesh) >= 4:
+        try:
+            tri = spatial.Delaunay(points_for_mesh)
+            
+            # Calculate edge lengths of triangles
+            # This gives a distribution of inter-particle distances
+            # The larger distances might correspond to pores
+            
+            for simplex in tri.simplices:
+                # Get vertices of the triangle
+                pts = points_for_mesh[simplex]
+                
+                # Calculate side lengths
+                a = np.linalg.norm(pts[0] - pts[1])
+                b = np.linalg.norm(pts[1] - pts[2])
+                c = np.linalg.norm(pts[2] - pts[0])
+                
+                # Use the longest side as a proxy for local spacing
+                mesh_sizes.append(max(a, b, c))
+                
+        except Exception as e:
+            print(f"Error in Delaunay triangulation: {e}")
+    
+    # Compile results
     results = {
-        'success': True,  # Always return success even if no confined regions found
-        'confined_regions': confined_regions_df,
-        'track_results': track_results_df,
-        'mesh_properties': mesh_properties
+        'success': True,
+        'pore_size_distribution': pore_sizes,
+        'mesh_size_distribution': mesh_sizes,
+        'ensemble_results': {}
     }
-
-    # Fix mesh properties to handle None values
-    if mesh_properties['mean_mesh_size'] is None:
-        mesh_properties['mean_mesh_size'] = 0.0
-    if mesh_properties['mesh_heterogeneity'] is None:
-        mesh_properties['mesh_heterogeneity'] = 0.0
-
-    # Calculate ensemble statistics (even if no confined regions found)
-    results['ensemble_results'] = {
-        'n_tracks_analyzed': len(tracks_df['track_id'].unique()),
-        'n_tracks_with_confinement': len(track_results_df[track_results_df['n_confined_regions'] > 0]) if not track_results_df.empty else 0,
-        'n_confined_regions': len(confined_regions_df),
-        'mean_confinement_radius': confined_regions_df['radius'].mean() if 'radius' in confined_regions_df.columns and not confined_regions_df.empty else 0,
-        'median_confinement_radius': confined_regions_df['radius'].median() if 'radius' in confined_regions_df.columns and not confined_regions_df.empty else 0,
-        'std_confinement_radius': confined_regions_df['radius'].std() if 'radius' in confined_regions_df.columns and not confined_regions_df.empty else 0,
-        'mean_confined_regions_per_track': track_results_df['n_confined_regions'].mean() if 'n_confined_regions' in track_results_df.columns and not track_results_df.empty else 0,
-        'mesh_size': mesh_size,
-        'mesh_heterogeneity': mesh_heterogeneity,
-        'confinement_threshold': min_confinement_time,
-        'diffusion_coefficient_threshold': diffusion_threshold
-    }
-
-    if pore_distribution:
-        results['ensemble_results'].update(pore_distribution)
-
+    
+    # Calculate statistics
+    if pore_sizes:
+        results['ensemble_results']['mean_pore_size'] = np.mean(pore_sizes)
+        results['ensemble_results']['median_pore_size'] = np.median(pore_sizes)
+        results['ensemble_results']['std_pore_size'] = np.std(pore_sizes)
+        results['ensemble_results']['n_confined_tracks'] = len(pore_sizes)
+    else:
+        results['ensemble_results']['mean_pore_size'] = np.nan
+        results['ensemble_results']['n_confined_tracks'] = 0
+        
+    if mesh_sizes:
+        # Filter very large mesh sizes (artifacts at boundaries)
+        valid_mesh = [s for s in mesh_sizes if s <= max_pore_size]
+        if valid_mesh:
+            results['ensemble_results']['mean_mesh_size'] = np.mean(valid_mesh)
+            results['ensemble_results']['median_mesh_size'] = np.median(valid_mesh)
+            results['ensemble_results']['std_mesh_size'] = np.std(valid_mesh)
+        else:
+            results['ensemble_results']['mean_mesh_size'] = np.nan
+            
     return results
 
 
 # --- Diffusion Population Analysis ---
 
-def analyze_diffusion_population(tracks_df: pd.DataFrame,
-                               max_lag: int = 20,
-                               pixel_size: float = 1.0,
-                               frame_interval: float = 1.0,
-                               min_track_length: int = 10,
-                               n_populations: int = 2) -> Dict[str, Any]:
+def analyze_diffusion_population(tracks_df: pd.DataFrame, 
+                                pixel_size: float = 1.0, 
+                                frame_interval: float = 1.0,
+                                n_components: int = 2,
+                                method: str = 'GMM') -> Dict[str, Any]:
     """
-    Analyze diffusion populations using mixture models.
-
+    Analyze distribution of diffusion coefficients to identify subpopulations.
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    max_lag : int
-        Maximum lag time for MSD calculation
     pixel_size : float
         Pixel size in micrometers
     frame_interval : float
         Time between frames in seconds
-    min_track_length : int
-        Minimum track length to include in analysis
-    n_populations : int
-        Number of diffusion populations to identify
-
+    n_components : int
+        Number of components (subpopulations) to look for
+    method : str
+        Method for population analysis ('GMM', 'Histogram')
+        
     Returns
     -------
     dict
-        Dictionary containing diffusion population analysis results
+        Dictionary containing population analysis results
     """
-    # Calculate diffusion coefficients for all tracks
-    # Use the MSD at lag 1 for initial estimation
-    track_diffusion = []
-
-    # Group by track_id
-    grouped = tracks_df.groupby('track_id')
-
-    for track_id, track_data in grouped:
-        # Skip short tracks
-        if len(track_data) < min_track_length:
-            continue
-
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
-
-        # Extract positions
-        x = track_data['x'].values.astype(float) * pixel_size
-        y = track_data['y'].values.astype(float) * pixel_size
-        frames = track_data['frame'].values.astype(float)
-
-        # Calculate MSD for different lag times
-        msd_values = []
-
-        for lag in range(1, min(max_lag + 1, len(track_data))):
-            # Calculate squared displacements
-            sd_list = []
-
-            n_points = len(track_data) - lag
-            if n_points > 0:
-                dx = x[lag:] - x[:-lag]
-                dy = y[lag:] - y[:-lag]
-                sd = dx**2 + dy**2
-                sd_list.extend(sd)
-
-            if sd_list:
-                msd_values.append(np.mean(sd_list))
-
-        if len(msd_values) >= 3:
-            # Calculate diffusion coefficient from MSD curve
-            lag_times = np.arange(1, len(msd_values) + 1) * frame_interval
-
-            try:
-                # Linear fit to first few points
-                slope, intercept, r_value, p_value, std_err = linregress(
-                    lag_times[:3],
-                    msd_values[:3]
-                )
-
-                D = slope / 4  # µm²/s
-
-                # Check if fit is reasonable
-                if D > 0 and r_value > 0.7:
-                    # Calculate anomalous exponent (alpha)
-                    log_lag = np.log(lag_times)
-                    log_msd = np.log(msd_values)
-
-                    alpha_slope, alpha_intercept, alpha_r, alpha_p, alpha_err = linregress(log_lag, log_msd)
-
-                    track_diffusion.append({
-                        'track_id': track_id,
-                        'diffusion_coeff': D,
-                        'r_value': r_value,
-                        'alpha': alpha_slope,
-                        'track_length': len(track_data)
-                    })
-            except:
-                pass
-
-    # Create empty default results if no valid tracks found
-    if not track_diffusion:
-        empty_populations = [{
-            'population_id': i,
-            'weight': 1.0 if i == 0 else 0.0,
-            'mean_diffusion_coeff': 0.0,
-            'std_diffusion_coeff': 0.0,
-            'log_mean': 0.0,
-            'log_std': 0.0
-        } for i in range(n_populations)]
-
-        return {
-            'success': True,  # Return success even when no valid tracks
-            'populations': pd.DataFrame(empty_populations),
-            'track_assignments': pd.DataFrame(columns=['track_id', 'population_id', 'diffusion_coeff']),
-            'n_tracks_analyzed': len(tracks_df['track_id'].unique()),
-            'n_tracks_with_valid_diffusion': 0,
-            'n_populations': n_populations,
-            'notes': 'No tracks suitable for diffusion population analysis'
-        }
-
-    # Convert to DataFrame
-    diffusion_df = pd.DataFrame(track_diffusion)
-
-    # Apply log transform to diffusion coefficients for better fitting
-    log_D = np.log10(diffusion_df['diffusion_coeff'].values)
-
-    # Handle outliers and invalid values
-    valid_indices = ~np.isnan(log_D) & ~np.isinf(log_D)
-    log_D_valid = log_D[valid_indices]
-
-    # Check if we have enough data points for the requested number of populations
-    if len(log_D_valid) < n_populations * 2:
-        # Adjust n_populations to a reasonable value based on data available
-        adjusted_n_populations = max(1, int(len(log_D_valid) / 2))
-
-        # Create simple default results with adjusted number of populations
-        if adjusted_n_populations == 1:
-            # Just one population - use mean and std directly
-            mean_D = np.mean(10 ** log_D_valid)
-            std_D = np.std(10 ** log_D_valid)
-
-            populations = [{
-                'population_id': 0,
-                'weight': 1.0,
-                'mean_diffusion_coeff': mean_D,
-                'std_diffusion_coeff': std_D,
-                'log_mean': np.mean(log_D_valid),
-                'log_std': np.std(log_D_valid)
-            }]
-
-            valid_df = diffusion_df[valid_indices].copy()
-            track_assignments = [
-                {
-                    'track_id': row['track_id'],
-                    'population_id': 0,
-                    'diffusion_coeff': row['diffusion_coeff']
-                }
-                for _, row in valid_df.iterrows()
-            ] if not valid_df.empty else []
-
-            return {
-                'success': True,
-                'populations': pd.DataFrame(populations),
-                'track_assignments': pd.DataFrame(track_assignments) if track_assignments else pd.DataFrame(columns=['track_id', 'population_id', 'diffusion_coeff']),
-                'n_tracks_analyzed': len(tracks_df['track_id'].unique()),
-                'n_tracks_with_valid_diffusion': len(track_assignments),
-                'n_populations': 1,
-                'notes': f'Requested {n_populations} populations, but only enough data for 1 population'
-            }
-
-        # Otherwise, continue with adjusted_n_populations
-        n_populations = adjusted_n_populations
-
-    # Fit Gaussian mixture model and select best number of components
-    best_gmm = None
-    lowest_bic = np.inf
-
-    # Test a range of components to find the best fit
-    n_components_range = range(1, n_populations + 2)
-    bics = []
-    aics = []
-
-    for n_components in n_components_range:
-        if len(log_D_valid) < n_components:
-            break
-        gmm = GaussianMixture(n_components=n_components, random_state=42)
-        gmm.fit(log_D_valid.reshape(-1, 1))
-        bic = gmm.bic(log_D_valid.reshape(-1, 1))
-        aic = gmm.aic(log_D_valid.reshape(-1, 1))
-        bics.append(bic)
-        aics.append(aic)
-        if bic < lowest_bic:
-            lowest_bic = bic
-            best_gmm = gmm
-
-    if best_gmm is None:
-        # This can happen if log_D_valid is empty
+    # Calculate diffusion coefficients first
+    diff_results = analyze_diffusion(
+        tracks_df, 
+        pixel_size=pixel_size, 
+        frame_interval=frame_interval,
+        check_confinement=False,
+        analyze_anomalous=False
+    )
+    
+    if not diff_results['success'] or diff_results['track_results'].empty:
         return {
             'success': False,
-            'error': 'Could not fit GMM to diffusion coefficients'
+            'error': 'Could not calculate diffusion coefficients'
         }
-
-    # Get population parameters from the best model
-    n_populations = best_gmm.n_components
-    means = best_gmm.means_.flatten()
-    covariances = best_gmm.covariances_.flatten()
-    weights = best_gmm.weights_
-
-    # Sort populations by mean diffusion coefficient (ascending)
-    sorted_indices = np.argsort(means)
-    means = means[sorted_indices]
-    covariances = covariances[sorted_indices]
-    weights = weights[sorted_indices]
-
-    # Create DataFrame with population parameters
+        
+    track_results = diff_results['track_results']
+    
+    # Extract diffusion coefficients (log scale is usually better for separation)
+    # Filter out non-positive values
+    valid_D = track_results['diffusion_coefficient'].values
+    valid_D = valid_D[valid_D > 0]
+    
+    if len(valid_D) < n_components * 5:
+        return {
+            'success': False,
+            'error': 'Not enough tracks for population analysis'
+        }
+        
+    log_D = np.log10(valid_D)
+    
     populations = []
-
-    for i in range(n_populations):
-        # Convert log means back to original scale
-        D_mean = 10 ** means[i]
-        D_std = D_mean * np.log(10) * np.sqrt(covariances[i])
-
+    
+    if method == 'GMM':
+        # Gaussian Mixture Model
+        try:
+            gmm = GaussianMixture(n_components=n_components, random_state=42)
+            # Reshape for sklearn
+            X = log_D.reshape(-1, 1)
+            gmm.fit(X)
+            
+            # Get parameters
+            means = gmm.means_.flatten()
+            covariances = gmm.covariances_.flatten()
+            weights = gmm.weights_.flatten()
+            
+            # Sort by mean diffusion coefficient (slow to fast)
+            sorted_indices = np.argsort(means)
+            
+            for i in sorted_indices:
+                log_mean = means[i]
+                log_std = np.sqrt(covariances[i])
+                weight = weights[i]
+                
+                # Convert back to linear scale
+                mean_D = 10**log_mean
+                # For log-normal distribution, geometric mean is 10^mu
+                # Range can be estimated as 10^(mu +/- sigma)
+                range_low = 10**(log_mean - log_std)
+                range_high = 10**(log_mean + log_std)
+                
+                populations.append({
+                    'component_id': len(populations),
+                    'fraction': weight,
+                    'mean_log_D': log_mean,
+                    'std_log_D': log_std,
+                    'mean_D': mean_D,
+                    'range_D_low': range_low,
+                    'range_D_high': range_high
+                })
+                
+            # Calculate BIC/AIC to evaluate fit quality
+            bic = gmm.bic(X)
+            aic = gmm.aic(X)
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f"GMM fitting failed: {e}"
+            }
+            
+    elif method == 'Histogram':
+        # Simple histogram-based peak detection (simplified)
+        # This is less robust than GMM but simpler
+        hist, bin_edges = np.histogram(log_D, bins='auto', density=True)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        # Find peaks (simplified)
+        # In a real implementation, we would use scipy.signal.find_peaks
+        # Here we just return basic stats
         populations.append({
-            'population_id': i,
-            'weight': weights[i],
-            'mean_diffusion_coeff': D_mean,
-            'std_diffusion_coeff': D_std,
-            'log_mean': means[i],
-            'log_std': np.sqrt(covariances[i])
+            'component_id': 0,
+            'fraction': 1.0,
+            'mean_log_D': np.mean(log_D),
+            'std_log_D': np.std(log_D),
+            'mean_D': 10**np.mean(log_D)
         })
-
-    # Assign each track to a population
-    # Predict population for each valid track
-    populations_df = pd.DataFrame(populations)
-
-    if valid_indices.sum() > 0:
-        valid_track_indices = np.where(valid_indices)[0]
-        predictions = best_gmm.predict(log_D_valid.reshape(-1, 1))
-
-        # Reindex predictions according to sorted populations
-        prediction_map = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted_indices)}
-        predictions = np.array([prediction_map[p] for p in predictions])
-
-        # Add population assignments to tracks
-        track_assignments = []
-
-        for i, pred in enumerate(predictions):
-            track_idx = valid_track_indices[i]
-            track_id = diffusion_df.iloc[track_idx]['track_id']
-
-            track_assignments.append({
-                'track_id': track_id,
-                'diffusion_coeff': diffusion_df.iloc[track_idx]['diffusion_coeff'],
-                'log_diffusion_coeff': log_D[track_idx],
-                'population_id': pred,
-                'alpha': diffusion_df.iloc[track_idx]['alpha'] if 'alpha' in diffusion_df.columns else np.nan
-            })
-
-        track_assignments_df = pd.DataFrame(track_assignments)
+        bic = np.nan
+        aic = np.nan
+        
     else:
-        track_assignments_df = pd.DataFrame(columns=['track_id', 'diffusion_coeff', 'log_diffusion_coeff', 'population_id', 'alpha'])
-
-    # Combine results
+        return {
+            'success': False,
+            'error': f"Unknown method: {method}"
+        }
+    
     results = {
         'success': True,
-        'populations': populations_df,
-        'track_assignments': track_assignments_df,
-        'raw_diffusion_data': diffusion_df,
-        'n_tracks_analyzed': len(diffusion_df),
-        'n_valid_tracks': valid_indices.sum(),
-        'gmm_bic': lowest_bic,
-        'gmm_aic': aics[np.argmin(bics)],
-        'gmm_n_components': n_populations
+        'method': method,
+        'n_components': n_components,
+        'populations': populations,
+        'log_D_values': log_D,
+        'bic': bic,
+        'aic': aic
     }
-
-    # Calculate additional statistics for each population
-    if not track_assignments_df.empty:
-        for i in range(n_populations):
-            pop_tracks = track_assignments_df[track_assignments_df['population_id'] == i]
-
-            if len(pop_tracks) > 0:
-                populations_df.at[i, 'n_tracks'] = len(pop_tracks)
-                populations_df.at[i, 'track_fraction'] = len(pop_tracks) / len(track_assignments_df)
-
-                if 'alpha' in pop_tracks.columns:
-                    populations_df.at[i, 'mean_alpha'] = pop_tracks['alpha'].mean()
-                    populations_df.at[i, 'median_alpha'] = pop_tracks['alpha'].median()
-
+    
     return results
 
 
 # --- Crowding Analysis ---
 
-def analyze_crowding(tracks_df: pd.DataFrame,
-                    radius_of_influence: float = 2.0,
+def analyze_crowding(tracks_df: pd.DataFrame, 
                     pixel_size: float = 1.0,
-                    min_track_length: int = 5) -> Dict[str, Any]:
+                    radius: float = 1.0) -> Dict[str, Any]:
     """
-    Analyze effects of molecular crowding on particle dynamics.
-
+    Analyze local crowding density around particles.
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    radius_of_influence : float
-        Radius to consider for density calculation (µm)
     pixel_size : float
         Pixel size in micrometers
-    min_track_length : int
-        Minimum track length to include in analysis
-
+    radius : float
+        Radius to check for neighbors (in µm)
+        
     Returns
     -------
     dict
@@ -1860,1249 +1537,269 @@ def analyze_crowding(tracks_df: pd.DataFrame,
     tracks_df_um = tracks_df.copy()
     tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
     tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
+    
     # Get unique frames
     frames = sorted(tracks_df_um['frame'].unique())
-
+    
     # Initialize results
-    crowding_data = []
-    track_results = []
-
-    # Calculate local densities for each frame
+    frame_results = []
+    all_densities = []
+    
+    # Analyze each frame
     for frame in frames:
         # Get particles in this frame
         frame_data = tracks_df_um[tracks_df_um['frame'] == frame]
-
+        
         if len(frame_data) < 2:
-            # Not enough points for density analysis
             continue
-
+            
         # Get coordinates
         coords = frame_data[['x', 'y']].values
-        track_ids = frame_data['track_id'].values
-
-        # Calculate pairwise distances
-        distances = distance.pdist(coords)
-        distance_matrix = distance.squareform(distances)
-
-        # Calculate local density for each particle
-        for i in range(len(coords)):
-            # Count neighbors within radius_of_influence
-            neighbors = np.sum(distance_matrix[i] <= radius_of_influence) - 1  # Exclude self
-
-            # Calculate density (particles per square µm)
-            density = neighbors / (np.pi * radius_of_influence**2)
-
-            crowding_data.append({
-                'frame': frame,
-                'track_id': track_ids[i],
-                'x': coords[i, 0],
-                'y': coords[i, 1],
-                'local_density': density,
-                'n_neighbors': neighbors
-            })
-
-    if not crowding_data:
-        return {
-            'success': False,
-            'error': 'Not enough data for crowding analysis'
-        }
-
-    # Convert to DataFrame
-    crowding_df = pd.DataFrame(crowding_data)
-
-    # Analyze effect of crowding on each track
-    # Group by track_id
-    grouped = tracks_df_um.groupby('track_id')
-
-    for track_id, track_data in grouped:
-        # Skip short tracks
-        if len(track_data) < min_track_length:
-            continue
-
-        # Get crowding data for this track
-        track_crowding = crowding_df[crowding_df['track_id'] == track_id]
-
-        if len(track_crowding) < min_track_length:
-            continue
-
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
-        track_crowding = track_crowding.sort_values('frame')
-
-        # Match frames
-        common_frames = set(track_data['frame']) & set(track_crowding['frame'])
-
-        if len(common_frames) < min_track_length:
-            continue
-
-        # Filter data to common frames
-        track_data = track_data[track_data['frame'].isin(common_frames)]
-        track_crowding = track_crowding[track_crowding['frame'].isin(common_frames)]
-
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
-        track_crowding = track_crowding.sort_values('frame')
-
-        # Extract positions and densities
-        x = track_data['x'].values
-        y = track_data['y'].values
-        frames = track_data['frame'].values.astype(float)
-        densities = track_crowding['local_density'].values
-
-        # Calculate displacements
-        dx = np.diff(x)
-        dy = np.diff(y)
-        displacements = np.sqrt(dx**2 + dy**2)
-
-        # Match displacements with densities (use density at starting point)
-        disp_densities = densities[:-1]
-
-        # Analyze correlation between displacement and density
-        if len(displacements) >= 3:
-            corr_coef, p_value = np.corrcoef(displacements, disp_densities)[0, 1], 0
-
-            try:
-                from scipy.stats import pearsonr
-                corr_coef, p_value = pearsonr(displacements, disp_densities)
-            except:
-                pass
-
-            # Calculate median displacement at different density levels
-            # Divide densities into tertiles (low, medium, high)
-            density_tertiles = np.percentile(disp_densities, [33, 66])
-
-            low_density_disp = displacements[disp_densities <= density_tertiles[0]]
-            med_density_disp = displacements[(disp_densities > density_tertiles[0]) &
-                                          (disp_densities <= density_tertiles[1])]
-            high_density_disp = displacements[disp_densities > density_tertiles[1]]
-
-            # Calculate median displacement for each group
-            low_density_median = np.median(low_density_disp) if len(low_density_disp) > 0 else np.nan
-            med_density_median = np.median(med_density_disp) if len(med_density_disp) > 0 else np.nan
-            high_density_median = np.median(high_density_disp) if len(high_density_disp) > 0 else np.nan
-
-            # Calculate mean displacement for each group
-            low_density_mean = np.mean(low_density_disp) if len(low_density_disp) > 0 else np.nan
-            med_density_mean = np.mean(med_density_disp) if len(med_density_disp) > 0 else np.nan
-            high_density_mean = np.mean(high_density_disp) if len(high_density_disp) > 0 else np.nan
-
-            # Calculate crowding effect ratio
-            crowding_effect = high_density_median / low_density_median if (
-                not np.isnan(high_density_median) and
-                not np.isnan(low_density_median) and
-                low_density_median > 0
-            ) else np.nan
-
-            track_results.append({
-                'track_id': track_id,
-                'n_points': len(track_data),
-                'mean_density': np.mean(densities),
-                'median_density': np.median(densities),
-                'density_std': np.std(densities),
-                'mean_displacement': np.mean(displacements),
-                'median_displacement': np.median(displacements),
-                'displacement_std': np.std(displacements),
-                'density_displacement_correlation': corr_coef,
-                'correlation_p_value': p_value,
-                'low_density_median_disp': low_density_median,
-                'med_density_median_disp': med_density_median,
-                'high_density_median_disp': high_density_median,
-                'low_density_mean_disp': low_density_mean,
-                'med_density_mean_disp': med_density_mean,
-                'high_density_mean_disp': high_density_mean,
-                'crowding_effect_ratio': crowding_effect
-            })
-
-    # Combine results
+        
+        # Build KD-tree for efficient neighbor search
+        tree = KDTree(coords)
+        
+        # Count neighbors within radius
+        # query_radius returns indices of neighbors (including self)
+        neighbors = tree.query_radius(coords, r=radius)
+        
+        # Calculate local density (particles per µm²)
+        # Subtract 1 to exclude self
+        n_neighbors = np.array([len(n) - 1 for n in neighbors])
+        local_density = n_neighbors / (np.pi * radius**2)
+        
+        all_densities.extend(local_density)
+        
+        frame_results.append({
+            'frame': frame,
+            'mean_density': np.mean(local_density),
+            'max_density': np.max(local_density),
+            'n_particles': len(frame_data)
+        })
+        
+    # Compile results
     results = {
-        'success': True if track_results else False,
-        'crowding_data': crowding_df,
-        'track_results': pd.DataFrame(track_results) if track_results else pd.DataFrame()
+        'success': True,
+        'frame_results': pd.DataFrame(frame_results),
+        'ensemble_results': {}
     }
-
-    # Calculate ensemble statistics
-    if track_results:
-        track_results_df = pd.DataFrame(track_results)
-
-        # Overall statistics
-        results['ensemble_results'] = {
-            'n_tracks_analyzed': len(track_results_df),
-            'mean_density': crowding_df['local_density'].mean(),
-            'median_density': crowding_df['local_density'].median(),
-            'max_density': crowding_df['local_density'].max(),
-            'density_std': crowding_df['local_density'].std(),
-            'density_cv': crowding_df['local_density'].std() / crowding_df['local_density'].mean(),
-            'mean_correlation': track_results_df['density_displacement_correlation'].mean(),
-            'significant_correlations': np.sum(track_results_df['correlation_p_value'] < 0.05),
-            'mean_crowding_effect': track_results_df['crowding_effect_ratio'].mean(),
-            'median_crowding_effect': track_results_df['crowding_effect_ratio'].median()
-        }
-
-        # Count tracks with different correlation types
-        neg_corr = np.sum((track_results_df['density_displacement_correlation'] < -0.3) &
-                          (track_results_df['correlation_p_value'] < 0.05))
-        pos_corr = np.sum((track_results_df['density_displacement_correlation'] > 0.3) &
-                         (track_results_df['correlation_p_value'] < 0.05))
-        no_corr = len(track_results_df) - neg_corr - pos_corr
-
-        results['ensemble_results']['negative_correlation_count'] = neg_corr
-        results['ensemble_results']['positive_correlation_count'] = pos_corr
-        results['ensemble_results']['no_correlation_count'] = no_corr
-
-        results['ensemble_results']['negative_correlation_fraction'] = neg_corr / len(track_results_df)
-        results['ensemble_results']['positive_correlation_fraction'] = pos_corr / len(track_results_df)
-        results['ensemble_results']['no_correlation_fraction'] = no_corr / len(track_results_df)
-
+    
+    if all_densities:
+        results['ensemble_results']['mean_local_density'] = np.mean(all_densities)
+        results['ensemble_results']['median_local_density'] = np.median(all_densities)
+        results['ensemble_results']['std_local_density'] = np.std(all_densities)
+        results['ensemble_results']['max_local_density'] = np.max(all_densities)
+    else:
+        results['ensemble_results']['mean_local_density'] = 0
+        
     return results
 
 
 # --- Active Transport Analysis ---
 
-def analyze_active_transport(tracks_df: pd.DataFrame,
-                            window_size: int = 5,
-                            min_track_length: int = 10,
-                            pixel_size: float = 1.0,
+def analyze_active_transport(tracks_df: pd.DataFrame, 
+                            pixel_size: float = 1.0, 
                             frame_interval: float = 1.0,
-                            straightness_threshold: float = 0.8,
-                            min_segment_length: int = 5) -> Dict[str, Any]:
+                            window_size: int = 5) -> Dict[str, Any]:
     """
-    Analyze directed motion and active transport.
-
+    Analyze active transport events (directed motion).
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    window_size : int
-        Window size for detecting directed segments
-    min_track_length : int
-        Minimum track length to include in analysis
     pixel_size : float
         Pixel size in micrometers
     frame_interval : float
         Time between frames in seconds
-    straightness_threshold : float
-        Threshold for straightness to identify directed motion
-    min_segment_length : int
-        Minimum length of directed motion segment
-
+    window_size : int
+        Window size for local velocity calculation
+        
     Returns
     -------
     dict
         Dictionary containing active transport analysis results
     """
-    # Convert pixel coordinates to µm
-    tracks_df_um = tracks_df.copy()
-    tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
-    tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
-    # Initialize results
-    directed_segments = []
-    track_results = []
-
-    # Group by track_id
-    grouped = tracks_df_um.groupby('track_id')
-
-    for track_id, track_data in grouped:
-        # Skip short tracks
-        if len(track_data) < min_track_length:
-            continue
-
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
-
-        # Extract positions and frames
-        x = track_data['x'].values
-        y = track_data['y'].values
-        frames = track_data['frame'].values.astype(float)
-
-        # Calculate displacements
-        dx = np.diff(x)
-        dy = np.diff(y)
-        displacements = np.sqrt(dx**2 + dy**2)
-        angles = np.arctan2(dy, dx)
-
-        # Initialize track result
-        track_result = {
-            'track_id': track_id,
-            'track_length': len(track_data),
-            'duration': (frames[-1] - frames[0]) * frame_interval,
-            'mean_speed': np.mean(displacements / frame_interval),
-            'max_speed': np.max(displacements / frame_interval),
-            'n_directed_segments': 0,
-            'directed_fraction': 0.0
+    # Use analyze_motion to get velocity and directionality
+    motion_results = analyze_motion(
+        tracks_df, 
+        window_size=window_size, 
+        analyze_velocity_autocorr=True, 
+        analyze_persistence=True,
+        motion_classification='advanced',
+        pixel_size=pixel_size, 
+        frame_interval=frame_interval
+    )
+    
+    if not motion_results['success'] or motion_results['track_results'].empty:
+        return {
+            'success': False,
+            'error': 'Could not analyze motion'
         }
-
-        # Detect directed motion segments using sliding window
-        if len(track_data) >= window_size + min_segment_length:
-            segment_start = None
-            current_segment = []
-
-            for i in range(len(track_data) - window_size + 1):
-                # Analyze window from i to i+window_size
-                window_x = x[i:i+window_size]
-                window_y = y[i:i+window_size]
-
-                # Calculate straightness within window
-                # Net displacement / total path length
-                net_disp = np.sqrt((window_x[-1] - window_x[0])**2 + (window_y[-1] - window_y[0])**2)
-
-                # Calculate total path length
-                path_length = 0
-                for j in range(1, window_size):
-                    path_length += np.sqrt((window_x[j] - window_x[j-1])**2 + (window_y[j] - window_y[j-1])**2)
-
-                if path_length > 0:
-                    straightness = net_disp / path_length
-                else:
-                    straightness = 0
-
-                # Check if this window shows directed motion
-                if straightness >= straightness_threshold:
-                    # This window is part of a directed segment
-                    if segment_start is None:
-                        segment_start = i
-                        current_segment = list(range(i, i+window_size))
-                    else:
-                        # Extend current segment
-                        for j in range(i+1, i+window_size):
-                            if j not in current_segment:
-                                current_segment.append(j)
-                elif segment_start is not None:
-                    # End of a directed segment
-                    if len(current_segment) >= min_segment_length:
-                        # This is a valid segment
-                        segment_frames = frames[current_segment]
-                        segment_x = x[current_segment]
-                        segment_y = y[current_segment]
-
-                        # Calculate segment properties
-                        segment_dx = segment_x[-1] - segment_x[0]
-                        segment_dy = segment_y[-1] - segment_y[0]
-                        segment_displacement = np.sqrt(segment_dx**2 + segment_dy**2)
-                        segment_duration = (segment_frames[-1] - segment_frames[0]) * frame_interval
-                        segment_speed = segment_displacement / segment_duration if segment_duration > 0 else 0
-                        segment_angle = np.arctan2(segment_dy, segment_dx)
-
-                        # Calculate straightness of the entire segment
-                        segment_path_length = 0
-                        for j in range(1, len(current_segment)):
-                            idx1 = current_segment[j-1]
-                            idx2 = current_segment[j]
-                            segment_path_length += np.sqrt((x[idx2] - x[idx1])**2 + (y[idx2] - y[idx1])**2)
-
-                        segment_straightness = segment_displacement / segment_path_length if segment_path_length > 0 else 0
-
-                        directed_segments.append({
-                            'track_id': track_id,
-                            'start_frame': segment_frames[0],
-                            'end_frame': segment_frames[-1],
-                            'duration': segment_duration,
-                            'n_frames': len(current_segment),
-                            'start_x': segment_x[0],
-                            'start_y': segment_y[0],
-                            'end_x': segment_x[-1],
-                            'end_y': segment_y[-1],
-                            'displacement': segment_displacement,
-                            'path_length': segment_path_length,
-                            'straightness': segment_straightness,
-                            'speed': segment_speed,
-                            'angle': segment_angle
-                        })
-
-                        track_result['n_directed_segments'] += 1
-
-                    # Reset segment
-                    segment_start = None
-                    current_segment = []
-
-            # Check if there's an ongoing segment at the end
-            if segment_start is not None and len(current_segment) >= min_segment_length:
-                # This is a valid segment
-                segment_frames = frames[current_segment]
-                segment_x = x[current_segment]
-                segment_y = y[current_segment]
-
-                # Calculate segment properties
-                segment_dx = segment_x[-1] - segment_x[0]
-                segment_dy = segment_y[-1] - segment_y[0]
-                segment_displacement = np.sqrt(segment_dx**2 + segment_dy**2)
-                segment_duration = (segment_frames[-1] - segment_frames[0]) * frame_interval
-                segment_speed = segment_displacement / segment_duration if segment_duration > 0 else 0
-                segment_angle = np.arctan2(segment_dy, segment_dx)
-
-                # Calculate straightness of the entire segment
-                segment_path_length = 0
-                for j in range(1, len(current_segment)):
-                    idx1 = current_segment[j-1]
-                    idx2 = current_segment[j]
-                    segment_path_length += np.sqrt((x[idx2] - x[idx1])**2 + (y[idx2] - y[idx1])**2)
-
-                segment_straightness = segment_displacement / segment_path_length if segment_path_length > 0 else 0
-
-                directed_segments.append({
-                    'track_id': track_id,
-                    'start_frame': segment_frames[0],
-                    'end_frame': segment_frames[-1],
-                    'duration': segment_duration,
-                    'n_frames': len(current_segment),
-                    'start_x': segment_x[0],
-                    'start_y': segment_y[0],
-                    'end_x': segment_x[-1],
-                    'end_y': segment_y[-1],
-                    'displacement': segment_displacement,
-                    'path_length': segment_path_length,
-                    'straightness': segment_straightness,
-                    'speed': segment_speed,
-                    'angle': segment_angle
-                })
-
-                track_result['n_directed_segments'] += 1
-
-            # Calculate directed fraction for the track
-            if track_result['n_directed_segments'] > 0:
-                # Count frames in directed segments
-                directed_frames = set()
-
-                for segment in directed_segments:
-                    if segment['track_id'] == track_id:
-                        for frame in range(int(segment['start_frame']), int(segment['end_frame']) + 1):
-                            directed_frames.add(frame)
-
-                directed_count = len(directed_frames)
-                track_result['directed_fraction'] = directed_count / len(track_data)
-
-        track_results.append(track_result)
-
-    # Combine results
+        
+    track_results = motion_results['track_results']
+    
+    # Identify active transport tracks
+    # Criteria: High straightness, high alpha, persistent velocity correlation
+    
+    active_tracks = []
+    
+    for _, track in track_results.iterrows():
+        is_active = False
+        score = 0
+        
+        # Criterion 1: Motion type classification
+        if 'motion_type' in track and track['motion_type'] == 'directed':
+            score += 2
+            
+        # Criterion 2: Alpha value (superdiffusive)
+        if 'alpha' in track and track['alpha'] > 1.2:
+            score += 1
+            
+        # Criterion 3: Straightness
+        if 'straightness' in track and track['straightness'] > 0.5:
+            score += 1
+            
+        # Criterion 4: Velocity autocorrelation time
+        if 'correlation_time' in track and track['correlation_time'] > 3 * frame_interval:
+            score += 1
+            
+        if score >= 3:
+            is_active = True
+            
+        if is_active:
+            active_tracks.append({
+                'track_id': track['track_id'],
+                'mean_speed': track['mean_speed'],
+                'straightness': track.get('straightness', np.nan),
+                'alpha': track.get('alpha', np.nan),
+                'correlation_time': track.get('correlation_time', np.nan),
+                'score': score
+            })
+            
+    # Compile results
     results = {
-        'success': True if directed_segments else False,
-        'directed_segments': pd.DataFrame(directed_segments) if directed_segments else pd.DataFrame(),
-        'track_results': pd.DataFrame(track_results) if track_results else pd.DataFrame()
+        'success': True,
+        'active_tracks': pd.DataFrame(active_tracks),
+        'ensemble_results': {}
     }
-
-    # Calculate ensemble statistics
-    if directed_segments:
-        segments_df = pd.DataFrame(directed_segments)
-        track_results_df = pd.DataFrame(track_results)
-
-        results['ensemble_results'] = {
-            'n_tracks_analyzed': len(track_results_df),
-            'n_tracks_with_directed_motion': len(track_results_df[track_results_df['n_directed_segments'] > 0]),
-            'directed_motion_fraction': len(track_results_df[track_results_df['n_directed_segments'] > 0]) / len(track_results_df),
-            'n_directed_segments': len(segments_df),
-            'mean_segments_per_track': track_results_df['n_directed_segments'].mean(),
-            'mean_segment_duration': segments_df['duration'].mean(),
-            'mean_segment_speed': segments_df['speed'].mean(),
-            'mean_segment_straightness': segments_df['straightness'].mean(),
-            'mean_directed_fraction': track_results_df['directed_fraction'].mean()
-        }
-
-        # Calculate mean transport velocity from all directed segments
-        results['ensemble_results']['mean_transport_velocity'] = segments_df['speed'].mean()
-        results['ensemble_results']['median_transport_velocity'] = segments_df['speed'].median()
-        results['ensemble_results']['max_transport_velocity'] = segments_df['speed'].max()
-
+    
+    # Calculate statistics
+    n_total = len(track_results)
+    n_active = len(active_tracks)
+    
+    results['ensemble_results']['n_tracks'] = n_total
+    results['ensemble_results']['n_active_tracks'] = n_active
+    results['ensemble_results']['active_fraction'] = n_active / n_total if n_total > 0 else 0
+    
+    if active_tracks:
+        active_df = pd.DataFrame(active_tracks)
+        results['ensemble_results']['mean_active_speed'] = active_df['mean_speed'].mean()
+        results['ensemble_results']['mean_active_straightness'] = active_df['straightness'].mean()
+    
     return results
 
 
 # --- Boundary Crossing Analysis ---
 
-def analyze_boundary_crossing(tracks_df: pd.DataFrame,
-                             boundaries=None,
+def analyze_boundary_crossing(tracks_df: pd.DataFrame, 
+                             boundary_coords: List[Tuple[float, float]],
                              pixel_size: float = 1.0,
-                             frame_interval: float = 1.0,
-                             min_track_length: int = 5) -> Dict[str, Any]:
+                             closed_boundary: bool = True) -> Dict[str, Any]:
     """
-    Analyze boundary crossing events and statistics.
-
+    Analyze particles crossing a defined boundary.
+    
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    boundaries : list of dict
-        List of boundaries to analyze (each with parameters defining the boundary)
-        If None, tries to identify boundaries from data
+    boundary_coords : list of tuples
+        List of (x, y) coordinates defining the boundary (in pixels)
     pixel_size : float
         Pixel size in micrometers
-    frame_interval : float
-        Time between frames in seconds
-    min_track_length : int
-        Minimum track length to include in analysis
-
+    closed_boundary : bool
+        Whether the boundary is a closed loop (polygon) or open line
+        
     Returns
     -------
     dict
         Dictionary containing boundary crossing analysis results
     """
-    # Convert pixel coordinates to µm
+    from matplotlib.path import Path
+    
+    # Convert boundary to µm
+    boundary_um = [(x * pixel_size, y * pixel_size) for x, y in boundary_coords]
+    boundary_path = Path(boundary_um)
+    
+    # Convert tracks to µm
     tracks_df_um = tracks_df.copy()
     tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
     tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
-    # Initialize results
+    
     crossing_events = []
-    track_results = []
-
-    # If no boundaries provided, try to detect them
-    detected_boundaries = []
-
-    if boundaries is None:
-        # Get overall spatial distribution
-        x_min, x_max = tracks_df_um['x'].min(), tracks_df_um['x'].max()
-        y_min, y_max = tracks_df_um['y'].min(), tracks_df_um['y'].max()
-
-        # Calculate binned densities to find areas of high gradient
-        try:
-            from scipy.stats import gaussian_kde
-
-            # Sample points for KDE
-            points = tracks_df_um[['x', 'y']].values
-
-            # Create grid for density estimation
-            n_grid = 20
-            x_grid = np.linspace(x_min, x_max, n_grid)
-            y_grid = np.linspace(y_min, y_max, n_grid)
-            X, Y = np.meshgrid(x_grid, y_grid)
-            xy_grid = np.vstack([X.ravel(), Y.ravel()]).T
-
-            # Estimate density
-            if len(points) > 10:
-                kde = gaussian_kde(points.T)
-                Z = kde(np.vstack([xy_grid[:, 0], xy_grid[:, 1]]))
-                Z = Z.reshape(X.shape)
-
-                # Find gradient of density
-                from scipy.ndimage import gaussian_filter
-
-                # Smooth density
-                Z_smooth = gaussian_filter(Z, sigma=1)
-
-                # Calculate gradient
-                gy, gx = np.gradient(Z_smooth)
-                gradient_magnitude = np.sqrt(gx**2 + gy**2)
-
-                # Find high gradient regions (potential boundaries)
-                threshold = np.percentile(gradient_magnitude, 75)
-                high_gradient = gradient_magnitude > threshold
-
-                # Extract boundary coordinates
-                for i in range(n_grid):
-                    for j in range(n_grid):
-                        if high_gradient[i, j]:
-                            # This is a potential boundary point
-                            detected_boundaries.append({
-                                'type': 'point',
-                                'x': X[i, j],
-                                'y': Y[i, j],
-                                'gradient': gradient_magnitude[i, j]
-                            })
-
-                # If enough boundary points, try to fit lines or curves
-                if len(detected_boundaries) >= 5:
-                    # Cluster boundary points
-                    boundary_points = np.array([[b['x'], b['y']] for b in detected_boundaries])
-                    clustering = DBSCAN(eps=min((x_max-x_min), (y_max-y_min))/10, min_samples=3)
-                    labels = clustering.fit_predict(boundary_points)
-
-                    # For each cluster, fit a line
-                    for label in set(labels):
-                        if label == -1:
-                            continue  # Skip noise
-
-                        cluster_points = boundary_points[labels == label]
-
-                        if len(cluster_points) < 5:
-                            continue
-
-                        # Fit line: y = mx + b
-                        try:
-                            # Check if points are more aligned with x or y axis
-                            x_range = np.max(cluster_points[:, 0]) - np.min(cluster_points[:, 0])
-                            y_range = np.max(cluster_points[:, 1]) - np.min(cluster_points[:, 1])
-
-                            if x_range > y_range:
-                                # Fit y = mx + b
-                                m, b, r, p, se = linregress(cluster_points[:, 0], cluster_points[:, 1])
-
-                                if abs(r) > 0.7:
-                                    # Good linear fit
-                                    detected_boundaries = []  # Clear point boundaries
-                                    boundaries = [{
-                                        'type': 'line',
-                                        'slope': m,
-                                        'intercept': b,
-                                        'orientation': 'y=mx+b',
-                                        'x_min': np.min(cluster_points[:, 0]),
-                                        'x_max': np.max(cluster_points[:, 0]),
-                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries)
-                                                          if labels[i] == label])
-                                    }]
-                                    break
-                            else:
-                                # Fit x = my + b
-                                m, b, r, p, se = linregress(cluster_points[:, 1], cluster_points[:, 0])
-
-                                if abs(r) > 0.7:
-                                    # Good linear fit
-                                    detected_boundaries = []  # Clear point boundaries
-                                    boundaries = [{
-                                        'type': 'line',
-                                        'slope': m,
-                                        'intercept': b,
-                                        'orientation': 'x=my+b',
-                                        'y_min': np.min(cluster_points[:, 1]),
-                                        'y_max': np.max(cluster_points[:, 1]),
-                                        'gradient': np.mean([d['gradient'] for i, d in enumerate(detected_boundaries)
-                                                          if labels[i] == label])
-                                    }]
-                                    break
-                        except:
-                            pass
-        except:
-            pass
-
-        # If no boundaries detected, use simple division
-        if not boundaries and not detected_boundaries:
-            # Divide the space into quadrants or use midpoints
-            x_mid = (x_min + x_max) / 2
-            y_mid = (y_min + y_max) / 2
-
-            # Add horizontal and vertical dividers
-            boundaries = [
-                {
-                    'type': 'line',
-                    'orientation': 'horizontal',
-                    'y': y_mid,
-                    'x_min': x_min,
-                    'x_max': x_max
-                },
-                {
-                    'type': 'line',
-                    'orientation': 'vertical',
-                    'x': x_mid,
-                    'y_min': y_min,
-                    'y_max': y_max
-                }
-            ]
-
-        # If we still have point boundaries, add them
-        if detected_boundaries and not boundaries:
-            boundaries = detected_boundaries
-
-    # Analyze tracks for boundary crossings
+    
     # Group by track_id
     grouped = tracks_df_um.groupby('track_id')
-
+    
     for track_id, track_data in grouped:
-        # Skip short tracks
-        if len(track_data) < min_track_length:
+        if len(track_data) < 2:
             continue
-
+            
         # Sort by frame
         track_data = track_data.sort_values('frame')
-
-        # Extract positions and frames
-        x = track_data['x'].values
-        y = track_data['y'].values
-        frames = track_data['frame'].values.astype(float)
-
-        # Initialize track result
-        track_result = {
-            'track_id': track_id,
-            'track_length': len(track_data),
-            'duration': (frames[-1] - frames[0]) * frame_interval,
-            'n_crossings': 0
-        }
-
-        # Check for boundary crossings
-        for boundary in boundaries:
-            # Determine boundary type and check for crossings
-            if boundary['type'] == 'line':
-                if boundary['orientation'] == 'horizontal' or boundary['orientation'] == 'y=c':
-                    # Horizontal line: y = c
-                    boundary_y = boundary.get('y', boundary.get('intercept', 0))
-
-                    # Check each pair of consecutive points
-                    for i in range(len(track_data) - 1):
-                        y1, y2 = y[i], y[i+1]
-
-                        # Check if the boundary is crossed
-                        if (y1 <= boundary_y and y2 > boundary_y) or (y1 > boundary_y and y2 <= boundary_y):
-                            # Calculate crossing point
-                            x1, x2 = x[i], x[i+1]
-                            t = (boundary_y - y1) / (y2 - y1) if y2 != y1 else 0
-                            crossing_x = x1 + t * (x2 - x1)
-
-                            # Check if crossing is within the boundary limits
-                            x_min_bound = boundary.get('x_min', x_min)
-                            x_max_bound = boundary.get('x_max', x_max)
-
-                            if x_min_bound <= crossing_x <= x_max_bound:
-                                # This is a valid crossing
-                                crossing_frame = frames[i] + t * (frames[i+1] - frames[i])
-                                crossing_time = crossing_frame * frame_interval
-
-                                # Determine crossing direction
-                                direction = 'up' if y2 > y1 else 'down'
-
-                                crossing_events.append({
-                                    'track_id': track_id,
-                                    'boundary_id': boundaries.index(boundary),
-                                    'boundary_type': 'horizontal',
-                                    'crossing_frame': crossing_frame,
-                                    'crossing_time': crossing_time,
-                                    'crossing_x': crossing_x,
-                                    'crossing_y': boundary_y,
-                                    'direction': direction,
-                                    'pre_x': x1,
-                                    'pre_y': y1,
-                                    'post_x': x2,
-                                    'post_y': y2
-                                })
-
-                                track_result['n_crossings'] += 1
-
-                elif boundary['orientation'] == 'vertical' or boundary['orientation'] == 'x=c':
-                    # Vertical line: x = c
-                    boundary_x = boundary.get('x', boundary.get('intercept', 0))
-
-                    # Check each pair of consecutive points
-                    for i in range(len(track_data) - 1):
-                        x1, x2 = x[i], x[i+1]
-
-                        # Check if the boundary is crossed
-                        if (x1 <= boundary_x and x2 > boundary_x) or (x1 > boundary_x and x2 <= boundary_x):
-                            # Calculate crossing point
-                            y1, y2 = y[i], y[i+1]
-                            t = (boundary_x - x1) / (x2 - x1) if x2 != x1 else 0
-                            crossing_y = y1 + t * (y2 - y1)
-
-                            # Check if crossing is within the boundary limits
-                            y_min_bound = boundary.get('y_min', y_min)
-                            y_max_bound = boundary.get('y_max', y_max)
-
-                            if y_min_bound <= crossing_y <= y_max_bound:
-                                # This is a valid crossing
-                                crossing_frame = frames[i] + t * (frames[i+1] - frames[i])
-                                crossing_time = crossing_frame * frame_interval
-
-                                # Determine crossing direction
-                                direction = 'right' if x2 > x1 else 'left'
-
-                                crossing_events.append({
-                                    'track_id': track_id,
-                                    'boundary_id': boundaries.index(boundary),
-                                    'boundary_type': 'vertical',
-                                    'crossing_frame': crossing_frame,
-                                    'crossing_time': crossing_time,
-                                    'crossing_x': boundary_x,
-                                    'crossing_y': crossing_y,
-                                    'direction': direction,
-                                    'pre_x': x1,
-                                    'pre_y': y1,
-                                    'post_x': x2,
-                                    'post_y': y2
-                                })
-
-                                track_result['n_crossings'] += 1
-
-                elif boundary['orientation'] == 'y=mx+b':
-                    # Sloped line: y = mx + b
-                    m = boundary['slope']
-                    b = boundary['intercept']
-
-                    # Check each pair of consecutive points
-                    for i in range(len(track_data) - 1):
-                        x1, y1 = x[i], y[i]
-                        x2, y2 = x[i+1], y[i+1]
-
-                        # Calculate y values on the line
-                        y1_line = m * x1 + b
-                        y2_line = m * x2 + b
-
-                        # Check if the line is crossed
-                        if (y1 <= y1_line and y2 > y2_line) or (y1 > y1_line and y2 <= y2_line):
-                            # Calculate crossing point
-                            # Solve for intersection of two lines:
-                            # y = y1 + (y2-y1)/(x2-x1) * (x - x1)
-                            # y = m*x + b
-                            if x2 != x1:
-                                track_slope = (y2 - y1) / (x2 - x1)
-                                track_intercept = y1 - track_slope * x1
-
-                                # x-coordinate of intersection
-                                crossing_x = (track_intercept - b) / (m - track_slope) if m != track_slope else x1
-                                crossing_y = m * crossing_x + b
-                            else:
-                                # Vertical track segment
-                                crossing_x = x1
-                                crossing_y = m * crossing_x + b
-
-                            # Check if crossing is within the boundary limits
-                            x_min_bound = boundary.get('x_min', x_min)
-                            x_max_bound = boundary.get('x_max', x_max)
-
-                            if x_min_bound <= crossing_x <= x_max_bound:
-                                # Interpolate crossing frame/time
-                                dist1 = np.sqrt((crossing_x - x1)**2 + (crossing_y - y1)**2)
-                                dist_total = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-                                t = dist1 / dist_total if dist_total > 0 else 0
-
-                                crossing_frame = frames[i] + t * (frames[i+1] - frames[i])
-                                crossing_time = crossing_frame * frame_interval
-
-                                # Determine crossing direction (above/below line)
-                                # Check if point is above or below the line y = mx + b
-                                # If y > mx + b, point is above the line
-                                pre_side = 'above' if y1 > y1_line else 'below'
-                                post_side = 'above' if y2 > y2_line else 'below'
-                                direction = f"{pre_side}_to_{post_side}"
-
-                                crossing_events.append({
-                                    'track_id': track_id,
-                                    'boundary_id': boundaries.index(boundary),
-                                    'boundary_type': 'sloped',
-                                    'crossing_frame': crossing_frame,
-                                    'crossing_time': crossing_time,
-                                    'crossing_x': crossing_x,
-                                    'crossing_y': crossing_y,
-                                    'direction': direction,
-                                    'pre_x': x1,
-                                    'pre_y': y1,
-                                    'post_x': x2,
-                                    'post_y': y2
-                                })
-
-                                track_result['n_crossings'] += 1
-
-                elif boundary['orientation'] == 'x=my+b':
-                    # Sloped line: x = my + b
-                    m = boundary['slope']
-                    b = boundary['intercept']
-
-                    # Check each pair of consecutive points
-                    for i in range(len(track_data) - 1):
-                        x1, y1 = x[i], y[i]
-                        x2, y2 = x[i+1], y[i+1]
-
-                        # Calculate x values on the line
-                        x1_line = m * y1 + b
-                        x2_line = m * y2 + b
-
-                        # Check if the line is crossed
-                        if (x1 <= x1_line and x2 > x2_line) or (x1 > x1_line and x2 <= x2_line):
-                            # Calculate crossing point
-                            # Solve for intersection of two lines:
-                            # x = x1 + (x2-x1)/(y2-y1) * (y - y1)
-                            # x = m*y + b
-                            if y2 != y1:
-                                track_slope = (x2 - x1) / (y2 - y1)
-                                track_intercept = x1 - track_slope * y1
-
-                                # y-coordinate of intersection
-                                crossing_y = (track_intercept - b) / (m - track_slope) if m != track_slope else y1
-                                crossing_x = m * crossing_y + b
-                            else:
-                                # Horizontal track segment
-                                crossing_y = y1
-                                crossing_x = m * crossing_y + b
-
-                            # Check if crossing is within the boundary limits
-                            y_min_bound = boundary.get('y_min', y_min)
-                            y_max_bound = boundary.get('y_max', y_max)
-
-                            if y_min_bound <= crossing_y <= y_max_bound:
-                                # Interpolate crossing frame/time
-                                dist1 = np.sqrt((crossing_x - x1)**2 + (crossing_y - y1)**2)
-                                dist_total = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-                                t = dist1 / dist_total if dist_total > 0 else 0
-
-                                crossing_frame = frames[i] + t * (frames[i+1] - frames[i])
-                                crossing_time = crossing_frame * frame_interval
-
-                                # Determine crossing direction (left/right of line)
-                                # Check if point is left or right of the line x = my + b
-                                # If x > my + b, point is right of the line
-                                pre_side = 'right' if x1 > x1_line else 'left'
-                                post_side = 'right' if x2 > x2_line else 'left'
-                                direction = f"{pre_side}_to_{post_side}"
-
-                                crossing_events.append({
-                                    'track_id': track_id,
-                                    'boundary_id': boundaries.index(boundary),
-                                    'boundary_type': 'sloped',
-                                    'crossing_frame': crossing_frame,
-                                    'crossing_time': crossing_time,
-                                    'crossing_x': crossing_x,
-                                    'crossing_y': crossing_y,
-                                    'direction': direction,
-                                    'pre_x': x1,
-                                    'pre_y': y1,
-                                    'post_x': x2,
-                                    'post_y': y2
-                                })
-
-                                track_result['n_crossings'] += 1
-
-            elif boundary['type'] == 'circle':
-                # Circular boundary
-                center_x = boundary['center_x']
-                center_y = boundary['center_y']
-                radius = boundary['radius']
-
-                # Check each pair of consecutive points
-                for i in range(len(track_data) - 1):
-                    x1, y1 = x[i], y[i]
-                    x2, y2 = x[i+1], y[i+1]
-
-                    # Calculate distances from center
-                    dist1 = np.sqrt((x1 - center_x)**2 + (y1 - center_y)**2)
-                    dist2 = np.sqrt((x2 - center_x)**2 + (y2 - center_y)**2)
-
-                    # Check if the boundary is crossed
-                    if (dist1 <= radius and dist2 > radius) or (dist1 > radius and dist2 <= radius):
-                        # Calculate crossing point
-                        # Solve for intersection of line segment and circle
-                        dx = x2 - x1
-                        dy = y2 - y1
-
-                        # Quadratic formula coefficients
-                        a = dx**2 + dy**2
-                        b = 2 * ((x1 - center_x) * dx + (y1 - center_y) * dy)
-                        c = (x1 - center_x)**2 + (y1 - center_y)**2 - radius**2
-
-                        # Discriminant
-                        discriminant = b**2 - 4 * a * c
-
-                        if discriminant >= 0 and a != 0:
-                            # There is an intersection
-                            t1 = (-b + np.sqrt(discriminant)) / (2 * a)
-                            t2 = (-b - np.sqrt(discriminant)) / (2 * a)
-
-                            # Choose the t that is in [0, 1]
-                            if 0 <= t1 <= 1:
-                                t = t1
-                            elif 0 <= t2 <= 1:
-                                t = t2
-                            else:
-                                continue  # No intersection in this segment
-
-                            # Calculate crossing point
-                            crossing_x = x1 + t * dx
-                            crossing_y = y1 + t * dy
-
-                            # Interpolate crossing frame/time
-                            crossing_frame = frames[i] + t * (frames[i+1] - frames[i])
-                            crossing_time = crossing_frame * frame_interval
-
-                            # Determine crossing direction
-                            direction = 'out' if dist1 <= radius and dist2 > radius else 'in'
-
-                            crossing_events.append({
-                                'track_id': track_id,
-                                'boundary_id': boundaries.index(boundary),
-                                'boundary_type': 'circle',
-                                'crossing_frame': crossing_frame,
-                                'crossing_time': crossing_time,
-                                'crossing_x': crossing_x,
-                                'crossing_y': crossing_y,
-                                'direction': direction,
-                                'pre_x': x1,
-                                'pre_y': y1,
-                                'post_x': x2,
-                                'post_y': y2
-                            })
-
-                            track_result['n_crossings'] += 1
-
-            elif boundary['type'] == 'point':
-                # Point-like boundary, check proximity
-                boundary_x = boundary['x']
-                boundary_y = boundary['y']
-                threshold = 1.0  # 1 µm threshold for proximity
-
-                # Check each point in track
-                for i in range(len(track_data)):
-                    x_i, y_i = x[i], y[i]
-                    dist = np.sqrt((x_i - boundary_x)**2 + (y_i - boundary_y)**2)
-
-                    if dist <= threshold:
-                        # This point is near the boundary
-                        crossing_events.append({
-                            'track_id': track_id,
-                            'boundary_id': boundaries.index(boundary),
-                            'boundary_type': 'point',
-                            'crossing_frame': frames[i],
-                            'crossing_time': frames[i] * frame_interval,
-                            'crossing_x': x_i,
-                            'crossing_y': y_i,
-                            'direction': 'proximity',
-                            'pre_x': x_i,
-                            'pre_y': y_i,
-                            'post_x': x_i,
-                            'post_y': y_i,
-                            'distance': dist
-                        })
-
-                        track_result['n_crossings'] += 1
-
-        track_results.append(track_result)
-
-    # Calculate residence times
-    residence_times = []
-
-    if crossing_events:
-        crossing_df = pd.DataFrame(crossing_events)
-
-        # Process only for linear or circular boundaries
-        boundary_types = set([b['type'] for b in boundaries if 'type' in b])
-
-        if 'line' in boundary_types or 'circle' in boundary_types:
-            # Group by track_id
-            for track_id, track_data in grouped:
-                # Skip short tracks
-                if len(track_data) < min_track_length:
-                    continue
-
-                # Get crossings for this track
-                track_crossings = crossing_df[crossing_df['track_id'] == track_id]
-
-                if len(track_crossings) < 2:
-                    continue
-
-                # Sort by crossing time
-                track_crossings = track_crossings.sort_values('crossing_time')
-
-                # Calculate residence times for each region
-                for boundary_id, boundary in enumerate(boundaries):
-                    if boundary['type'] != 'line' and boundary['type'] != 'circle':
-                        continue
-
-                    # Get crossings for this boundary
-                    boundary_crossings = track_crossings[track_crossings['boundary_id'] == boundary_id]
-
-                    if len(boundary_crossings) < 2:
-                        continue
-
-                    # Calculate residence times
-                    for i in range(len(boundary_crossings) - 1):
-                        crossing1 = boundary_crossings.iloc[i]
-                        crossing2 = boundary_crossings.iloc[i+1]
-
-                        # Skip if directions are the same (should be alternating in/out or up/down)
-                        if crossing1['direction'] == crossing2['direction']:
-                            continue
-
-                        # Calculate residence time
-                        residence_time = crossing2['crossing_time'] - crossing1['crossing_time']
-
-                        if residence_time > 0:
-                            # Determine region based on boundary type and direction
-                            if boundary['type'] == 'line':
-                                if boundary['orientation'] == 'horizontal' or boundary['orientation'] == 'y=c':
-                                    region = 'above' if crossing1['direction'] == 'up' else 'below'
-                                elif boundary['orientation'] == 'vertical' or boundary['orientation'] == 'x=c':
-                                    region = 'right' if crossing1['direction'] == 'right' else 'left'
-                                else:
-                                    # Sloped line
-                                    dirs = crossing1['direction'].split('_to_')
-                                    region = dirs[1] if len(dirs) > 1 else 'unknown'
-                            elif boundary['type'] == 'circle':
-                                region = 'inside' if crossing1['direction'] == 'in' else 'outside'
-                            else:
-                                region = 'unknown'
-
-                            residence_times.append({
-                                'track_id': track_id,
-                                'boundary_id': boundary_id,
-                                'region': region,
-                                'start_time': crossing1['crossing_time'],
-                                'end_time': crossing2['crossing_time'],
-                                'residence_time': residence_time,
-                                'start_frame': crossing1['crossing_frame'],
-                                'end_frame': crossing2['crossing_frame']
-                            })
-
-    # Combine results
+        
+        # Get points
+        points = track_data[['x', 'y']].values
+        frames = track_data['frame'].values
+        
+        # Check which points are inside the boundary
+        # contains_points returns boolean array
+        is_inside = boundary_path.contains_points(points)
+        
+        # Find transitions (True -> False or False -> True)
+        # diff gives True where value changes
+        transitions = np.diff(is_inside)
+        transition_indices = np.where(transitions)[0]
+        
+        for idx in transition_indices:
+            # Transition happens between idx and idx+1
+            start_inside = is_inside[idx]
+            end_inside = is_inside[idx+1]
+            
+            direction = 'outward' if start_inside and not end_inside else 'inward'
+            
+            crossing_events.append({
+                'track_id': track_id,
+                'frame_before': frames[idx],
+                'frame_after': frames[idx+1],
+                'x_before': points[idx][0],
+                'y_before': points[idx][1],
+                'x_after': points[idx+1][0],
+                'y_after': points[idx+1][1],
+                'direction': direction
+            })
+            
+    # Compile results
     results = {
-        'success': True if crossing_events else False,
-        'crossing_events': pd.DataFrame(crossing_events) if crossing_events else pd.DataFrame(),
-        'track_results': pd.DataFrame(track_results) if track_results else pd.DataFrame(),
-        'residence_times': pd.DataFrame(residence_times) if residence_times else pd.DataFrame(),
-        'boundaries': boundaries
+        'success': True,
+        'crossing_events': pd.DataFrame(crossing_events),
+        'ensemble_results': {}
     }
-
-    # Calculate ensemble statistics
+    
+    # Calculate statistics
     if crossing_events:
-        crossing_df = pd.DataFrame(crossing_events)
-        track_results_df = pd.DataFrame(track_results)
-
-        results['ensemble_results'] = {
-            'n_tracks_analyzed': len(track_results_df),
-            'n_tracks_with_crossings': len(track_results_df[track_results_df['n_crossings'] > 0]),
-            'crossing_fraction': len(track_results_df[track_results_df['n_crossings'] > 0]) / len(track_results_df),
-            'n_crossing_events': len(crossing_df),
-            'mean_crossings_per_track': track_results_df['n_crossings'].mean(),
-            'max_crossings_per_track': track_results_df['n_crossings'].max()
-        }
-
-        # Boundary-specific statistics
-        for boundary_id in range(len(boundaries)):
-            boundary_crossings = crossing_df[crossing_df['boundary_id'] == boundary_id]
-
-            if len(boundary_crossings) > 0:
-                results['ensemble_results'][f'boundary{boundary_id}_n_crossings'] = len(boundary_crossings)
-                results['ensemble_results'][f'boundary{boundary_id}_fraction'] = len(boundary_crossings) / len(crossing_df)
-
-                # Direction statistics
-                if 'direction' in boundary_crossings.columns:
-                    direction_counts = boundary_crossings['direction'].value_counts()
-                    for direction, count in direction_counts.items():
-                        results['ensemble_results'][f'boundary{boundary_id}_{direction}_count'] = count
-                        results['ensemble_results'][f'boundary{boundary_id}_{direction}_fraction'] = count / len(boundary_crossings)
-
-        # Residence time statistics
-        if residence_times:
-            residence_df = pd.DataFrame(residence_times)
-
-            results['ensemble_results']['n_residence_periods'] = len(residence_df)
-            results['ensemble_results']['mean_residence_time'] = residence_df['residence_time'].mean()
-            results['ensemble_results']['median_residence_time'] = residence_df['residence_time'].median()
-            results['ensemble_results']['max_residence_time'] = residence_df['residence_time'].max()
-
-            # Region-specific statistics
-            for region in residence_df['region'].unique():
-                region_data = residence_df[residence_df['region'] == region]
-
-                if len(region_data) > 0:
-                    results['ensemble_results'][f'region_{region}_n_periods'] = len(region_data)
-                    results['ensemble_results'][f'region_{region}_mean_residence'] = region_data['residence_time'].mean()
-                    results['ensemble_results'][f'region_{region}_median_residence'] = region_data['residence_time'].median()
-
-    # Add missing keys that the UI expects
-    results['class_transitions'] = {}
-    results['dwell_times'] = {}
-    results['crossing_tracks'] = []
-    results['total_tracks'] = len(tracks_df['track_id'].unique()) if 'track_id' in tracks_df.columns else 0
-
-    return results
-
-
-# --- Polymer Physics Analysis ---
-
-def analyze_polymer_physics(tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0) -> Dict[str, Any]:
-    """
-    Analyze polymer physics characteristics based on particle trajectories.
-
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        Track data in standard format
-    pixel_size : float
-        Pixel size in micrometers
-    frame_interval : float
-        Time between frames in seconds
-
-    Returns
-    -------
-    dict
-        Dictionary containing polymer physics analysis results
-    """
-    import numpy as np
-    from scipy.stats import linregress
-
-    # Convert pixel coordinates to µm if needed (operate on a copy)
-    tracks_df_um = tracks_df.copy()
-    if 'x' in tracks_df_um.columns and 'y' in tracks_df_um.columns and pixel_size != 1.0:
-        tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
-        tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
-
-    # Calculate MSD data which is needed for polymer analysis
-    msd_df = calculate_msd(tracks_df_um, pixel_size=1.0, frame_interval=frame_interval)
-    if msd_df is None or (hasattr(msd_df, 'empty') and msd_df.empty):
-        return {"success": False, "error": "Failed to calculate MSD data required for polymer physics analysis"}
-
-    # Compute ensemble MSD vs lag_time
-    grouped = msd_df.groupby('lag_time')['msd'].mean().reset_index()
-    lag_times = grouped['lag_time'].values
-    msd_data = grouped['msd'].values
-
-    # Calculate Kuhn length (persistence length) and other polymer properties
-    # For particle tracking in a polymer network, we can estimate these from MSD behavior
-    results = {
-        'msd_data': msd_data,
-        'lag_times': lag_times,
-        'pixel_size': pixel_size,
-    'frame_interval': frame_interval,
-    'success': True
-    }
-
-    # Calculate scaling exponent (alpha) for MSD ~ t^alpha
-    try:
-        log_times = np.log10(lag_times)
-        log_msd = np.log10(msd_data)
-
-        # Perform linear fit on log-log scale
-        slope, intercept, r_value, p_value, std_err = linregress(log_times, log_msd)
-
-        # Store scaling exponent and fit quality
-        results['scaling_exponent'] = slope
-        results['fit_r_squared'] = r_value**2
-        results['fit_p_value'] = p_value
-        results['fit_error'] = std_err
-
-        # Interpret scaling exponent
-        if slope < 0.25:
-            results['regime'] = 'Strongly confined'
-        elif 0.25 <= slope < 0.5:
-            results['regime'] = 'Subdiffusive (reptation)'
-        elif 0.5 <= slope < 0.75:
-            results['regime'] = 'Zimm dynamics'
-        elif 0.75 <= slope < 1.0:
-            results['regime'] = 'Rouse dynamics'
-        elif 1.0 <= slope < 1.5:
-            results['regime'] = 'Normal to superdiffusive'
-        else:
-            results['regime'] = 'Active transport'
-
-        # Estimate tube diameter for reptation model
-        if 0.25 <= slope < 0.5:
-            # Estimate tube diameter from early MSD plateau
-            early_msd = np.mean(msd_data[:min(5, len(msd_data))])
-            results['tube_diameter_um'] = 2 * np.sqrt(early_msd / 6)
-
-        # Estimate mesh size based on crossover point
-        # Find where MSD deviates from initial slope
-        if len(msd_data) > 10:
-            # Calculate local slopes
-            local_slopes = []
-            window_size = min(5, len(log_msd) // 3)
-
-            for i in range(len(log_msd) - window_size):
-                window_slope, _, _, _, _ = linregress(
-                    log_times[i:i+window_size], log_msd[i:i+window_size]
-                )
-                local_slopes.append(window_slope)
-
-            # Find first significant deviation from initial slope
-            if local_slopes:
-                initial_slope = local_slopes[0]
-                crossover_idx = None
-
-                for i, slope in enumerate(local_slopes):
-                    if abs(slope - initial_slope) > 0.3:  # Significant deviation threshold
-                        crossover_idx = i
-                        break
-
-                if crossover_idx is not None:
-                    crossover_time = lag_times[crossover_idx]
-                    crossover_msd = msd_data[crossover_idx]
-
-                    results['crossover_time_s'] = crossover_time
-                    results['crossover_msd_um2'] = crossover_msd
-                    results['mesh_size_estimate_um'] = np.sqrt(crossover_msd)
-    except Exception as e:
-        results['error_fitting'] = str(e)
-
+        events_df = pd.DataFrame(crossing_events)
+        n_inward = len(events_df[events_df['direction'] == 'inward'])
+        n_outward = len(events_df[events_df['direction'] == 'outward'])
+        
+        results['ensemble_results']['total_crossings'] = len(events_df)
+        results['ensemble_results']['inward_crossings'] = n_inward
+        results['ensemble_results']['outward_crossings'] = n_outward
+        results['ensemble_results']['net_flux'] = n_inward - n_outward  # Positive means accumulation inside
+    else:
+        results['ensemble_results']['total_crossings'] = 0
+        results['ensemble_results']['inward_crossings'] = 0
+        results['ensemble_results']['outward_crossings'] = 0
+        results['ensemble_results']['net_flux'] = 0
+        
     return results
