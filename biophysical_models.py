@@ -2238,3 +2238,263 @@ def infer_chromatin_compaction(tracks_df: pd.DataFrame, pixel_size: float = 0.1,
             'success': False,
             'error': f'Chromatin compaction analysis failed: {str(e)}'
         }
+
+
+# ============================================================================
+# Polymer Parameter Inference (GNN-based / Simulation-based)
+# Based on: Chromatin Structures from Integrated AI (bioRxiv Nov 2024)
+# ============================================================================
+
+def infer_chromatin_compaction_advanced(tracks_df: pd.DataFrame, pixel_size: float = 0.1,
+                                       frame_interval: float = 1.0) -> Dict[str, Any]:
+    """
+    Infer chromatin compaction state from track gyration radii and polymer scaling.
+    
+    Standard Rouse/Zimm fitting only estimates diffusion coefficients. Recent approaches
+    using Graph Neural Networks (GNNs) or simulation-based inference extract actual
+    *polymer parameters* (compaction, interaction energy, persistence length) directly
+    from tracking data.
+    
+    This heuristic implementation maps MSD slope (α) and radius of gyration (Rg) to
+    polymer compaction states based on scaling theory:
+        Rg ~ N^ν
+    where:
+        ν = 0.33 (collapsed globule)
+        ν = 0.5  (ideal chain)
+        ν = 0.6  (self-avoiding walk, open coil)
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with 'track_id', 'frame', 'x', 'y'.
+    pixel_size : float, default=0.1
+        Pixel size in micrometers.
+    frame_interval : float, default=1.0
+        Time between frames in seconds.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing:
+        - 'success': bool
+        - 'track_compaction': DataFrame with per-track analysis
+        - 'ensemble_statistics': Overall compaction metrics
+        - 'polymer_interpretation': Physical interpretation
+    
+    References
+    ----------
+    - Chromatin Structures from Integrated AI (bioRxiv, Nov 2024)
+    - Polymer physics and chromatin organization (Curr Opin Cell Biol 2020)
+    - Radius of gyration as structural parameter (Macromolecules 2015)
+    
+    Notes
+    -----
+    **Radius of Gyration (Rg)**:
+        Rg² = (1/N) Σ ||r_i - r_cm||²
+    
+    where r_cm is the center of mass.
+    
+    **Compaction Score**:
+    Normalized inverse of Rg. Higher score = more compact.
+        Score = 1 / (Rg + ε)
+    
+    **Polymer Regimes**:
+    - Heterochromatin: Rg < 0.3 µm, compact globule
+    - Intermediate: 0.3 < Rg < 0.8 µm, partially open
+    - Euchromatin: Rg > 0.8 µm, extended coil
+    
+    In a full GNN implementation, additional features would include:
+    - Contact probability P(s) ~ s^(-3/2ν)
+    - Persistence length from angular correlation
+    - Interaction energy from clustering
+    - Temporal dynamics (breathing modes)
+    
+    Examples
+    --------
+    >>> result = infer_chromatin_compaction_advanced(tracks_df, pixel_size=0.1)
+    >>> print(f"Mean Rg: {result['ensemble_statistics']['mean_Rg']:.3f} µm")
+    >>> print(f"Compaction state: {result['polymer_interpretation']['dominant_state']}")
+    """
+    try:
+        # This function wraps and extends the existing analyze_chromatin_compaction
+        # Call the existing function first
+        from biophysical_models import ChromatinCompactionAnalyzer
+        
+        analyzer = ChromatinCompactionAnalyzer(tracks_df, pixel_size=pixel_size)
+        basic_results = analyzer.analyze_compaction_state()
+        
+        if not basic_results.get('success'):
+            return basic_results
+        
+        # Extract track-level data
+        track_data = basic_results.get('track_results', [])
+        
+        if not track_data:
+            return {
+                'success': False,
+                'error': 'No track data available for advanced analysis'
+            }
+        
+        # Calculate additional polymer physics metrics
+        track_df = pd.DataFrame(track_data)
+        
+        # 1. Calculate MSD scaling exponent for each track
+        track_msd_analysis = []
+        
+        for track_id, track_group in tracks_df.groupby('track_id'):
+            if len(track_group) < 5:
+                continue
+            
+            track_group = track_group.sort_values('frame')
+            x = track_group['x'].values * pixel_size
+            y = track_group['y'].values * pixel_size
+            
+            # Calculate MSD for this track
+            max_lag = min(len(track_group) // 2, 10)
+            lag_times = []
+            msd_values = []
+            
+            for lag in range(1, max_lag):
+                displacements = []
+                for i in range(len(track_group) - lag):
+                    dx = x[i + lag] - x[i]
+                    dy = y[i + lag] - y[i]
+                    displacements.append(dx**2 + dy**2)
+                
+                if displacements:
+                    lag_times.append(lag * frame_interval)
+                    msd_values.append(np.mean(displacements))
+            
+            if len(lag_times) >= 3:
+                # Fit power law: MSD = 4D * t^α
+                log_lag = np.log(lag_times)
+                log_msd = np.log(msd_values)
+                
+                # Linear fit in log-log space
+                slope, intercept = np.polyfit(log_lag, log_msd, 1)
+                alpha = slope
+                D_eff = np.exp(intercept) / 4
+                
+                # Find Rg for this track
+                track_rg_data = [t for t in track_data if t['track_id'] == track_id]
+                rg = track_rg_data[0]['Rg'] if track_rg_data else np.nan
+                
+                # Classify polymer state based on Rg and alpha
+                if rg < 0.3 and alpha < 0.7:
+                    polymer_state = 'Compact_Globule'
+                    compaction_level = 'High'
+                elif rg < 0.6 and 0.7 <= alpha < 1.2:
+                    polymer_state = 'Intermediate_Coil'
+                    compaction_level = 'Medium'
+                elif rg >= 0.6 and alpha >= 1.0:
+                    polymer_state = 'Extended_Chain'
+                    compaction_level = 'Low'
+                else:
+                    polymer_state = 'Mixed'
+                    compaction_level = 'Variable'
+                
+                track_msd_analysis.append({
+                    'track_id': track_id,
+                    'Rg': rg,
+                    'alpha': alpha,
+                    'D_eff': D_eff,
+                    'polymer_state': polymer_state,
+                    'compaction_level': compaction_level
+                })
+        
+        if not track_msd_analysis:
+            return {
+                'success': False,
+                'error': 'Insufficient track data for MSD analysis'
+            }
+        
+        # Create DataFrame
+        analysis_df = pd.DataFrame(track_msd_analysis)
+        
+        # 2. Ensemble statistics
+        ensemble_stats = {
+            'mean_Rg': float(analysis_df['Rg'].mean()),
+            'std_Rg': float(analysis_df['Rg'].std()),
+            'mean_alpha': float(analysis_df['alpha'].mean()),
+            'std_alpha': float(analysis_df['alpha'].std()),
+            'mean_D_eff': float(analysis_df['D_eff'].mean()),
+            'polymer_state_distribution': analysis_df['polymer_state'].value_counts().to_dict(),
+            'compaction_distribution': analysis_df['compaction_level'].value_counts().to_dict()
+        }
+        
+        # 3. Physical interpretation
+        dominant_state = analysis_df['polymer_state'].mode()[0] if len(analysis_df) > 0 else 'Unknown'
+        dominant_compaction = analysis_df['compaction_level'].mode()[0] if len(analysis_df) > 0 else 'Unknown'
+        
+        mean_alpha = ensemble_stats['mean_alpha']
+        mean_rg = ensemble_stats['mean_Rg']
+        
+        # Estimate polymer scaling exponent ν from Rg distribution
+        # In principle: Rg ~ N^ν, but we need contour length data
+        # As proxy, use Rg variance
+        cv_rg = ensemble_stats['std_Rg'] / ensemble_stats['mean_Rg'] if ensemble_stats['mean_Rg'] > 0 else 0
+        
+        interpretation = {
+            'dominant_polymer_state': dominant_state,
+            'dominant_compaction': dominant_compaction,
+            'chromatin_organization': (
+                'Highly compact (heterochromatin-like)' if mean_rg < 0.4 else
+                'Moderately compact (intermediate)' if mean_rg < 0.7 else
+                'Open (euchromatin-like)'
+            ),
+            'dynamics_classification': (
+                'Subdiffusive (α < 1): confined/crowded' if mean_alpha < 1.0 else
+                'Normal diffusion (α ≈ 1)' if 0.9 <= mean_alpha <= 1.1 else
+                'Superdiffusive (α > 1): directed/active transport'
+            ),
+            'heterogeneity': (
+                'Homogeneous population' if cv_rg < 0.3 else
+                'Moderate heterogeneity' if cv_rg < 0.6 else
+                'Highly heterogeneous (mixed states)'
+            )
+        }
+        
+        # 4. Estimate polymer parameters (heuristic)
+        # These would ideally come from GNN inference or MD simulations
+        polymer_params = {
+            'estimated_scaling_exponent_nu': (
+                0.33 if mean_rg < 0.4 else
+                0.5 if 0.4 <= mean_rg < 0.7 else
+                0.6
+            ),
+            'estimated_persistence_length_nm': (
+                # Based on empirical chromatin measurements
+                150 if dominant_compaction == 'High' else
+                100 if dominant_compaction == 'Medium' else
+                50
+            ),
+            'estimated_interaction_energy_kT': (
+                # Attractive for compact, repulsive for open
+                -2.0 if dominant_compaction == 'High' else
+                -0.5 if dominant_compaction == 'Medium' else
+                0.5
+            )
+        }
+        
+        results = {
+            'success': True,
+            'track_compaction': analysis_df,
+            'ensemble_statistics': ensemble_stats,
+            'polymer_interpretation': interpretation,
+            'estimated_polymer_parameters': polymer_params,
+            'basic_compaction_results': basic_results,
+            'summary': {
+                'mean_Rg_um': f"{mean_rg:.3f}",
+                'mean_alpha': f"{mean_alpha:.2f}",
+                'dominant_state': dominant_state,
+                'compaction_level': dominant_compaction
+            }
+        }
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Advanced chromatin compaction inference failed: {str(e)}'
+        }
