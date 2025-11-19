@@ -7309,6 +7309,306 @@ def _plot_local_diffusion_map(self, result):
             z=D_map.T,
             x=x_centers,
             y=y_centers,
+            colorscale='Viridis',
+            colorbar=dict(title='D (µm²/s)')
+        ))
+        
+        fig.update_layout(
+            title='Local Diffusion Coefficient Map D(x,y)',
+            xaxis_title='X Position (µm)',
+            yaxis_title='Y Position (µm)',
+            width=700,
+            height=650
+        )
+        
+        return fig
+    except Exception as e:
+        return None
+
+# Add wrapper methods for local diffusion mapping
+EnhancedSPTReportGenerator._analyze_local_diffusion_map = _analyze_local_diffusion_map
+EnhancedSPTReportGenerator._plot_local_diffusion_map = _plot_local_diffusion_map
+
+
+# ============================================================================
+# PERCOLATION ANALYSIS SUITE - GUI INTEGRATION (bioRxiv 2024-2025)
+# ============================================================================
+
+def _analyze_fractal_dimension(self, tracks_df, current_units):
+    """Analyze trajectory fractal dimension for chromatin interaction assessment."""
+    try:
+        from analysis import calculate_fractal_dimension
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        
+        result = calculate_fractal_dimension(
+            tracks_df,
+            pixel_size=pixel_size,
+            method='box_counting',
+            min_track_length=10
+        )
+        
+        if not result.get('success'):
+            return result
+        
+        # Extract key metrics
+        ensemble_stats = result.get('ensemble_statistics', {})
+        
+        return {
+            'success': True,
+            'mean_fractal_dim': ensemble_stats.get('mean_df', 0),
+            'std_fractal_dim': ensemble_stats.get('std_df', 0),
+            'median_fractal_dim': ensemble_stats.get('median_df', 0),
+            'interpretation': result.get('interpretation', ''),
+            'n_tracks_analyzed': len(result.get('per_track_df', [])),
+            'population_fractions': result.get('population_fractions', {}),
+            'full_results': result
+        }
+    except Exception as e:
+        import traceback
+        return {'success': False, 'error': f'Fractal dimension analysis failed: {str(e)}\n{traceback.format_exc()}'}
+
+def _plot_fractal_dimension(self, result):
+    """Visualize fractal dimension distribution."""
+    if not result.get('success'):
+        return None
+    
+    try:
+        from visualization import plot_fractal_dimension_distribution
+        full_results = result.get('full_results', {})
+        return plot_fractal_dimension_distribution(full_results)
+    except Exception as e:
+        return None
+
+def _analyze_connectivity_network(self, tracks_df, current_units):
+    """Analyze spatial connectivity network for percolation assessment."""
+    try:
+        from analysis import build_connectivity_network
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        
+        result = build_connectivity_network(
+            tracks_df,
+            pixel_size=pixel_size,
+            grid_size=0.2,
+            min_visits=2
+        )
+        
+        if not result.get('success'):
+            return result
+        
+        # Extract key metrics
+        perc_data = result.get('percolation_analysis', {})
+        network_props = result.get('network_properties', {})
+        conn_metrics = result.get('connectivity_metrics', {})
+        
+        return {
+            'success': True,
+            'percolates': perc_data.get('percolates', False),
+            'giant_component_fraction': perc_data.get('giant_component_fraction', 0),
+            'n_nodes': network_props.get('n_nodes', 0),
+            'n_edges': network_props.get('n_edges', 0),
+            'network_efficiency': conn_metrics.get('network_efficiency', 0),
+            'n_components': perc_data.get('n_components', 0),
+            'full_results': result
+        }
+    except Exception as e:
+        import traceback
+        return {'success': False, 'error': f'Connectivity network analysis failed: {str(e)}\n{traceback.format_exc()}'}
+
+def _plot_connectivity_network(self, result):
+    """Visualize connectivity network."""
+    if not result.get('success'):
+        return None
+    
+    try:
+        from visualization import plot_connectivity_network
+        from data_access_utils import get_track_data
+        
+        full_results = result.get('full_results', {})
+        tracks_df, has_data = get_track_data()
+        
+        if has_data:
+            return plot_connectivity_network(full_results, tracks_df, pixel_size=0.1)
+        else:
+            return plot_connectivity_network(full_results, None, pixel_size=0.1)
+    except Exception as e:
+        return None
+
+def _analyze_anomalous_exponent(self, tracks_df, current_units):
+    """Analyze anomalous exponent spatial distribution for percolation paths."""
+    try:
+        # This method creates visualization directly, so we just return success
+        # The actual map will be generated in the plot function
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        return {
+            'success': True,
+            'pixel_size': pixel_size,
+            'frame_interval': frame_interval,
+            'description': 'Anomalous exponent map shows percolation paths (green) vs obstacles (red)'
+        }
+    except Exception as e:
+        import traceback
+        return {'success': False, 'error': f'Anomalous exponent analysis failed: {str(e)}\n{traceback.format_exc()}'}
+
+def _plot_anomalous_exponent(self, result):
+    """Visualize anomalous exponent spatial map."""
+    if not result.get('success'):
+        return None
+    
+    try:
+        from visualization import plot_anomalous_exponent_map
+        from data_access_utils import get_track_data
+        
+        tracks_df, has_data = get_track_data()
+        if not has_data:
+            return None
+        
+        pixel_size = result.get('pixel_size', 0.1)
+        frame_interval = result.get('frame_interval', 0.1)
+        
+        return plot_anomalous_exponent_map(
+            tracks_df,
+            pixel_size=pixel_size,
+            frame_interval=frame_interval,
+            grid_size=50,
+            window_size=5,
+            show_tracks=True
+        )
+    except Exception as e:
+        return None
+
+def _analyze_obstacle_density(self, tracks_df, current_units):
+    """Analyze obstacle density from diffusion measurements."""
+    try:
+        from biophysical_models import infer_obstacle_density
+        from analysis import analyze_diffusion
+        
+        pixel_size = current_units.get('pixel_size', 0.1)
+        frame_interval = current_units.get('frame_interval', 0.1)
+        
+        # Calculate observed D
+        diffusion_result = analyze_diffusion(
+            tracks_df,
+            pixel_size=pixel_size,
+            frame_interval=frame_interval
+        )
+        
+        if not diffusion_result.get('success'):
+            return {'success': False, 'error': 'Failed to calculate diffusion coefficient'}
+        
+        D_obs = diffusion_result.get('data', {}).get('ensemble_D', 0)
+        
+        # Estimate D_free (assume 5x slower than free diffusion as typical)
+        # User should provide their own D_free measurement ideally
+        D_free_estimate = D_obs * 5.0
+        
+        result = infer_obstacle_density(D_obs, D_free_estimate)
+        
+        return {
+            'success': True,
+            'obstacle_fraction': result.get('obstacle_fraction_phi', 0),
+            'accessible_fraction': result.get('accessible_fraction', 0),
+            'tortuosity': result.get('tortuosity', 0),
+            'percolation_proximity': result.get('percolation_proximity', 0),
+            'interpretation': result.get('interpretation', ''),
+            'D_obs': D_obs,
+            'D_free_estimate': D_free_estimate,
+            'note': 'D_free estimated as 5× D_obs. Measure in buffer for accurate results.',
+            'full_results': result
+        }
+    except Exception as e:
+        import traceback
+        return {'success': False, 'error': f'Obstacle density analysis failed: {str(e)}\n{traceback.format_exc()}'}
+
+def _plot_obstacle_density(self, result):
+    """Visualize obstacle density results."""
+    if not result.get('success'):
+        return None
+    
+    try:
+        import plotly.graph_objects as go
+        
+        phi = result.get('obstacle_fraction', 0)
+        accessible = result.get('accessible_fraction', 0)
+        percolation_prox = result.get('percolation_proximity', 0)
+        
+        # Create indicator plot
+        fig = go.Figure()
+        
+        # Obstacle fraction gauge
+        fig.add_trace(go.Indicator(
+            mode='gauge+number+delta',
+            value=phi * 100,
+            domain={'x': [0, 0.45], 'y': [0.5, 1]},
+            title={'text': 'Obstacle Fraction (%)'},
+            delta={'reference': 35, 'suffix': '%'},
+            gauge={
+                'axis': {'range': [0, 60]},
+                'bar': {'color': 'darkblue'},
+                'steps': [
+                    {'range': [0, 15], 'color': 'lightgreen'},
+                    {'range': [15, 35], 'color': 'yellow'},
+                    {'range': [35, 50], 'color': 'orange'},
+                    {'range': [50, 60], 'color': 'red'}
+                ],
+                'threshold': {
+                    'line': {'color': 'red', 'width': 4},
+                    'thickness': 0.75,
+                    'value': 59
+                }
+            }
+        ))
+        
+        # Percolation proximity gauge
+        fig.add_trace(go.Indicator(
+            mode='gauge+number',
+            value=percolation_prox * 100,
+            domain={'x': [0.55, 1], 'y': [0.5, 1]},
+            title={'text': 'Percolation Proximity (%)'},
+            gauge={
+                'axis': {'range': [0, 100]},
+                'bar': {'color': 'purple'},
+                'steps': [
+                    {'range': [0, 50], 'color': 'lightgray'},
+                    {'range': [50, 80], 'color': 'lightyellow'},
+                    {'range': [80, 100], 'color': 'salmon'}
+                ],
+                'threshold': {
+                    'line': {'color': 'red', 'width': 4},
+                    'thickness': 0.75,
+                    'value': 90
+                }
+            }
+        ))
+        
+        # Add text summary at bottom
+        summary_text = (
+            f\"<b>Interpretation:</b> {result.get('interpretation', '')}<br><br>\"\n            f\"<b>Measurements:</b><br>\"\n            f\"D_observed: {result.get('D_obs', 0):.3f} µm²/s<br>\"\n            f\"D_free (est.): {result.get('D_free_estimate', 0):.3f} µm²/s<br>\"\n            f\"Tortuosity: {result.get('tortuosity', 0):.2f}×<br><br>\"\n            f\"<i>{result.get('note', '')}</i>\"\n        )\n        \n        fig.add_annotation(\n            text=summary_text,\n            xref='paper', yref='paper',\n            x=0.5, y=0.3,\n            xanchor='center', yanchor='top',\n            showarrow=False,\n            bgcolor='rgba(255,255,255,0.9)',\n            bordercolor='black',\n            borderwidth=1,\n            font=dict(size=11),\n            align='left'\n        )
+        
+        fig.update_layout(
+            title='Obstacle Density & Percolation Analysis (Mackie-Meares Model)',
+            height=600,
+            width=900
+        )
+        
+        return fig
+    except Exception as e:
+        return None
+
+# Add wrapper methods to EnhancedSPTReportGenerator class
+EnhancedSPTReportGenerator._analyze_fractal_dimension = _analyze_fractal_dimension
+EnhancedSPTReportGenerator._plot_fractal_dimension = _plot_fractal_dimension
+EnhancedSPTReportGenerator._analyze_connectivity_network = _analyze_connectivity_network
+EnhancedSPTReportGenerator._plot_connectivity_network = _plot_connectivity_network
+EnhancedSPTReportGenerator._analyze_anomalous_exponent = _analyze_anomalous_exponent
+EnhancedSPTReportGenerator._plot_anomalous_exponent = _plot_anomalous_exponent
+EnhancedSPTReportGenerator._analyze_obstacle_density = _analyze_obstacle_density
+EnhancedSPTReportGenerator._plot_obstacle_density = _plot_obstacle_density
+            x=x_centers,
+            y=y_centers,
             colorscale='Plasma',
             colorbar=dict(title="D (μm²/s)")
         ))
