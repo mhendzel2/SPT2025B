@@ -3644,3 +3644,292 @@ def create_velocity_field_animation(tracks_df: pd.DataFrame,
         
     except Exception as e:
         return _empty_fig(f"Error creating velocity field animation: {str(e)}")
+
+
+# ============================================================================
+# Spatial Diffusivity Mapping (Anomalous/Heterogeneous Environment Analysis)
+# Based on: bioRxiv 2025 - Detecting directed motion and confinement using hidden variables
+# ============================================================================
+
+def plot_diffusion_heatmap(tracks_df: pd.DataFrame, pixel_size: float = 1.0,
+                          frame_interval: float = 1.0, grid_size: int = 50,
+                          window_size: int = 5, colorscale: str = 'Viridis',
+                          title: str = 'Nuclear Diffusivity Landscape') -> go.Figure:
+    """
+    Generate spatial heatmap of local diffusion coefficients across the nucleus.
+    
+    The nucleus is a heterogeneous environment with distinct sub-compartments:
+    - Heterochromatin: Dense, low diffusivity regions
+    - Euchromatin: Open chromatin, higher diffusivity
+    - Nucleoli: Phase-separated droplets with unique viscosity
+    - Nuclear speckles: RNA-processing condensates
+    - Lamina: High-density region at nuclear periphery
+    
+    Calculating a single diffusion coefficient for a trajectory is insufficient
+    when particles traverse multiple compartments. This function creates a spatial
+    map of local diffusion by interpolating step sizes across the nuclear volume,
+    revealing chromatin barriers and phase-separated domains.
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with columns 'track_id', 'frame', 'x', 'y'.
+    pixel_size : float, default=1.0
+        Pixel size in micrometers for spatial scaling.
+    frame_interval : float, default=1.0
+        Time between frames in seconds for D calculation.
+    grid_size : int, default=50
+        Resolution of the interpolated heatmap (grid_size × grid_size).
+        Higher values provide finer detail but increase computation time.
+    window_size : int, default=5
+        Number of consecutive steps used to calculate local D at each position.
+        Larger windows provide smoother estimates but reduce spatial resolution.
+    colorscale : str, default='Viridis'
+        Plotly colorscale name. Good choices:
+        - 'Viridis': Perceptually uniform (default)
+        - 'Hot': Red-yellow for diffusivity (hot = high mobility)
+        - 'Jet': Rainbow (not recommended - perceptually non-uniform)
+        - 'RdBu': Red-Blue diverging (useful if comparing to reference D)
+    title : str, default='Nuclear Diffusivity Landscape'
+        Plot title.
+    
+    Returns
+    -------
+    go.Figure
+        Plotly heatmap figure showing spatial distribution of diffusion coefficients.
+        Includes:
+        - Colorbar with D values in µm²/s
+        - Track overlay (optional, can be toggled)
+        - Region annotations (if compartments are labeled)
+    
+    References
+    ----------
+    - Detecting directed motion and confinement... using hidden variables (bioRxiv, July 2025)
+    - Mapping local diffusivity in heterogeneous media (Phys. Rev. E, 2018)
+    - Chromatin dynamics in living cells (Annu. Rev. Biophys. 2016)
+    
+    Notes
+    -----
+    Local diffusion coefficient calculation:
+    
+    For each position (x, y), we use a sliding window of N consecutive steps:
+        D_local = <Δr²> / (4 * Δt)
+    where:
+        <Δr²> = mean squared displacement over window
+        Δt = frame_interval
+    
+    The interpolation uses scipy.interpolate.griddata with linear method, which
+    performs Delaunay triangulation followed by barycentric interpolation.
+    
+    **Interpretation Guide:**
+    - High D (red/yellow): Euchromatin, nucleoplasm, mobile regions
+    - Low D (blue/purple): Heterochromatin, chromocenters, lamina
+    - Intermediate D (green): Transition zones, chromatin boundaries
+    - Spatial gradients: Indicate compartment boundaries
+    
+    **Limitations:**
+    - Requires sufficient track density (>1 track per grid cell)
+    - Edge effects near nuclear boundary
+    - Assumes diffusion is locally homogeneous within window_size
+    
+    Examples
+    --------
+    >>> # Basic usage
+    >>> fig = plot_diffusion_heatmap(tracks_df, pixel_size=0.1, frame_interval=0.05)
+    >>> fig.show()
+    
+    >>> # High-resolution map for detailed analysis
+    >>> fig = plot_diffusion_heatmap(tracks_df, grid_size=100, window_size=3,
+    ...                              colorscale='Hot')
+    
+    >>> # Compare to reference diffusion coefficient
+    >>> fig = plot_diffusion_heatmap(tracks_df)
+    >>> fig.add_hline(y=0.5, line_dash="dash", annotation_text="Free diffusion ref")
+    """
+    try:
+        import scipy.interpolate
+        
+        # Validate input
+        required_cols = ['track_id', 'frame', 'x', 'y']
+        if not all(col in tracks_df.columns for col in required_cols):
+            return _empty_fig(f"Missing required columns: {required_cols}")
+        
+        if len(tracks_df) < grid_size:
+            return _empty_fig("Insufficient data points for spatial heatmap")
+        
+        # Sort data by track and frame
+        tracks_df = tracks_df.sort_values(['track_id', 'frame'])
+        
+        # Calculate local diffusion coefficients
+        local_D_data = []
+        positions_x = []
+        positions_y = []
+        
+        for track_id, track_group in tracks_df.groupby('track_id'):
+            if len(track_group) < window_size + 1:
+                continue
+            
+            # Extract positions in micrometers
+            x = track_group['x'].values * pixel_size
+            y = track_group['y'].values * pixel_size
+            
+            # Sliding window to calculate local D
+            for i in range(len(track_group) - window_size):
+                # Extract window
+                x_window = x[i:i+window_size+1]
+                y_window = y[i:i+window_size+1]
+                
+                # Calculate MSD over window
+                dx = np.diff(x_window)
+                dy = np.diff(y_window)
+                squared_displacements = dx**2 + dy**2
+                msd = np.mean(squared_displacements)
+                
+                # Calculate local D: D = MSD / (4 * Δt)
+                D_local = msd / (4 * frame_interval)
+                
+                # Store position (center of window) and D value
+                center_idx = i + window_size // 2
+                local_D_data.append(D_local)
+                positions_x.append(x[center_idx])
+                positions_y.append(y[center_idx])
+        
+        if len(local_D_data) < 10:
+            return _empty_fig("Insufficient data for spatial interpolation (need >10 points)")
+        
+        # Convert to arrays
+        x_data = np.array(positions_x)
+        y_data = np.array(positions_y)
+        D_data = np.array(local_D_data)
+        
+        # Remove outliers (optional - removes extreme values that can skew colorscale)
+        # Use IQR method: keep values within 1.5 * IQR of Q1/Q3
+        Q1 = np.percentile(D_data, 25)
+        Q3 = np.percentile(D_data, 75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        
+        valid_mask = (D_data >= max(lower_bound, 0)) & (D_data <= upper_bound)
+        x_data = x_data[valid_mask]
+        y_data = y_data[valid_mask]
+        D_data = D_data[valid_mask]
+        
+        if len(D_data) < 10:
+            return _empty_fig("Too many outliers removed - insufficient valid data")
+        
+        # Create interpolation grid
+        x_min, x_max = x_data.min(), x_data.max()
+        y_min, y_max = y_data.min(), y_data.max()
+        
+        # Add padding to avoid edge effects
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        padding = 0.05  # 5% padding
+        
+        xi = np.linspace(x_min - padding*x_range, x_max + padding*x_range, grid_size)
+        yi = np.linspace(y_min - padding*y_range, y_max + padding*y_range, grid_size)
+        
+        # Create mesh grid
+        xi_mesh, yi_mesh = np.meshgrid(xi, yi)
+        
+        # Interpolate D values onto grid
+        # Using linear interpolation (Delaunay triangulation + barycentric)
+        D_interpolated = scipy.interpolate.griddata(
+            (x_data, y_data), 
+            D_data, 
+            (xi_mesh, yi_mesh), 
+            method='linear',
+            fill_value=np.nan  # NaN for points outside convex hull
+        )
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add heatmap
+        fig.add_trace(go.Heatmap(
+            z=D_interpolated,
+            x=xi,
+            y=yi,
+            colorscale=colorscale,
+            colorbar=dict(
+                title='D (µm²/s)',
+                titleside='right',
+                tickmode='linear',
+                tick0=0,
+                dtick=(np.nanmax(D_interpolated) - np.nanmin(D_interpolated)) / 5
+            ),
+            hovertemplate='x: %{x:.2f} µm<br>y: %{y:.2f} µm<br>D: %{z:.3f} µm²/s<extra></extra>',
+            name='Local D'
+        ))
+        
+        # Optionally overlay track positions as scatter points
+        # Downsample for performance if many points
+        n_overlay_points = min(500, len(x_data))
+        if n_overlay_points < len(x_data):
+            # Systematic sampling to maintain spatial distribution
+            indices = np.linspace(0, len(x_data)-1, n_overlay_points, dtype=int)
+            x_overlay = x_data[indices]
+            y_overlay = y_data[indices]
+        else:
+            x_overlay = x_data
+            y_overlay = y_data
+        
+        fig.add_trace(go.Scatter(
+            x=x_overlay,
+            y=y_overlay,
+            mode='markers',
+            marker=dict(
+                size=2,
+                color='white',
+                opacity=0.3,
+                line=dict(width=0)
+            ),
+            hoverinfo='skip',
+            showlegend=True,
+            name='Track points',
+            visible='legendonly'  # Hidden by default, can toggle
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title={
+                'text': f'{title}<br><sub>Chromatin Density Proxy via Local Diffusion</sub>',
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            xaxis_title='X Position (µm)',
+            yaxis_title='Y Position (µm)',
+            width=700,
+            height=700,
+            xaxis=dict(scaleanchor='y', scaleratio=1),  # Equal aspect ratio
+            yaxis=dict(scaleanchor='x', scaleratio=1),
+            template='plotly_white'
+        )
+        
+        # Add statistics annotation
+        stats_text = (
+            f"Mean D: {np.nanmean(D_interpolated):.3f} µm²/s<br>"
+            f"Std D: {np.nanstd(D_interpolated):.3f} µm²/s<br>"
+            f"Range: {np.nanmin(D_interpolated):.3f} - {np.nanmax(D_interpolated):.3f}<br>"
+            f"Grid: {grid_size}×{grid_size}, Window: {window_size} frames"
+        )
+        
+        fig.add_annotation(
+            text=stats_text,
+            xref='paper', yref='paper',
+            x=0.02, y=0.98,
+            xanchor='left', yanchor='top',
+            showarrow=False,
+            bgcolor='rgba(255,255,255,0.8)',
+            bordercolor='black',
+            borderwidth=1,
+            font=dict(size=10)
+        )
+        
+        return fig
+        
+    except ImportError as e:
+        return _empty_fig(f"Missing required package: {str(e)}")
+    except Exception as e:
+        return _empty_fig(f"Error creating diffusion heatmap: {str(e)}")

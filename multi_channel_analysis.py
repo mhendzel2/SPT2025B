@@ -385,3 +385,383 @@ def create_multi_channel_visualization(channel1_tracks: pd.DataFrame, channel2_t
     )
     
     return fig
+
+
+# ============================================================================
+# Condensate Interface Analysis (PhaseMetrics-inspired)
+# Based on: PhaseMetrics tools for condensate characterization (May 2024)
+# ============================================================================
+
+def analyze_condensate_interface(tracks_df: pd.DataFrame, compartments: List[Dict[str, Any]],
+                                pixel_size: float = 1.0, frame_interval: float = 1.0,
+                                interface_width: float = 0.5) -> Dict[str, Any]:
+    """
+    Analyze particle behavior at condensate boundaries (interface dynamics).
+    
+    Nuclear tracking often involves phase-separated condensates (nucleoli, speckles,
+    Cajal bodies, PML bodies, stress granules). Traditional "in/out" classification
+    ignores the critical interface region where unique physics occurs:
+    - Selective permeability barriers
+    - Concentration gradients
+    - Surface tension effects
+    - Wetting/dewetting transitions
+    
+    This function quantifies interface-specific properties inspired by PhaseMetrics:
+    1. Partition Coefficient: Equilibrium concentration ratio (in/out)
+    2. Interface Permeability: Fraction of particles that successfully cross
+    3. Boundary Crossing Probability: Rate of entry/exit events
+    4. Residence Time Asymmetry: Difference in dwell times inside vs outside
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with columns 'track_id', 'frame', 'x', 'y'.
+    compartments : List[Dict[str, Any]]
+        List of compartment definitions, each with:
+        - 'id': Compartment identifier
+        - 'contour_pixels': List of (x, y) boundary points
+        - 'area': Area in pixels² (optional, will be calculated if missing)
+        - 'name': Descriptive name (e.g., 'Nucleolus', 'Speckle')
+    pixel_size : float, default=1.0
+        Pixel size in micrometers for spatial scaling.
+    frame_interval : float, default=1.0
+        Time between frames in seconds.
+    interface_width : float, default=0.5
+        Width of interface region in micrometers.
+        Particles within this distance of boundary are considered "at interface".
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing:
+        - 'success': bool, whether analysis completed
+        - 'compartment_results': List of results for each compartment with:
+            - 'compartment_id': Identifier
+            - 'partition_coefficient': C_in / C_out ratio
+            - 'enrichment_ratio': Normalized partition coefficient
+            - 'interface_permeability': Crossing success rate (0-1)
+            - 'boundary_crossing_rate': Crossings per second
+            - 'mean_residence_time_inside': Average dwell time (s)
+            - 'mean_residence_time_outside': Average dwell time (s)
+            - 'residence_asymmetry': Ratio of inside/outside residence
+            - 'interface_density': Particles per µm at boundary
+        - 'crossing_events': pd.DataFrame with individual crossing events
+        - 'summary': Overall statistics across all compartments
+    
+    References
+    ----------
+    - PhaseMetrics: High-throughput quantification of condensate properties (bioRxiv, May 2024)
+    - Material properties of condensates (Cell, 2022)
+    - Interface dynamics in liquid-liquid phase separation (Nature Physics, 2021)
+    
+    Notes
+    -----
+    **Partition Coefficient (K_p):**
+    Thermodynamic measure of preferential localization:
+        K_p = (C_in / Area_in) / (C_out / Area_out)
+    where C is particle count.
+    
+    Interpretation:
+    - K_p > 1: Enrichment (particles prefer condensate)
+    - K_p = 1: No preference (equal partitioning)
+    - K_p < 1: Exclusion (particles avoid condensate)
+    
+    **Interface Permeability Score:**
+    Measures barrier function:
+        Permeability = N_cross / (N_cross + N_bounce)
+    where:
+    - N_cross: Tracks that successfully traverse boundary
+    - N_bounce: Tracks that approach but turn back
+    
+    Interpretation:
+    - Score → 1: Highly permeable (no barrier)
+    - Score → 0: Impermeable (strong barrier)
+    
+    **Residence Time Asymmetry:**
+    Indicates binding/entrapment:
+        Asymmetry = τ_in / τ_out
+    
+    Interpretation:
+    - Asymmetry > 1: Longer residence inside (retention)
+    - Asymmetry = 1: Symmetric dynamics
+    - Asymmetry < 1: Shorter residence inside (expulsion)
+    
+    **Interface Region:**
+    Defined as annulus of width `interface_width` around boundary.
+    Particles in this zone experience boundary effects:
+    - Surface tension
+    - Concentration gradients
+    - Electrostatic barriers
+    
+    Examples
+    --------
+    >>> # Analyze nucleolar dynamics
+    >>> compartments = [{
+    ...     'id': 1,
+    ...     'name': 'Nucleolus',
+    ...     'contour_pixels': nucleolus_boundary,
+    ...     'area': 1500  # pixels²
+    ... }]
+    >>> result = analyze_condensate_interface(tracks_df, compartments, pixel_size=0.1)
+    >>> 
+    >>> # Extract partition coefficient
+    >>> K_p = result['compartment_results'][0]['partition_coefficient']
+    >>> print(f"Nucleolar enrichment: {K_p:.2f}x")
+    >>> 
+    >>> # Check permeability
+    >>> perm = result['compartment_results'][0]['interface_permeability']
+    >>> if perm < 0.3:
+    ...     print("Strong barrier detected - selective permeability")
+    >>> elif perm > 0.7:
+    ...     print("Weak barrier - high permeability")
+    """
+    try:
+        from scipy.spatial import distance
+        from shapely.geometry import Point, Polygon
+        from shapely.ops import nearest_points
+        
+        # Input validation
+        if not compartments:
+            return {
+                'success': False,
+                'error': 'No compartments provided'
+            }
+        
+        required_cols = ['track_id', 'frame', 'x', 'y']
+        if not all(col in tracks_df.columns for col in required_cols):
+            return {
+                'success': False,
+                'error': f'Missing required columns: {required_cols}'
+            }
+        
+        # Process each compartment
+        compartment_results = []
+        all_crossing_events = []
+        
+        for comp in compartments:
+            comp_id = comp.get('id', 0)
+            contour = comp.get('contour_pixels', [])
+            
+            if not contour or len(contour) < 3:
+                continue
+            
+            # Create polygon from contour
+            try:
+                polygon = Polygon(contour)
+                if not polygon.is_valid:
+                    polygon = polygon.buffer(0)  # Fix invalid geometries
+            except Exception:
+                continue
+            
+            # Calculate compartment area if not provided
+            area_pixels = comp.get('area', polygon.area)
+            area_um2 = area_pixels * (pixel_size ** 2)
+            
+            # Classify particle positions
+            tracks_inside = []
+            tracks_outside = []
+            tracks_interface = []
+            crossing_events = []
+            
+            for track_id, track_data in tracks_df.groupby('track_id'):
+                track_data = track_data.sort_values('frame')
+                
+                # Track state over time
+                states = []  # 'in', 'out', or 'interface'
+                
+                for idx, row in track_data.iterrows():
+                    point = Point(row['x'], row['y'])
+                    
+                    # Check if inside compartment
+                    is_inside = polygon.contains(point)
+                    
+                    # Calculate distance to boundary
+                    boundary_dist = polygon.exterior.distance(point) * pixel_size
+                    
+                    if is_inside:
+                        if boundary_dist <= interface_width:
+                            state = 'interface_in'
+                        else:
+                            state = 'in'
+                    else:
+                        if boundary_dist <= interface_width:
+                            state = 'interface_out'
+                        else:
+                            state = 'out'
+                    
+                    states.append(state)
+                
+                # Detect boundary crossings
+                for i in range(len(states) - 1):
+                    curr_state = states[i]
+                    next_state = states[i + 1]
+                    
+                    # Crossing: transition from out → in or in → out
+                    if curr_state in ['out', 'interface_out'] and next_state in ['in', 'interface_in']:
+                        # Inward crossing
+                        crossing_events.append({
+                            'track_id': track_id,
+                            'frame': track_data.iloc[i]['frame'],
+                            'direction': 'inward',
+                            'compartment_id': comp_id,
+                            'type': 'crossing'
+                        })
+                    elif curr_state in ['in', 'interface_in'] and next_state in ['out', 'interface_out']:
+                        # Outward crossing
+                        crossing_events.append({
+                            'track_id': track_id,
+                            'frame': track_data.iloc[i]['frame'],
+                            'direction': 'outward',
+                            'compartment_id': comp_id,
+                            'type': 'crossing'
+                        })
+                    elif curr_state == 'interface_out' and next_state == 'out':
+                        # Approached but bounced back
+                        crossing_events.append({
+                            'track_id': track_id,
+                            'frame': track_data.iloc[i]['frame'],
+                            'direction': 'bounce',
+                            'compartment_id': comp_id,
+                            'type': 'bounce'
+                        })
+                
+                # Classify track overall
+                in_count = sum(1 for s in states if 'in' in s)
+                out_count = sum(1 for s in states if 'out' in s)
+                
+                if in_count > out_count:
+                    tracks_inside.append(track_id)
+                elif out_count > 0:
+                    tracks_outside.append(track_id)
+            
+            # Calculate metrics
+            n_in = len(tracks_inside)
+            n_out = len(tracks_outside)
+            
+            # 1. Partition Coefficient
+            # Estimate "outside" area as total imaging area minus compartment
+            # (This is approximate - ideally use nuclear boundary)
+            total_area_estimate = area_um2 * 10  # Assume compartment is ~10% of total
+            area_out = total_area_estimate - area_um2
+            
+            density_in = n_in / area_um2 if area_um2 > 0 else 0
+            density_out = n_out / area_out if area_out > 0 else 0
+            partition_coeff = density_in / density_out if density_out > 0 else float('inf')
+            
+            # Enrichment ratio (log-scale for plotting)
+            enrichment = np.log2(partition_coeff) if partition_coeff > 0 else 0
+            
+            # 2. Interface Permeability
+            crossings = [e for e in crossing_events if e['type'] == 'crossing']
+            bounces = [e for e in crossing_events if e['type'] == 'bounce']
+            
+            n_crossings = len(crossings)
+            n_bounces = len(bounces)
+            
+            permeability = n_crossings / (n_crossings + n_bounces + 1e-9)
+            
+            # 3. Boundary Crossing Rate
+            total_time = len(tracks_df) * frame_interval  # Approximate
+            crossing_rate = n_crossings / total_time if total_time > 0 else 0
+            
+            # 4. Residence Times (simplified - uses track lengths as proxy)
+            # More sophisticated: calculate actual dwell times in each region
+            residence_in = np.mean([len(tracks_df[tracks_df['track_id'] == tid]) for tid in tracks_inside]) if tracks_inside else 0
+            residence_out = np.mean([len(tracks_df[tracks_df['track_id'] == tid]) for tid in tracks_outside]) if tracks_outside else 0
+            
+            residence_in_sec = residence_in * frame_interval
+            residence_out_sec = residence_out * frame_interval
+            
+            residence_asymmetry = residence_in_sec / residence_out_sec if residence_out_sec > 0 else float('inf')
+            
+            # 5. Interface Density
+            boundary_length = polygon.length * pixel_size  # Perimeter in µm
+            interface_density = len(crossing_events) / boundary_length if boundary_length > 0 else 0
+            
+            # Compile compartment results
+            comp_result = {
+                'compartment_id': comp_id,
+                'compartment_name': comp.get('name', f'Compartment {comp_id}'),
+                'n_particles_inside': int(n_in),
+                'n_particles_outside': int(n_out),
+                'partition_coefficient': float(partition_coeff),
+                'enrichment_ratio': float(enrichment),
+                'interface_permeability': float(permeability),
+                'boundary_crossing_rate': float(crossing_rate),
+                'n_crossings_inward': sum(1 for e in crossings if e['direction'] == 'inward'),
+                'n_crossings_outward': sum(1 for e in crossings if e['direction'] == 'outward'),
+                'n_bounces': int(n_bounces),
+                'mean_residence_time_inside': float(residence_in_sec),
+                'mean_residence_time_outside': float(residence_out_sec),
+                'residence_asymmetry': float(residence_asymmetry),
+                'interface_density': float(interface_density),
+                'area_um2': float(area_um2),
+                'boundary_length_um': float(boundary_length)
+            }
+            
+            compartment_results.append(comp_result)
+            all_crossing_events.extend(crossing_events)
+        
+        if not compartment_results:
+            return {
+                'success': False,
+                'error': 'No valid compartments analyzed'
+            }
+        
+        # Create summary statistics
+        all_K_p = [r['partition_coefficient'] for r in compartment_results if np.isfinite(r['partition_coefficient'])]
+        all_perm = [r['interface_permeability'] for r in compartment_results]
+        
+        summary = {
+            'n_compartments': len(compartment_results),
+            'mean_partition_coefficient': float(np.mean(all_K_p)) if all_K_p else 0,
+            'mean_permeability': float(np.mean(all_perm)) if all_perm else 0,
+            'total_crossings': len([e for e in all_crossing_events if e['type'] == 'crossing']),
+            'total_bounces': len([e for e in all_crossing_events if e['type'] == 'bounce']),
+            'interpretation': {}
+        }
+        
+        # Add interpretation
+        mean_K_p = summary['mean_partition_coefficient']
+        if mean_K_p > 2:
+            summary['interpretation']['partition'] = 'Strong enrichment - particles accumulate in condensates'
+        elif mean_K_p > 1.2:
+            summary['interpretation']['partition'] = 'Moderate enrichment - preferential localization'
+        elif mean_K_p > 0.8:
+            summary['interpretation']['partition'] = 'No preference - equal partitioning'
+        else:
+            summary['interpretation']['partition'] = 'Exclusion - particles avoid condensates'
+        
+        mean_perm = summary['mean_permeability']
+        if mean_perm > 0.7:
+            summary['interpretation']['permeability'] = 'High permeability - weak barrier'
+        elif mean_perm > 0.3:
+            summary['interpretation']['permeability'] = 'Moderate permeability - selective barrier'
+        else:
+            summary['interpretation']['permeability'] = 'Low permeability - strong barrier'
+        
+        # Compile final results
+        results = {
+            'success': True,
+            'compartment_results': compartment_results,
+            'crossing_events': pd.DataFrame(all_crossing_events) if all_crossing_events else pd.DataFrame(),
+            'summary': summary,
+            'parameters': {
+                'pixel_size': pixel_size,
+                'frame_interval': frame_interval,
+                'interface_width_um': interface_width
+            }
+        }
+        
+        return results
+        
+    except ImportError:
+        return {
+            'success': False,
+            'error': 'shapely package required for interface analysis. Install with: pip install shapely'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Condensate interface analysis failed: {str(e)}'
+        }

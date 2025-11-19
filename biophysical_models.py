@@ -1945,3 +1945,296 @@ def fit_ornstein_uhlenbeck_model(
         }
     except (RuntimeError, ValueError):
         return {}
+
+
+# ============================================================================
+# Polymer Parameter Inference (GNN-based / Simulation-Informed)
+# Based on: Chromatin Structures from Integrated AI (Nov 2024)
+# ============================================================================
+
+def infer_chromatin_compaction(tracks_df: pd.DataFrame, pixel_size: float = 0.1,
+                              min_track_length: int = 5) -> Dict[str, Any]:
+    """
+    Infer chromatin compaction state from trajectory gyration radii and polymer scaling.
+    
+    Standard SPT analysis extracts diffusion coefficients, but provides limited insight
+    into the *structural* organization of chromatin. Recent approaches using Graph Neural
+    Networks (GNNs) and simulation-based inference can extract polymer parameters directly
+    from tracking data.
+    
+    This function implements a heuristic inference method based on polymer physics:
+    - Radius of gyration (R_g) quantifies spatial extent
+    - Scaling analysis relates R_g to polymer compaction
+    - Comparison to polymer models (globule vs coil) infers chromatin state
+    
+    **Polymer Physics Background:**
+    
+    For a polymer chain with N monomers, the radius of gyration scales as:
+        R_g ~ N^ν
+    
+    where ν (nu) is the scaling exponent:
+    - ν = 0.33: Collapsed globule (compact chromatin, heterochromatin)
+    - ν = 0.50: Ideal chain (theta solvent)
+    - ν = 0.60: Self-avoiding walk (expanded coil, euchromatin)
+    
+    For chromatin:
+    - Heterochromatin: Dense, compact, R_g ~ 0.2-0.5 µm
+    - Euchromatin: Open, accessible, R_g ~ 0.5-1.5 µm
+    - Mitotic chromosomes: Highly condensed, R_g ~ 0.1-0.3 µm
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data with columns 'track_id', 'x', 'y' (and optionally 'z').
+    pixel_size : float, default=0.1
+        Pixel size in micrometers for spatial scaling.
+    min_track_length : int, default=5
+        Minimum track length for reliable R_g calculation.
+        Shorter tracks give noisy estimates.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing:
+        - 'success': bool, whether analysis completed
+        - 'per_track_results': pd.DataFrame with columns:
+            - 'track_id': Track identifier
+            - 'Rg': Radius of gyration (µm)
+            - 'Rg_squared': R_g² for ensemble averaging
+            - 'track_length': Number of points in track
+            - 'compaction_score': Inverse of R_g (higher = more compact)
+            - 'compaction_category': 'Compact', 'Intermediate', 'Open'
+        - 'ensemble_statistics': dict with:
+            - 'mean_Rg': Ensemble-averaged radius of gyration
+            - 'median_Rg': Robust central tendency
+            - 'std_Rg': Standard deviation (heterogeneity)
+            - 'mean_compaction': Average compaction score
+            - 'rg_distribution': Histogram of R_g values
+        - 'polymer_interpretation': dict with:
+            - 'dominant_state': Inferred chromatin state
+            - 'heterogeneity_index': Coefficient of variation
+            - 'globule_fraction': Fraction of tracks in compact state
+            - 'coil_fraction': Fraction in open state
+    
+    References
+    ----------
+    - Chromatin Structures from Integrated AI (bioRxiv, Nov 2024)
+    - Polymer physics of chromatin (Rep Prog Phys, 2014)
+    - Scaling properties of chromatin (Biophys J, 2018)
+    - Graph Neural Networks for polymer structure prediction (Nature Methods, 2023)
+    
+    Notes
+    -----
+    **Radius of Gyration Calculation:**
+    
+    For a trajectory with N positions {r_i}:
+        R_g² = (1/N) * Σ |r_i - r_center|²
+    where r_center = (1/N) * Σ r_i is the trajectory centroid.
+    
+    **Compaction Score:**
+    A simple heuristic metric:
+        Compaction = 1 / (R_g + ε)
+    where ε is a small constant to avoid division by zero.
+    Higher values indicate more compact/confined motion.
+    
+    **Classification Thresholds (empirical for chromatin):**
+    - Compact (heterochromatin-like): R_g < 0.4 µm
+    - Intermediate: 0.4 µm ≤ R_g < 0.8 µm
+    - Open (euchromatin-like): R_g ≥ 0.8 µm
+    
+    **Limitations:**
+    - Assumes tracks sample equilibrium conformations
+    - Does not account for active transport (which increases apparent R_g)
+    - Requires calibration for specific cell types/conditions
+    - Full GNN implementation would include:
+        * Molecular dynamics simulations for training
+        * Feature extraction (angles, contacts, persistence length)
+        * Deep learning inference of polymer parameters
+    
+    **Future Enhancements:**
+    A complete implementation inspired by recent GNN work would:
+    1. Train on simulated chromatin trajectories (Brownian dynamics)
+    2. Learn mapping from trajectory features → polymer parameters
+    3. Predict: compaction ratio, bending rigidity, interaction energy
+    4. Classify: A/B compartments, TADs, condensates
+    
+    Examples
+    --------
+    >>> result = infer_chromatin_compaction(tracks_df, pixel_size=0.1)
+    >>> print(f"Mean R_g: {result['ensemble_statistics']['mean_Rg']:.3f} µm")
+    >>> print(f"Dominant state: {result['polymer_interpretation']['dominant_state']}")
+    >>> print(f"Heterogeneity: {result['polymer_interpretation']['heterogeneity_index']:.2f}")
+    
+    >>> # Analyze per-track results
+    >>> per_track = result['per_track_results']
+    >>> compact_tracks = per_track[per_track['compaction_category'] == 'Compact']
+    >>> print(f"Found {len(compact_tracks)} tracks in compact chromatin regions")
+    
+    >>> # Compare conditions
+    >>> rg_control = infer_chromatin_compaction(control_tracks)['ensemble_statistics']['mean_Rg']
+    >>> rg_treated = infer_chromatin_compaction(treated_tracks)['ensemble_statistics']['mean_Rg']
+    >>> print(f"Treatment caused {(rg_treated/rg_control - 1)*100:.1f}% change in R_g")
+    """
+    try:
+        # Input validation
+        required_cols = ['track_id', 'x', 'y']
+        if not all(col in tracks_df.columns for col in required_cols):
+            return {
+                'success': False,
+                'error': f'Missing required columns. Need: {required_cols}'
+            }
+        
+        if len(tracks_df) == 0:
+            return {
+                'success': False,
+                'error': 'tracks_df is empty'
+            }
+        
+        # Check if 3D data available
+        has_z = 'z' in tracks_df.columns
+        
+        # Process each track
+        results_list = []
+        
+        for track_id, track in tracks_df.groupby('track_id'):
+            if len(track) < min_track_length:
+                continue
+            
+            # Extract positions in micrometers
+            x = track['x'].values * pixel_size
+            y = track['y'].values * pixel_size
+            
+            if has_z:
+                z = track['z'].values * pixel_size
+                positions = np.column_stack([x, y, z])
+            else:
+                positions = np.column_stack([x, y])
+            
+            # Calculate centroid (trajectory center of mass)
+            centroid = np.mean(positions, axis=0)
+            
+            # Calculate squared distances from centroid
+            squared_distances = np.sum((positions - centroid)**2, axis=1)
+            
+            # Radius of gyration: R_g = sqrt(<r²>)
+            rg_squared = np.mean(squared_distances)
+            rg = np.sqrt(rg_squared)
+            
+            # Compaction score (heuristic)
+            # Higher score = more compact/confined
+            epsilon = 1e-3  # Small constant to avoid division by zero
+            compaction_score = 1.0 / (rg + epsilon)
+            
+            # Classify compaction state
+            # Thresholds based on typical chromatin observations
+            if rg < 0.4:  # Highly compact
+                category = 'Compact'
+            elif rg < 0.8:  # Intermediate
+                category = 'Intermediate'
+            else:  # Open/expanded
+                category = 'Open'
+            
+            results_list.append({
+                'track_id': track_id,
+                'Rg': float(rg),
+                'Rg_squared': float(rg_squared),
+                'track_length': len(track),
+                'compaction_score': float(compaction_score),
+                'compaction_category': category,
+                'is_3D': has_z
+            })
+        
+        if not results_list:
+            return {
+                'success': False,
+                'error': f'No tracks with length >= {min_track_length} found'
+            }
+        
+        # Convert to DataFrame
+        per_track_df = pd.DataFrame(results_list)
+        
+        # Calculate ensemble statistics
+        rg_values = per_track_df['Rg'].values
+        
+        mean_rg = np.mean(rg_values)
+        median_rg = np.median(rg_values)
+        std_rg = np.std(rg_values)
+        
+        # Coefficient of variation (heterogeneity measure)
+        cv_rg = std_rg / mean_rg if mean_rg > 0 else 0
+        
+        # Mean compaction score
+        mean_compaction = np.mean(per_track_df['compaction_score'].values)
+        
+        # Distribution of R_g values (histogram)
+        hist, bin_edges = np.histogram(rg_values, bins=20)
+        
+        # Category fractions
+        category_counts = per_track_df['compaction_category'].value_counts()
+        n_total = len(per_track_df)
+        
+        globule_fraction = category_counts.get('Compact', 0) / n_total
+        intermediate_fraction = category_counts.get('Intermediate', 0) / n_total
+        coil_fraction = category_counts.get('Open', 0) / n_total
+        
+        # Interpret dominant state
+        if globule_fraction > 0.5:
+            dominant_state = 'Compact/Globular (heterochromatin-like)'
+        elif coil_fraction > 0.5:
+            dominant_state = 'Open/Coil (euchromatin-like)'
+        elif intermediate_fraction > 0.5:
+            dominant_state = 'Intermediate (mixed chromatin)'
+        else:
+            dominant_state = 'Heterogeneous (no single dominant state)'
+        
+        # Compile results
+        results = {
+            'success': True,
+            'per_track_results': per_track_df,
+            'ensemble_statistics': {
+                'n_tracks_analyzed': int(n_total),
+                'mean_Rg': float(mean_rg),
+                'median_Rg': float(median_rg),
+                'std_Rg': float(std_rg),
+                'mean_compaction': float(mean_compaction),
+                'rg_distribution': {
+                    'counts': hist.tolist(),
+                    'bin_edges': bin_edges.tolist()
+                },
+                'is_3D_analysis': bool(has_z)
+            },
+            'polymer_interpretation': {
+                'dominant_state': dominant_state,
+                'heterogeneity_index': float(cv_rg),
+                'globule_fraction': float(globule_fraction),
+                'intermediate_fraction': float(intermediate_fraction),
+                'coil_fraction': float(coil_fraction),
+                'interpretation': {
+                    'mean_Rg_interpretation': (
+                        'Compact chromatin' if mean_rg < 0.4 else
+                        'Intermediate' if mean_rg < 0.8 else
+                        'Open chromatin'
+                    ),
+                    'heterogeneity_interpretation': (
+                        'Low heterogeneity (uniform)' if cv_rg < 0.3 else
+                        'Moderate heterogeneity' if cv_rg < 0.6 else
+                        'High heterogeneity (mixed states)'
+                    )
+                }
+            },
+            'summary': {
+                'mean_Rg_um': f"{mean_rg:.3f}",
+                'dominant_state': dominant_state,
+                'compact_fraction': f"{globule_fraction:.1%}",
+                'open_fraction': f"{coil_fraction:.1%}",
+                'heterogeneity': f"{cv_rg:.2f}"
+            }
+        }
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Chromatin compaction analysis failed: {str(e)}'
+        }
