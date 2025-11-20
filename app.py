@@ -1652,7 +1652,261 @@ elif st.session_state.active_page == "Home":
         elif quick_links == "Comparative analysis":
             st.session_state.active_page = "Comparative Analysis"
             st.rerun()
+    
+    # Experimental Planning Section
+    st.markdown("---")
+    with st.expander("🔬 Experimental Planning - Acquisition Parameter Optimizer", expanded=False):
+        st.markdown("""
+        ### Design Optimal Imaging Experiments
+        
+        Calculate recommended **frame interval** and **exposure time** based on your expected diffusion 
+        coefficient and localization precision. This optimizer balances competing factors:
+        - **Short exposure** → less motion blur → reduced bias
+        - **Long exposure** → more photons → better localization
+        - **Short intervals** → better temporal resolution
+        - **Long intervals** → larger displacements → better SNR
+        """)
+        
+        try:
+            from acquisition_advisor import AcquisitionOptimizer
             
+            optimizer = AcquisitionOptimizer()
+            
+            # Create input columns
+            input_col1, input_col2 = st.columns(2)
+            
+            with input_col1:
+                expected_D = st.number_input(
+                    "Expected Diffusion Coefficient (µm²/s)",
+                    min_value=0.001,
+                    max_value=100.0,
+                    value=0.5,
+                    step=0.1,
+                    format="%.3f",
+                    help="Approximate D you expect for your particle/molecule"
+                )
+                
+                localization_precision = st.number_input(
+                    "Localization Precision (nm)",
+                    min_value=5.0,
+                    max_value=200.0,
+                    value=30.0,
+                    step=5.0,
+                    help="Expected 1σ localization precision (typically 20-50 nm)"
+                )
+                
+                pixel_size_nm = st.number_input(
+                    "Pixel Size (nm)",
+                    min_value=10.0,
+                    max_value=500.0,
+                    value=100.0,
+                    step=10.0,
+                    help="Camera pixel size in object space"
+                )
+            
+            with input_col2:
+                target_error = st.slider(
+                    "Target Measurement Error (%)",
+                    min_value=5.0,
+                    max_value=30.0,
+                    value=10.0,
+                    step=1.0,
+                    help="Acceptable relative error in D estimation"
+                )
+                
+                track_length = st.slider(
+                    "Typical Track Length (frames)",
+                    min_value=10,
+                    max_value=200,
+                    value=50,
+                    step=10,
+                    help="Expected number of frames per track"
+                )
+                
+                # Optional camera constraints
+                st.markdown("**Camera Limits (optional)**")
+                use_camera_limits = st.checkbox("Specify camera constraints", value=False)
+                
+                camera_min_interval = None
+                camera_max_interval = None
+                
+                if use_camera_limits:
+                    camera_max_fps = st.number_input(
+                        "Max Frame Rate (fps)",
+                        min_value=1.0,
+                        max_value=10000.0,
+                        value=100.0,
+                        help="Maximum frames per second your camera can achieve"
+                    )
+                    camera_min_interval = 1.0 / camera_max_fps
+                    
+                    camera_max_interval = st.number_input(
+                        "Max Frame Interval (s)",
+                        min_value=0.001,
+                        max_value=10.0,
+                        value=1.0,
+                        help="Longest frame interval you want to consider"
+                    )
+            
+            # Calculate button
+            if st.button("🎯 Calculate Optimal Parameters", type="primary"):
+                with st.spinner("Optimizing acquisition parameters..."):
+                    result = optimizer.calculate_optimal_parameters(
+                        expected_D=expected_D,
+                        localization_precision=localization_precision,
+                        target_error_pct=target_error,
+                        pixel_size=pixel_size_nm / 1000.0,  # Convert to µm
+                        typical_track_length_frames=track_length,
+                        camera_min_interval=camera_min_interval,
+                        camera_max_interval=camera_max_interval
+                    )
+                    
+                    # Store results in session state
+                    st.session_state.acquisition_optimizer_result = result
+            
+            # Display results if available
+            if 'acquisition_optimizer_result' in st.session_state:
+                result = st.session_state.acquisition_optimizer_result
+                
+                st.markdown("---")
+                st.markdown("### 📊 Recommended Parameters")
+                
+                # Main results in columns
+                rec_col1, rec_col2, rec_col3 = st.columns(3)
+                
+                with rec_col1:
+                    st.metric(
+                        "Frame Interval",
+                        f"{result['frame_interval']*1000:.2f} ms",
+                        help="Recommended time between frames"
+                    )
+                    st.caption(f"= {1/result['frame_interval']:.1f} fps")
+                
+                with rec_col2:
+                    st.metric(
+                        "Exposure Time",
+                        f"{result['exposure_time']*1000:.2f} ms",
+                        help="Recommended camera exposure duration"
+                    )
+                    st.caption(f"{result['blur_fraction']*100:.0f}% of frame interval")
+                
+                with rec_col3:
+                    st.metric(
+                        "Expected Error",
+                        f"{result['expected_error_pct']:.1f}%",
+                        delta=f"{result['expected_error_pct']-target_error:+.1f}%",
+                        delta_color="inverse",
+                        help="Predicted measurement uncertainty"
+                    )
+                
+                # Performance metrics
+                st.markdown("### 📈 Expected Performance")
+                
+                perf_col1, perf_col2 = st.columns(2)
+                
+                with perf_col1:
+                    st.metric(
+                        "Displacement per Frame",
+                        f"{result['displacement_per_frame']*1000:.1f} nm",
+                        help="Expected RMS displacement between frames"
+                    )
+                    
+                    st.metric(
+                        "Spatial SNR",
+                        f"{result['displacement_to_noise_ratio']:.2f}",
+                        help="Ratio of displacement to localization noise"
+                    )
+                    
+                    if result['displacement_to_noise_ratio'] < 1.5:
+                        st.warning("⚠️ Low SNR - motion barely exceeds noise!")
+                    elif result['displacement_to_noise_ratio'] > 3.0:
+                        st.success("✅ Excellent SNR for reliable tracking")
+                
+                with perf_col2:
+                    st.metric(
+                        "Frames Needed",
+                        f"{result['steps_needed']} frames",
+                        help="Minimum track length for target error"
+                    )
+                    
+                    st.metric(
+                        "Acquisition Time",
+                        f"{result['acquisition_time']:.2f} s",
+                        help="Total time for typical track"
+                    )
+                    
+                    st.metric(
+                        "Feasibility",
+                        result['feasibility'].upper(),
+                        help="Overall experiment feasibility assessment"
+                    )
+                
+                # Bias analysis
+                with st.expander("🔍 Bias Analysis", expanded=False):
+                    bias_col1, bias_col2 = st.columns(2)
+                    
+                    with bias_col1:
+                        st.metric(
+                            "Localization Noise Bias",
+                            f"+{result['noise_bias_pct']:.1f}%",
+                            help="Overestimation due to localization noise"
+                        )
+                    
+                    with bias_col2:
+                        st.metric(
+                            "Motion Blur Bias",
+                            f"{result['blur_bias_pct']:.1f}%",
+                            help="Underestimation due to motion blur"
+                        )
+                    
+                    st.info(
+                        f"**Net bias**: ~{abs(result['noise_bias_pct'] + result['blur_bias_pct']):.1f}% "
+                        f"(noise {'dominates' if abs(result['noise_bias_pct']) > abs(result['blur_bias_pct']) else 'vs blur'}). "
+                        "Use CVE or MLE estimators for bias correction."
+                    )
+                
+                # Warnings
+                if result['warnings']:
+                    st.markdown("### ⚠️ Warnings")
+                    for warning in result['warnings']:
+                        st.warning(warning)
+                
+                # Recommendations
+                if result['recommendations']:
+                    st.markdown("### 💡 Recommendations")
+                    for rec in result['recommendations']:
+                        st.info(rec)
+                
+                # Quick comparison with optimal
+                with st.expander("📐 Comparison with Theoretical Optimal", expanded=False):
+                    comp_col1, comp_col2 = st.columns(2)
+                    
+                    with comp_col1:
+                        st.write("**Frame Interval:**")
+                        st.write(f"Recommended: {result['frame_interval']*1000:.2f} ms")
+                        st.write(f"Theoretical Optimal: {result['optimal_interval']*1000:.2f} ms")
+                        deviation_interval = abs(result['frame_interval'] - result['optimal_interval']) / result['optimal_interval'] * 100
+                        st.write(f"Deviation: {deviation_interval:.1f}%")
+                    
+                    with comp_col2:
+                        st.write("**Exposure Time:**")
+                        st.write(f"Recommended: {result['exposure_time']*1000:.2f} ms")
+                        st.write(f"Theoretical Optimal: {result['optimal_exposure']*1000:.2f} ms")
+                        deviation_exposure = abs(result['exposure_time'] - result['optimal_exposure']) / result['optimal_exposure'] * 100
+                        st.write(f"Deviation: {deviation_exposure:.1f}%")
+                    
+                    if deviation_interval < 10 and deviation_exposure < 10:
+                        st.success("✅ Recommended parameters are very close to theoretical optimum!")
+                    elif deviation_interval < 50 and deviation_exposure < 50:
+                        st.info("Parameters deviate from optimum due to camera constraints but are acceptable.")
+                    else:
+                        st.warning("Significant deviation from optimal - consider upgrading camera or adjusting expectations.")
+        
+        except ImportError:
+            st.error("Acquisition optimizer module not available. Please check installation.")
+        except Exception as e:
+            st.error(f"Error in acquisition optimizer: {str(e)}")
+
 # Project Management Page
 elif st.session_state.active_page == "Project Management":
     st.title("Project Management: Group cells into experimental conditions")

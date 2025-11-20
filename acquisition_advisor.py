@@ -502,6 +502,335 @@ class AcquisitionAdvisor:
         return pd.DataFrame(results)
 
 
+class AcquisitionOptimizer:
+    """
+    Optimizes camera acquisition parameters for single particle tracking experiments.
+    
+    Balances competing factors:
+    - Short exposure → less motion blur → reduced bias
+    - Long exposure → more photons → better localization precision
+    - Short frame interval → better temporal resolution → more accurate D
+    - Long frame interval → larger displacements → better SNR
+    
+    Based on optimal temporal resolution theory (Berglund 2010, Michalet 2010).
+    """
+    
+    def __init__(self):
+        """Initialize optimizer with default constraints."""
+        # Physical constraints (typical camera limitations)
+        self.min_frame_interval = 0.001  # 1 ms (1000 fps max)
+        self.max_frame_interval = 10.0   # 10 s (practical upper limit)
+        self.min_exposure_time = 0.0001  # 0.1 ms (fast cameras)
+        self.max_exposure_time = 1.0     # 1 s (practical limit)
+        
+        # Optimization parameters
+        self.min_displacement_to_noise_ratio = 1.5  # Minimum SNR_spatial
+        self.optimal_blur_fraction = 0.3  # R = exposure/interval (30% reduces bias <5%)
+        self.min_steps_per_track = 20  # Minimum for CVE/MLE robustness
+    
+    def calculate_optimal_parameters(
+        self,
+        expected_D: float,
+        localization_precision: float,
+        target_error_pct: float = 10.0,
+        pixel_size: float = 0.1,
+        typical_track_length_frames: int = 50,
+        camera_min_exposure: Optional[float] = None,
+        camera_max_exposure: Optional[float] = None,
+        camera_min_interval: Optional[float] = None,
+        camera_max_interval: Optional[float] = None
+    ) -> Dict:
+        """
+        Calculate optimal frame interval and exposure time.
+        
+        Parameters
+        ----------
+        expected_D : float
+            Expected diffusion coefficient in µm²/s
+        localization_precision : float
+            Expected localization precision (1σ) in nm
+        target_error_pct : float, optional
+            Target relative error in D estimation (default: 10%)
+        pixel_size : float, optional
+            Pixel size in µm (default: 0.1 µm = 100 nm)
+        typical_track_length_frames : int, optional
+            Expected number of frames per track (default: 50)
+        camera_min_exposure : float, optional
+            Camera minimum exposure time in seconds
+        camera_max_exposure : float, optional
+            Camera maximum exposure time in seconds
+        camera_min_interval : float, optional
+            Camera minimum frame interval in seconds
+        camera_max_interval : float, optional
+            Camera maximum frame interval in seconds
+            
+        Returns
+        -------
+        dict
+            Optimization results with keys:
+            - 'frame_interval': Recommended frame interval (s)
+            - 'exposure_time': Recommended exposure time (s)
+            - 'expected_error_pct': Expected relative error in D (%)
+            - 'displacement_per_frame': Expected displacement (µm)
+            - 'displacement_to_noise_ratio': SNR_spatial
+            - 'blur_fraction': R = exposure/interval
+            - 'steps_needed': Minimum frames for target error
+            - 'acquisition_time': Total time for typical track (s)
+            - 'warnings': List of warning messages
+            - 'recommendations': List of recommendations
+            - 'feasibility': 'optimal', 'acceptable', 'challenging', or 'infeasible'
+        """
+        # Convert localization precision to µm
+        sigma_loc_um = localization_precision / 1000.0
+        
+        # Override camera limits if provided
+        if camera_min_exposure is not None:
+            self.min_exposure_time = camera_min_exposure
+        if camera_max_exposure is not None:
+            self.max_exposure_time = camera_max_exposure
+        if camera_min_interval is not None:
+            self.min_frame_interval = camera_min_interval
+        if camera_max_interval is not None:
+            self.max_frame_interval = camera_max_interval
+        
+        warnings_list = []
+        recommendations = []
+        
+        # Step 1: Calculate optimal frame interval
+        # Goal: displacement >> localization_precision (SNR_spatial > 1.5)
+        # For 2D diffusion: <r²> = 4Dτ → <r> ~ √(4Dτ)
+        # Want: √(4Dτ) / σ_loc ≥ min_SNR
+        
+        target_snr = self.min_displacement_to_noise_ratio
+        
+        # Solve for τ: τ = (target_snr * σ_loc)² / (4D)
+        optimal_interval = (target_snr * sigma_loc_um) ** 2 / (4 * expected_D)
+        
+        # Step 2: Calculate optimal exposure time
+        # Goal: minimize motion blur while maintaining localization precision
+        # Compromise: exposure = 0.3 * interval (reduces bias to <5%)
+        optimal_exposure = self.optimal_blur_fraction * optimal_interval
+        
+        # Step 3: Apply camera constraints
+        frame_interval = np.clip(optimal_interval, self.min_frame_interval, self.max_frame_interval)
+        exposure_time = np.clip(optimal_exposure, self.min_exposure_time, 
+                               min(self.max_exposure_time, frame_interval))
+        
+        # Ensure exposure ≤ interval
+        if exposure_time > frame_interval:
+            exposure_time = frame_interval * 0.9  # Leave 10% dead time
+            warnings_list.append("Exposure time limited by frame interval")
+        
+        # Step 4: Calculate expected performance metrics
+        actual_displacement = np.sqrt(4 * expected_D * frame_interval)
+        snr_spatial = actual_displacement / sigma_loc_um
+        blur_fraction = exposure_time / frame_interval
+        
+        # Step 5: Estimate measurement error
+        # Error sources:
+        # 1. Finite track length: σ(D)/D ~ 1/√(N-2) for MSD
+        # 2. Localization noise bias: adds ~2σ²/τ to apparent D
+        # 3. Motion blur bias: reduces apparent D by factor (1 - R²/12)
+        
+        # Relative bias from localization noise
+        noise_bias_relative = (2 * sigma_loc_um ** 2) / (4 * expected_D * frame_interval)
+        
+        # Relative bias from motion blur (typically negative, reduces D)
+        blur_bias_relative = (blur_fraction ** 2) / 12
+        
+        # Net bias (noise dominates for short intervals)
+        net_bias_pct = (noise_bias_relative - blur_bias_relative) * 100
+        
+        # Statistical uncertainty from finite track length (CVE estimator)
+        # For CVE: σ(D)/D ≈ √(2/(N-1)) for unbiased estimator
+        statistical_error_pct = np.sqrt(2 / (typical_track_length_frames - 1)) * 100
+        
+        # Total expected error (combine bias and statistical uncertainty)
+        expected_error_pct = np.sqrt(net_bias_pct ** 2 + statistical_error_pct ** 2)
+        
+        # Calculate minimum steps needed for target error
+        # From statistical error: N ≈ 2/(target_error/100)² + 1
+        steps_needed = int(2 / (target_error_pct / 100) ** 2) + 1
+        steps_needed = max(steps_needed, self.min_steps_per_track)
+        
+        acquisition_time = frame_interval * typical_track_length_frames
+        
+        # Step 6: Assess feasibility
+        feasibility = self._assess_feasibility(
+            frame_interval, optimal_interval,
+            exposure_time, optimal_exposure,
+            snr_spatial, expected_error_pct, target_error_pct,
+            warnings_list, recommendations
+        )
+        
+        # Step 7: Add specific recommendations
+        self._add_recommendations(
+            expected_D, sigma_loc_um, snr_spatial, blur_fraction,
+            frame_interval, exposure_time, expected_error_pct,
+            typical_track_length_frames, steps_needed,
+            recommendations, warnings_list
+        )
+        
+        return {
+            'frame_interval': frame_interval,
+            'exposure_time': exposure_time,
+            'expected_error_pct': expected_error_pct,
+            'displacement_per_frame': actual_displacement,
+            'displacement_to_noise_ratio': snr_spatial,
+            'blur_fraction': blur_fraction,
+            'noise_bias_pct': noise_bias_relative * 100,
+            'blur_bias_pct': -blur_bias_relative * 100,  # Negative sign (reduces D)
+            'statistical_error_pct': statistical_error_pct,
+            'steps_needed': steps_needed,
+            'acquisition_time': acquisition_time,
+            'warnings': warnings_list,
+            'recommendations': recommendations,
+            'feasibility': feasibility,
+            'optimal_interval': optimal_interval,  # For comparison
+            'optimal_exposure': optimal_exposure   # For comparison
+        }
+    
+    def _assess_feasibility(
+        self,
+        frame_interval: float,
+        optimal_interval: float,
+        exposure_time: float,
+        optimal_exposure: float,
+        snr_spatial: float,
+        expected_error: float,
+        target_error: float,
+        warnings: list,
+        recommendations: list
+    ) -> str:
+        """Determine experiment feasibility based on constraints."""
+        
+        issues = 0
+        
+        # Check if camera limits forced compromise
+        if abs(frame_interval - optimal_interval) / optimal_interval > 0.5:
+            issues += 1
+            if frame_interval > optimal_interval:
+                warnings.append("Frame interval limited by camera maximum frame rate")
+            else:
+                warnings.append("Frame interval faster than optimal (SNR will be lower)")
+        
+        if abs(exposure_time - optimal_exposure) / optimal_exposure > 0.5:
+            issues += 1
+            warnings.append("Exposure time constrained by camera limits")
+        
+        # Check SNR
+        if snr_spatial < 1.0:
+            issues += 2
+            warnings.append(f"Low SNR ({snr_spatial:.2f}) - displacements barely exceed noise")
+        elif snr_spatial < self.min_displacement_to_noise_ratio:
+            issues += 1
+            warnings.append(f"Marginal SNR ({snr_spatial:.2f}) - consider longer intervals")
+        
+        # Check error target
+        if expected_error > target_error * 2:
+            issues += 2
+            warnings.append(f"Expected error ({expected_error:.1f}%) >> target ({target_error:.1f}%)")
+        elif expected_error > target_error * 1.5:
+            issues += 1
+            warnings.append(f"Expected error ({expected_error:.1f}%) exceeds target ({target_error:.1f}%)")
+        
+        # Classify feasibility
+        if issues == 0:
+            return 'optimal'
+        elif issues <= 2:
+            return 'acceptable'
+        elif issues <= 4:
+            return 'challenging'
+        else:
+            return 'infeasible'
+    
+    def _add_recommendations(
+        self,
+        D: float,
+        sigma_loc: float,
+        snr: float,
+        blur_frac: float,
+        interval: float,
+        exposure: float,
+        error: float,
+        track_length: int,
+        steps_needed: int,
+        recommendations: list,
+        warnings: list
+    ):
+        """Generate specific recommendations based on parameters."""
+        
+        # Diffusion regime
+        if D < 0.01:
+            recommendations.append("Very slow diffusion - consider longer acquisition time per track")
+        elif D > 10.0:
+            recommendations.append("Fast diffusion - use high-speed camera if available")
+        
+        # SNR regime
+        if snr < 1.5:
+            recommendations.append(
+                f"Low SNR ({snr:.2f}): Increase frame interval OR improve localization precision"
+            )
+            recommendations.append("Consider: brighter labels, lower background, or camera cooling")
+        elif snr > 5.0:
+            recommendations.append(
+                f"Excellent SNR ({snr:.2f}) - can use shorter intervals for better time resolution"
+            )
+        
+        # Motion blur
+        if blur_frac > 0.5:
+            recommendations.append(
+                f"High motion blur (R={blur_frac:.2f}) - reduce exposure time if possible"
+            )
+            recommendations.append("Motion blur will reduce apparent D by ~5-10%")
+        elif blur_frac < 0.2:
+            recommendations.append(
+                f"Low motion blur (R={blur_frac:.2f}) - can increase exposure for better SNR"
+            )
+        
+        # Track length
+        if steps_needed > track_length * 1.5:
+            recommendations.append(
+                f"Need ≥{steps_needed} frames per track for target error "
+                f"(typical: {track_length})"
+            )
+            recommendations.append("Consider: longer tracks OR accept higher error")
+        
+        # Localization precision
+        if sigma_loc > 0.05:  # >50 nm
+            recommendations.append(
+                "Localization precision >50 nm will cause significant bias"
+            )
+            recommendations.append("Use CVE or MLE estimators (not naive MSD)")
+        
+        # Analysis method recommendation
+        if track_length < 30 or snr < 2.0:
+            recommendations.append(
+                "Recommended analysis: CVE (covariance) or MLE (maximum likelihood)"
+            )
+        elif track_length < 50:
+            recommendations.append("Recommended analysis: CVE (covariance-based estimator)")
+        else:
+            recommendations.append("Track length sufficient for MSD, CVE, or MLE methods")
+        
+        # Exposure optimization
+        if exposure < interval * 0.2:
+            recommendations.append(
+                f"Exposure only {exposure/interval*100:.0f}% of frame interval - "
+                "can increase for more photons"
+            )
+        
+        # Overall assessment
+        if error < 5.0:
+            recommendations.append(f"Expected error ({error:.1f}%) - excellent precision achievable")
+        elif error < 10.0:
+            recommendations.append(f"Expected error ({error:.1f}%) - good precision achievable")
+        elif error < 20.0:
+            recommendations.append(f"Expected error ({error:.1f}%) - acceptable for most applications")
+        else:
+            recommendations.append(f"Expected error ({error:.1f}%) - challenging measurement")
+
+
 def quick_recommendation(D_um2_per_s: float, 
                         precision_nm: float) -> str:
     """
