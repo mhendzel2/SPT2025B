@@ -1703,20 +1703,31 @@ def analyze_active_transport(tracks_df: pd.DataFrame,
 # --- Boundary Crossing Analysis ---
 
 def analyze_boundary_crossing(tracks_df: pd.DataFrame, 
-                             boundary_coords: List[Tuple[float, float]],
+                             boundaries: Any = None,
+                             boundary_coords: List[Tuple[float, float]] = None,
                              pixel_size: float = 1.0,
+                             frame_interval: float = 1.0,
+                             min_track_length: int = 5,
                              closed_boundary: bool = True) -> Dict[str, Any]:
     """
-    Analyze particles crossing a defined boundary.
+    Analyze particles crossing defined boundaries.
     
     Parameters
     ----------
     tracks_df : pd.DataFrame
         Track data in standard format
-    boundary_coords : list of tuples
-        List of (x, y) coordinates defining the boundary (in pixels)
+    boundaries : list of dicts, optional
+        Structured boundary data from convert_compartments_to_boundary_crossing_format.
+        Each dict contains: 'id', 'type' (line/rectangle), 'orientation', coordinates.
+    boundary_coords : list of tuples, optional
+        Legacy format: List of (x, y) coordinates defining the boundary (in pixels).
+        Used if 'boundaries' is None.
     pixel_size : float
         Pixel size in micrometers
+    frame_interval : float
+        Time between frames in seconds
+    min_track_length : int
+        Minimum number of frames for a track to be analyzed
     closed_boundary : bool
         Whether the boundary is a closed loop (polygon) or open line
         
@@ -1727,7 +1738,109 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
     """
     from matplotlib.path import Path
     
-    # Convert boundary to µm
+    # Handle both new structured format and legacy format
+    if boundaries is not None:
+        # New format: structured boundary list from segmentation
+        crossing_events = []
+        
+        # Convert tracks to µm if not already
+        tracks_df_um = tracks_df.copy()
+        if 'x' in tracks_df_um.columns and tracks_df_um['x'].max() > 100:  # Likely in pixels
+            tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
+            tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
+        
+        # Filter tracks by minimum length
+        track_lengths = tracks_df_um.groupby('track_id').size()
+        valid_tracks = track_lengths[track_lengths >= min_track_length].index
+        tracks_df_um = tracks_df_um[tracks_df_um['track_id'].isin(valid_tracks)]
+        
+        # Process each boundary
+        for boundary in boundaries:
+            boundary_id = boundary.get('id', 'unknown')
+            boundary_type = boundary.get('type', 'line')
+            
+            # Check crossings for this boundary
+            for track_id, track_data in tracks_df_um.groupby('track_id'):
+                if len(track_data) < 2:
+                    continue
+                    
+                track_data = track_data.sort_values('frame')
+                
+                # Check each segment of the track
+                for i in range(len(track_data) - 1):
+                    p1 = track_data.iloc[i]
+                    p2 = track_data.iloc[i + 1]
+                    
+                    # Check if segment crosses boundary
+                    crossed = False
+                    if boundary.get('orientation') == 'horizontal':
+                        y_line = boundary['y']
+                        x_min = boundary['x_min']
+                        x_max = boundary['x_max']
+                        # Check if y crosses the line and x is within bounds
+                        if (p1['y'] < y_line < p2['y'] or p2['y'] < y_line < p1['y']):
+                            # Interpolate x at crossing
+                            t = (y_line - p1['y']) / (p2['y'] - p1['y'])
+                            x_cross = p1['x'] + t * (p2['x'] - p1['x'])
+                            if x_min <= x_cross <= x_max:
+                                crossed = True
+                    
+                    elif boundary.get('orientation') == 'vertical':
+                        x_line = boundary['x']
+                        y_min = boundary['y_min']
+                        y_max = boundary['y_max']
+                        # Check if x crosses the line and y is within bounds
+                        if (p1['x'] < x_line < p2['x'] or p2['x'] < x_line < p1['x']):
+                            # Interpolate y at crossing
+                            t = (x_line - p1['x']) / (p2['x'] - p1['x'])
+                            y_cross = p1['y'] + t * (p2['y'] - p1['y'])
+                            if y_min <= y_cross <= y_max:
+                                crossed = True
+                    
+                    if crossed:
+                        crossing_events.append({
+                            'track_id': track_id,
+                            'boundary_id': boundary_id,
+                            'frame_start': p1['frame'],
+                            'frame_end': p2['frame'],
+                            'time': p1['frame'] * frame_interval,
+                            'direction': 'inward' if p2['y'] < p1['y'] else 'outward'
+                        })
+        
+        # Compile results
+        n_crossings = len(crossing_events)
+        n_tracks = tracks_df_um['track_id'].nunique()
+        n_boundaries = len(boundaries)
+        
+        return {
+            'success': True,
+            'n_crossings': n_crossings,
+            'n_tracks_analyzed': n_tracks,
+            'n_boundaries': n_boundaries,
+            'crossing_events': crossing_events,
+            'crossing_rate': n_crossings / n_tracks if n_tracks > 0 else 0,
+            'parameters': {
+                'pixel_size': pixel_size,
+                'frame_interval': frame_interval,
+                'min_track_length': min_track_length
+            }
+        }
+    
+    # Legacy format: simple list of coordinate tuples
+    elif boundary_coords is not None:
+        # Convert boundary to µm
+        boundary_um = [(x * pixel_size, y * pixel_size) for x, y in boundary_coords]
+        boundary_path = Path(boundary_um)
+        
+        # Convert tracks to µm
+        tracks_df_um = tracks_df.copy()
+        tracks_df_um['x'] = tracks_df_um['x'] * pixel_size
+        tracks_df_um['y'] = tracks_df_um['y'] * pixel_size
+    else:
+        return {
+            'success': False,
+            'error': 'Either boundaries or boundary_coords must be provided'
+        }
     boundary_um = [(x * pixel_size, y * pixel_size) for x, y in boundary_coords]
     boundary_path = Path(boundary_um)
     
@@ -1810,114 +1923,9 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
 # Based on: MicroLive Sept 2025 - Correcting residence times for bleaching
 # ============================================================================
 
-def correct_kinetic_rates_photobleaching(dwell_times: np.ndarray, frame_interval: float = 1.0,
-                                         bleach_rate: Optional[float] = None,
-                                         estimate_bleach: bool = True) -> Dict[str, Any]:
-    """
-    Correct apparent k_off for photobleaching to recover true residence time.
-    
-    Standard dwell time analysis underestimates binding times because it cannot
-    distinguish between:
-    - A molecule unbinding (biological event)
-    - A molecule photobleaching (photophysical artifact)
-    
-    This function fits the survival curve of track lengths to a dual-exponential
-    model that separates these two processes, recovering the "true" k_off rate
-    that would be measured without bleaching.
-    
-    Parameters
-    ----------
-    dwell_times : np.ndarray
-        Observed dwell times in frames or seconds. These are the durations
-        that particles remain bound/visible before disappearing.
-    frame_interval : float, default=1.0
-        Time between frames in seconds. Used to convert frame-based dwell
-        times to real time.
-    bleach_rate : float, optional
-        Independently measured photobleaching rate (1/s) from control experiments.
-        Ideally measured from:
-        - Fixed cells (biological k_off = 0)
-        - Stably bound proteins (e.g., core histones H2B)
-        - Chemical crosslinking experiments
-        If None and estimate_bleach=True, will estimate from data.
-    estimate_bleach : bool, default=True
-        Whether to estimate bleach_rate from the data if not provided.
-        Uses the tail of the distribution (long-lived tracks) as proxy.
-    
-    Returns
-    -------
-    Dict[str, Any]
-        Dictionary containing:
-        - 'success': bool
-        - 'k_apparent': Observed dissociation rate (1/s) including bleaching
-        - 'k_bleach': Photobleaching rate (1/s)
-        - 'k_true_off': Corrected dissociation rate (1/s)
-        - 'residence_time_observed': Apparent residence time (s)
-        - 'residence_time_corrected': True residence time (s)
-        - 'correction_factor': Ratio of corrected to observed time
-        - 'survival_fit': Dict with fit parameters for plotting
-        - 'confidence_interval': 95% CI for k_true_off
-    
-    References
-    ----------
-    - MicroLive: Quantifying protein dynamics in live cells (bioRxiv, Sept 2025)
-    - Correcting for photobleaching in single-molecule FRET (Biophys J. 2018)
-    - Measuring in vivo dynamics of transcription factors (Nat Methods 2013)
-    
-    Notes
-    -----
-    The survival probability follows a bi-exponential decay:
-        P(t) = A * exp(-(k_off + k_bleach) * t)
-    
-    where:
-        k_apparent = k_off + k_bleach
-    
-    Therefore, if we know k_bleach:
-        k_true_off = k_apparent - k_bleach
-    
-    **Critical Assumption**: Bleaching and unbinding are independent Poisson processes.
-    This is valid for most fluorophores under typical imaging conditions.
-    
-    **Obtaining k_bleach**:
-    1. Fixed cells: k_off = 0, so k_apparent = k_bleach
-    2. Control protein: Use stably bound marker (H2B, H3, etc.)
-    3. Mathematical: Fit bi-exponential if you have fast + slow populations
-    
-    Examples
-    --------
-    >>> # With independently measured bleach rate
-    >>> dwell_times = np.array([10, 15, 20, 25, 30, 12, 18])  # seconds
-    >>> result = correct_kinetic_rates_photobleaching(
-    ...     dwell_times, frame_interval=0.1, bleach_rate=0.05
-    ... )
-    >>> print(f"True residence time: {result['residence_time_corrected']:.1f} s")
-    >>> print(f"Correction factor: {result['correction_factor']:.2f}x")
-    
-    >>> # Estimate bleach rate from data
-    >>> result = correct_kinetic_rates_photobleaching(
-    ...     dwell_times, estimate_bleach=True
-    ... )
-    >>> print(f"Estimated bleach rate: {result['k_bleach']:.3f} /s")
-    """
-    try:
-        from scipy.optimize import curve_fit
-        from scipy.stats import sem
-        
-        # Validate input
-        if len(dwell_times) < 10:
-            return {
-                'success': False,
-                'error': 'Need at least 10 dwell times for reliable fitting'
-            }
-        
-        # Convert to seconds if needed
-        if np.median(dwell_times) > 100:  # Likely in frames
-            times_seconds = dwell_times * frame_interval
-        else:
-            times_seconds = dwell_times
-        
-        # 1. Calculate Survival Function (1 - CDF)
-        sorted_times = np.sort(times_seconds)
+# Note: correct_kinetic_rates_photobleaching is defined later in this file (line ~3107)
+# with more comprehensive parameter handling including confidence_level parameter.
+# This location previously contained a duplicate definition that has been removed.
         n_total = len(sorted_times)
         survival = 1.0 - np.arange(n_total) / n_total
         
