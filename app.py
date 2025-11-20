@@ -8430,6 +8430,331 @@ elif st.session_state.active_page == "Advanced Analysis":
                         if i >= 5:
                             break
                         st.write(f"Track {track_id}: {states}")
+            
+            # iHMM (Infinite HMM) Section
+            st.divider()
+            with st.expander("🔮 iHMM (Infinite HMM) - Automatic State Selection", expanded=False):
+                st.markdown("""
+                **Blur-Aware iHMM with Automatic State Detection**
+                
+                Enhanced HMM that:
+                - ✅ **Corrects for motion blur** from finite exposure time
+                - ✅ **Automatically determines** optimal number of states (BIC/AIC)
+                - ✅ **Classifies states** as Bound/Diffusive/Fast based on D values
+                - ✅ **Accounts for localization noise** in diffusion estimates
+                
+                **When to use iHMM:**
+                - Unknown number of distinct states
+                - High exposure time (R = exposure/interval > 0.3)
+                - Precise diffusion coefficient estimation needed
+                - Multi-state dynamics (e.g., chromatin binding, receptor switching)
+                """)
+                
+                try:
+                    from ihmm_analysis import analyze_track_with_ihmm, InfiniteHMM
+                    
+                    st.subheader("iHMM Parameters")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Get current units
+                        units = get_units()
+                        pixel_size = st.number_input(
+                            f"Pixel Size ({units['length']})",
+                            min_value=0.001,
+                            max_value=10.0,
+                            value=0.1,
+                            step=0.01,
+                            format="%.3f",
+                            key="ihmm_pixel_size"
+                        )
+                        
+                        frame_interval = st.number_input(
+                            f"Frame Interval ({units['time']})",
+                            min_value=0.001,
+                            max_value=10.0,
+                            value=0.1,
+                            step=0.01,
+                            format="%.3f",
+                            key="ihmm_frame_interval"
+                        )
+                        
+                        exposure_time = st.number_input(
+                            f"Exposure Time ({units['time']})",
+                            min_value=0.0,
+                            max_value=10.0,
+                            value=0.08,
+                            step=0.01,
+                            format="%.3f",
+                            help="Camera exposure time. Set to 0 for no blur correction.",
+                            key="ihmm_exposure_time"
+                        )
+                    
+                    with col2:
+                        localization_error = st.number_input(
+                            f"Localization Precision ({units['length']})",
+                            min_value=0.001,
+                            max_value=1.0,
+                            value=0.03,
+                            step=0.005,
+                            format="%.3f",
+                            help="Static localization error (σ_loc)",
+                            key="ihmm_loc_error"
+                        )
+                        
+                        min_states = st.number_input(
+                            "Minimum States",
+                            min_value=2,
+                            max_value=5,
+                            value=2,
+                            step=1,
+                            key="ihmm_min_states"
+                        )
+                        
+                        max_states = st.number_input(
+                            "Maximum States",
+                            min_value=2,
+                            max_value=10,
+                            value=4,
+                            step=1,
+                            key="ihmm_max_states"
+                        )
+                        
+                        selection_method = st.selectbox(
+                            "Model Selection",
+                            options=["BIC", "AIC"],
+                            index=0,
+                            help="BIC penalizes complexity more than AIC",
+                            key="ihmm_method"
+                        )
+                    
+                    # Calculate blur fraction
+                    R = exposure_time / frame_interval if frame_interval > 0 else 0
+                    blur_correction_factor = 1.0 - (R ** 2) / 12.0
+                    
+                    st.info(f"📊 Blur fraction R = {R:.2f} | Correction factor = {blur_correction_factor:.3f}")
+                    
+                    if R > 0.5:
+                        st.warning("⚠️ High blur fraction (R > 0.5) may affect accuracy. Consider shorter exposure time.")
+                    
+                    # Track selection
+                    st.subheader("Track Selection")
+                    
+                    tracks_df, has_data = get_track_data()
+                    
+                    if not has_data:
+                        st.error("No track data available.")
+                    else:
+                        track_ids = sorted(tracks_df['track_id'].unique())
+                        
+                        selected_track = st.selectbox(
+                            "Select Track",
+                            options=track_ids,
+                            key="ihmm_track_selection"
+                        )
+                        
+                        track_data = tracks_df[tracks_df['track_id'] == selected_track]
+                        st.caption(f"Track length: {len(track_data)} frames")
+                        
+                        if len(track_data) < 10:
+                            st.error("Track too short (need ≥10 frames)")
+                        else:
+                            if st.button("🚀 Run iHMM Analysis", type="primary", key="run_ihmm"):
+                                with st.spinner("Fitting iHMM with automatic state selection..."):
+                                    try:
+                                        result = analyze_track_with_ihmm(
+                                            track=track_data,
+                                            pixel_size=pixel_size,
+                                            frame_interval=frame_interval,
+                                            exposure_time=exposure_time if exposure_time > 0 else None,
+                                            localization_error=localization_error,
+                                            min_states=int(min_states),
+                                            max_states=int(max_states),
+                                            method=selection_method
+                                        )
+                                        
+                                        if result['success']:
+                                            st.session_state.ihmm_result = result
+                                            st.success(f"✅ iHMM complete! Selected {result['best_n_states']} states.")
+                                        else:
+                                            st.error(f"❌ iHMM failed: {result.get('error', 'Unknown error')}")
+                                    
+                                    except Exception as e:
+                                        st.error(f"❌ Error during iHMM: {str(e)}")
+                                        import traceback
+                                        st.code(traceback.format_exc())
+                    
+                    # Display results if available
+                    if hasattr(st.session_state, 'ihmm_result') and st.session_state.ihmm_result is not None:
+                        result = st.session_state.ihmm_result
+                        
+                        st.divider()
+                        st.subheader("📊 iHMM Results")
+                        
+                        # Summary metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Selected States", result['best_n_states'])
+                        with col2:
+                            st.metric("Track Length", result['track_length'])
+                        with col3:
+                            st.metric("Log-Likelihood", f"{result['log_likelihood']:.1f}")
+                        
+                        # State classification table
+                        st.subheader("State Classification")
+                        
+                        state_data = []
+                        D_values = result['diffusion_coefficients']
+                        state_labels = result['state_labels']
+                        
+                        for i, (D, label) in enumerate(zip(D_values, state_labels)):
+                            state_data.append({
+                                'State': i,
+                                f'D ({units["diffusion"]})': f"{D:.4f}",
+                                'Classification': label
+                            })
+                        
+                        state_df = pd.DataFrame(state_data)
+                        st.dataframe(state_df, use_container_width=True)
+                        
+                        # Transition matrix
+                        st.subheader("State Transition Matrix")
+                        transition_df = pd.DataFrame(
+                            result['transition_matrix'],
+                            columns=[f"→ State {i}" for i in range(result['best_n_states'])],
+                            index=[f"State {i} →" for i in range(result['best_n_states'])]
+                        )
+                        st.dataframe(transition_df.style.format("{:.3f}"), use_container_width=True)
+                        
+                        # Model selection scores
+                        st.subheader("Model Selection Scores")
+                        
+                        score_data = []
+                        for n_states, score_info in result['model_scores'].items():
+                            score_data.append({
+                                'n_states': n_states,
+                                f'{selection_method} Score': score_info['score'],
+                                'Log-Likelihood': score_info['log_likelihood'],
+                                'Selected': '✓' if n_states == result['best_n_states'] else ''
+                            })
+                        
+                        score_df = pd.DataFrame(score_data)
+                        st.dataframe(score_df, use_container_width=True)
+                        
+                        # Plot: D values comparison
+                        import plotly.graph_objects as go
+                        
+                        fig_D = go.Figure()
+                        
+                        for n_states, score_info in result['model_scores'].items():
+                            D_vals = score_info['D_values']
+                            fig_D.add_trace(go.Scatter(
+                                x=list(range(n_states)),
+                                y=D_vals,
+                                mode='lines+markers',
+                                name=f"{n_states} states" + (" (selected)" if n_states == result['best_n_states'] else ""),
+                                line=dict(width=3) if n_states == result['best_n_states'] else dict(width=1)
+                            ))
+                        
+                        fig_D.update_layout(
+                            title="Diffusion Coefficients vs. Model Complexity",
+                            xaxis_title="State Index",
+                            yaxis_title=f"D ({units['diffusion']})",
+                            yaxis_type="log",
+                            hovermode="x unified"
+                        )
+                        
+                        st.plotly_chart(fig_D, use_container_width=True)
+                        
+                        # Plot: State trajectory
+                        state_sequence = result['state_sequence']
+                        
+                        # Get positions for the track
+                        track_data_viz = tracks_df[tracks_df['track_id'] == result.get('track_id', selected_track)]
+                        positions = track_data_viz[['x', 'y']].values * pixel_size
+                        
+                        # Color by state (skip first position since state sequence is for displacements)
+                        fig_traj = go.Figure()
+                        
+                        # Plot positions colored by state
+                        for state_idx in range(result['best_n_states']):
+                            # Find segments in this state (state_sequence corresponds to displacements)
+                            state_mask = (state_sequence == state_idx)
+                            
+                            # Extract positions for this state (add 1 to index since states are for displacements)
+                            state_positions_x = []
+                            state_positions_y = []
+                            
+                            for i, is_state in enumerate(state_mask):
+                                if is_state:
+                                    # Displacement i connects position i to position i+1
+                                    state_positions_x.extend([positions[i, 0], positions[i+1, 0], None])
+                                    state_positions_y.extend([positions[i, 1], positions[i+1, 1], None])
+                            
+                            if len(state_positions_x) > 0:
+                                fig_traj.add_trace(go.Scatter(
+                                    x=state_positions_x,
+                                    y=state_positions_y,
+                                    mode='lines+markers',
+                                    name=f"State {state_idx} ({state_labels[state_idx]})",
+                                    line=dict(width=2),
+                                    marker=dict(size=4)
+                                ))
+                        
+                        fig_traj.update_layout(
+                            title="Track Trajectory Colored by State",
+                            xaxis_title=f"X ({units['length']})",
+                            yaxis_title=f"Y ({units['length']})",
+                            hovermode="closest"
+                        )
+                        
+                        st.plotly_chart(fig_traj, use_container_width=True)
+                        
+                        # State duration histogram
+                        st.subheader("State Duration Distribution")
+                        
+                        # Calculate run lengths for each state
+                        state_durations = {i: [] for i in range(result['best_n_states'])}
+                        
+                        current_state = state_sequence[0]
+                        current_duration = 1
+                        
+                        for i in range(1, len(state_sequence)):
+                            if state_sequence[i] == current_state:
+                                current_duration += 1
+                            else:
+                                state_durations[current_state].append(current_duration * frame_interval)
+                                current_state = state_sequence[i]
+                                current_duration = 1
+                        
+                        # Add last run
+                        state_durations[current_state].append(current_duration * frame_interval)
+                        
+                        # Plot duration histograms
+                        fig_duration = go.Figure()
+                        
+                        for state_idx in range(result['best_n_states']):
+                            if len(state_durations[state_idx]) > 0:
+                                fig_duration.add_trace(go.Histogram(
+                                    x=state_durations[state_idx],
+                                    name=f"State {state_idx}",
+                                    opacity=0.7
+                                ))
+                        
+                        fig_duration.update_layout(
+                            title="State Duration Distribution",
+                            xaxis_title=f"Duration ({units['time']})",
+                            yaxis_title="Count",
+                            barmode='overlay'
+                        )
+                        
+                        st.plotly_chart(fig_duration, use_container_width=True)
+                
+                except ImportError:
+                    st.error("❌ iHMM module not available. Ensure ihmm_analysis.py is in the project directory.")
+                except Exception as e:
+                    st.error(f"❌ Error loading iHMM interface: {str(e)}")
 
         # DDM (Tracking-Free) tab
         with adv_tabs[12]:
