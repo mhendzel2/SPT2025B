@@ -8326,7 +8326,8 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Advanced Metrics",
             "Statistical Tests",
             "Ornstein-Uhlenbeck",
-            "HMM Analysis"
+            "HMM Analysis",
+            "DDM (Tracking-Free)"
         ])
         
         # HMM Analysis tab
@@ -8430,6 +8431,426 @@ elif st.session_state.active_page == "Advanced Analysis":
                             break
                         st.write(f"Track {track_id}: {states}")
 
+        # DDM (Tracking-Free) tab
+        with adv_tabs[12]:
+            st.header("🔬 Differential Dynamic Microscopy (DDM)")
+            st.markdown("""
+            **Tracking-free diffusion analysis** from microscopy images.
+            
+            DDM extracts dynamics by analyzing image fluctuations in Fourier space, without detecting or tracking individual particles.
+            
+            **When to use DDM:**
+            - Dense samples where particles overlap
+            - High concentration (>10 particles/field)
+            - Validation of tracking-based methods
+            - Fast dynamics below tracking resolution
+            """)
+            
+            try:
+                from ddm_analyzer import DDMAnalyzer
+                
+                # Check if images are loaded
+                if st.session_state.image_data is None:
+                    st.info("📁 Load microscopy images to perform DDM analysis.")
+                    
+                    # File uploader
+                    ddm_uploaded_file = st.file_uploader(
+                        "Upload image stack (TIFF, PNG sequence)",
+                        type=["tif", "tiff"],
+                        key="ddm_image_upload",
+                        help="Upload a multi-frame TIFF or image sequence"
+                    )
+                    
+                    if ddm_uploaded_file is not None:
+                        try:
+                            from data_loader import load_image_file
+                            images = load_image_file(ddm_uploaded_file)
+                            st.session_state.ddm_images = images
+                            st.success(f"✅ Loaded {len(images)} frames")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error loading images: {str(e)}")
+                else:
+                    # Use currently loaded images
+                    if st.button("Use Currently Loaded Images"):
+                        st.session_state.ddm_images = st.session_state.image_data
+                        st.success(f"✅ Using {len(st.session_state.image_data)} loaded frames")
+                        st.rerun()
+                
+                # If images are available, show analysis interface
+                if 'ddm_images' in st.session_state and st.session_state.ddm_images is not None:
+                    images = st.session_state.ddm_images
+                    n_frames = len(images) if isinstance(images, list) else images.shape[0]
+                    
+                    st.success(f"📊 Image stack loaded: {n_frames} frames")
+                    
+                    # Convert to numpy array if needed
+                    if isinstance(images, list):
+                        images = np.array(images)
+                    
+                    # Display image info
+                    with st.expander("📸 Image Stack Information", expanded=False):
+                        st.write(f"**Frames:** {images.shape[0]}")
+                        st.write(f"**Size:** {images.shape[1]} × {images.shape[2]} pixels")
+                        st.write(f"**Data type:** {images.dtype}")
+                        st.write(f"**Intensity range:** [{images.min():.1f}, {images.max():.1f}]")
+                        
+                        # Show preview
+                        col_prev1, col_prev2 = st.columns(2)
+                        with col_prev1:
+                            st.image(images[0], caption="First frame", use_container_width=True)
+                        with col_prev2:
+                            mid_frame = images[images.shape[0] // 2]
+                            st.image(mid_frame, caption="Middle frame", use_container_width=True)
+                    
+                    # Parameters
+                    st.subheader("⚙️ Analysis Parameters")
+                    
+                    param_col1, param_col2 = st.columns(2)
+                    
+                    with param_col1:
+                        ddm_pixel_size = st.number_input(
+                            "Pixel Size (µm)",
+                            min_value=0.01,
+                            max_value=1.0,
+                            value=float(st.session_state.get('pixel_size', 0.1)),
+                            step=0.01,
+                            format="%.3f",
+                            key="ddm_pixel_size",
+                            help="Pixel size in micrometers"
+                        )
+                        
+                        ddm_frame_interval = st.number_input(
+                            "Frame Interval (s)",
+                            min_value=0.001,
+                            max_value=10.0,
+                            value=float(st.session_state.get('frame_interval', 0.1)),
+                            step=0.01,
+                            format="%.3f",
+                            key="ddm_frame_interval",
+                            help="Time between frames in seconds"
+                        )
+                        
+                        ddm_particle_radius = st.number_input(
+                            "Particle Radius (µm)",
+                            min_value=0.01,
+                            max_value=5.0,
+                            value=0.5,
+                            step=0.1,
+                            format="%.2f",
+                            key="ddm_particle_radius",
+                            help="Approximate particle radius for rheology calculations"
+                        )
+                    
+                    with param_col2:
+                        # Lag times
+                        max_lag_suggestion = min(n_frames // 4, 100)
+                        ddm_max_lag = st.slider(
+                            "Maximum Lag Time (frames)",
+                            min_value=5,
+                            max_value=min(n_frames // 2, 200),
+                            value=min(50, max_lag_suggestion),
+                            step=5,
+                            key="ddm_max_lag",
+                            help="Maximum time lag for structure function"
+                        )
+                        
+                        ddm_n_lag_times = st.slider(
+                            "Number of Lag Times",
+                            min_value=10,
+                            max_value=50,
+                            value=20,
+                            step=5,
+                            key="ddm_n_lag_times",
+                            help="Number of logarithmically-spaced lag times"
+                        )
+                        
+                        ddm_chunk_size = st.slider(
+                            "Chunk Size (memory management)",
+                            min_value=10,
+                            max_value=200,
+                            value=50,
+                            step=10,
+                            key="ddm_chunk_size",
+                            help="Process frames in chunks to manage memory"
+                        )
+                    
+                    # Advanced options
+                    with st.expander("🔧 Advanced Options", expanded=False):
+                        ddm_subtract_bg = st.checkbox(
+                            "Subtract Background",
+                            value=True,
+                            key="ddm_subtract_bg",
+                            help="Subtract temporal median background before analysis"
+                        )
+                        
+                        ddm_q_range_auto = st.checkbox(
+                            "Auto q-range",
+                            value=True,
+                            key="ddm_q_range_auto",
+                            help="Automatically determine wave vector range"
+                        )
+                        
+                        if not ddm_q_range_auto:
+                            q_min = st.number_input("Min q (µm⁻¹)", value=0.5, step=0.1)
+                            q_max = st.number_input("Max q (µm⁻¹)", value=10.0, step=0.5)
+                            ddm_q_range = (q_min, q_max)
+                        else:
+                            ddm_q_range = None
+                    
+                    # Run analysis
+                    if st.button("🚀 Run DDM Analysis", type="primary", key="run_ddm"):
+                        with st.spinner("Computing image structure function D(q, Δt)..."):
+                            try:
+                                # Initialize analyzer
+                                analyzer = DDMAnalyzer(
+                                    pixel_size_um=ddm_pixel_size,
+                                    frame_interval_s=ddm_frame_interval
+                                )
+                                
+                                # Generate lag times
+                                lag_frames = np.unique(
+                                    np.logspace(0, np.log10(ddm_max_lag), ddm_n_lag_times).astype(int)
+                                )
+                                lag_frames = lag_frames[lag_frames > 0]
+                                
+                                # Run analysis
+                                with st.status("DDM Analysis Pipeline", expanded=True) as status:
+                                    st.write("1️⃣ Computing structure function...")
+                                    ddm_result = analyzer.compute_image_structure_function(
+                                        image_stack=images,
+                                        lag_frames=lag_frames.tolist(),
+                                        q_range_um_inv=ddm_q_range,
+                                        subtract_background=ddm_subtract_bg
+                                    )
+                                    
+                                    if not ddm_result['success']:
+                                        st.error(f"❌ DDM failed: {ddm_result.get('error', 'Unknown error')}")
+                                        status.update(label="DDM Analysis Failed", state="error")
+                                    else:
+                                        st.write("2️⃣ Extracting MSD from structure function...")
+                                        msd_result = analyzer.extract_msd_from_structure_function(ddm_result)
+                                        
+                                        st.write("3️⃣ Computing rheology (if applicable)...")
+                                        rheology_result = analyzer.compute_rheology_from_ddm(
+                                            msd_result,
+                                            particle_radius_um=ddm_particle_radius
+                                        )
+                                        
+                                        # Store results
+                                        st.session_state.ddm_results = {
+                                            'ddm': ddm_result,
+                                            'msd': msd_result,
+                                            'rheology': rheology_result,
+                                            'analyzer': analyzer
+                                        }
+                                        
+                                        status.update(label="✅ DDM Analysis Complete!", state="complete")
+                                        st.success("✅ DDM analysis completed successfully!")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Error during DDM analysis: {str(e)}")
+                                import traceback
+                                st.code(traceback.format_exc())
+                    
+                    # Display results if available
+                    if 'ddm_results' in st.session_state and st.session_state.ddm_results is not None:
+                        results = st.session_state.ddm_results
+                        ddm_res = results['ddm']
+                        msd_res = results['msd']
+                        rheo_res = results.get('rheology', {})
+                        
+                        st.markdown("---")
+                        st.subheader("📊 DDM Results")
+                        
+                        # Summary metrics
+                        metric_col1, metric_col2, metric_col3 = st.columns(3)
+                        
+                        with metric_col1:
+                            D_val = msd_res.get('diffusion_coeff_um2_s', np.nan)
+                            if not np.isnan(D_val):
+                                st.metric(
+                                    "Diffusion Coefficient",
+                                    f"{D_val:.4f} µm²/s",
+                                    help="Extracted from MSD vs time"
+                                )
+                            else:
+                                st.metric("Diffusion Coefficient", "N/A")
+                        
+                        with metric_col2:
+                            alpha_val = msd_res.get('alpha_exponent', np.nan)
+                            if not np.isnan(alpha_val):
+                                st.metric(
+                                    "Anomalous Exponent α",
+                                    f"{alpha_val:.2f}",
+                                    help="α=1: Brownian, α<1: subdiffusive, α>1: superdiffusive"
+                                )
+                            else:
+                                st.metric("Anomalous Exponent α", "N/A")
+                        
+                        with metric_col3:
+                            n_analyzed = ddm_res.get('n_frames_analyzed', 0)
+                            st.metric(
+                                "Frames Analyzed",
+                                f"{n_analyzed}",
+                                help="Number of frames used in analysis"
+                            )
+                        
+                        # Visualization tabs
+                        ddm_viz_tabs = st.tabs([
+                            "Structure Function D(q,τ)",
+                            "MSD vs Time",
+                            "Rheology"
+                        ])
+                        
+                        # Structure function visualization
+                        with ddm_viz_tabs[0]:
+                            st.subheader("Image Structure Function D(q, τ)")
+                            
+                            try:
+                                import plotly.graph_objects as go
+                                
+                                D_q_tau = ddm_res['D_q_tau']
+                                q_values = ddm_res['q_values_um_inv']
+                                lag_times = ddm_res['lag_times_s']
+                                
+                                fig = go.Figure(data=go.Heatmap(
+                                    x=q_values,
+                                    y=lag_times,
+                                    z=D_q_tau,
+                                    colorscale='Viridis',
+                                    colorbar=dict(title='D(q,τ)')
+                                ))
+                                
+                                fig.update_layout(
+                                    title='Image Structure Function',
+                                    xaxis_title='Wave vector q (µm⁻¹)',
+                                    yaxis_title='Lag time τ (s)',
+                                    xaxis_type='log',
+                                    yaxis_type='log',
+                                    height=500
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                            except Exception as e:
+                                st.error(f"Visualization error: {str(e)}")
+                        
+                        # MSD visualization
+                        with ddm_viz_tabs[1]:
+                            st.subheader("Mean Square Displacement from DDM")
+                            
+                            if 'msd_vs_time' in msd_res:
+                                try:
+                                    msd_data = msd_res['msd_vs_time']
+                                    
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatter(
+                                        x=msd_data['lag_times_s'],
+                                        y=msd_data['msd_um2'],
+                                        mode='markers',
+                                        name='DDM MSD',
+                                        marker=dict(size=8)
+                                    ))
+                                    
+                                    # Add fit if available
+                                    if 'msd_fit_um2' in msd_data:
+                                        fig.add_trace(go.Scatter(
+                                            x=msd_data['lag_times_s'],
+                                            y=msd_data['msd_fit_um2'],
+                                            mode='lines',
+                                            name=f'Fit: MSD = {D_val:.4f}·t^{alpha_val:.2f}',
+                                            line=dict(color='red', dash='dash')
+                                        ))
+                                    
+                                    fig.update_layout(
+                                        title='MSD from DDM Analysis',
+                                        xaxis_title='Lag time τ (s)',
+                                        yaxis_title='MSD (µm²)',
+                                        xaxis_type='log',
+                                        yaxis_type='log',
+                                        height=500
+                                    )
+                                    
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    
+                                    # Show fit quality
+                                    if 'r_squared' in msd_res:
+                                        st.info(f"Fit quality: R² = {msd_res['r_squared']:.3f}")
+                                    
+                                except Exception as e:
+                                    st.error(f"MSD visualization error: {str(e)}")
+                            else:
+                                st.warning("MSD data not available")
+                        
+                        # Rheology visualization
+                        with ddm_viz_tabs[2]:
+                            st.subheader("Microrheology from DDM")
+                            
+                            if rheo_res.get('success'):
+                                try:
+                                    freq = rheo_res['frequency_rad_s']
+                                    G_prime = rheo_res['G_prime_Pa']
+                                    G_double_prime = rheo_res['G_double_prime_Pa']
+                                    
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatter(
+                                        x=freq,
+                                        y=G_prime,
+                                        mode='lines+markers',
+                                        name="G' (elastic)",
+                                        line=dict(color='blue')
+                                    ))
+                                    fig.add_trace(go.Scatter(
+                                        x=freq,
+                                        y=G_double_prime,
+                                        mode='lines+markers',
+                                        name='G" (viscous)',
+                                        line=dict(color='red')
+                                    ))
+                                    
+                                    fig.update_layout(
+                                        title='Complex Modulus from DDM',
+                                        xaxis_title='Frequency ω (rad/s)',
+                                        yaxis_title='Modulus (Pa)',
+                                        xaxis_type='log',
+                                        yaxis_type='log',
+                                        height=500
+                                    )
+                                    
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    
+                                except Exception as e:
+                                    st.error(f"Rheology visualization error: {str(e)}")
+                            else:
+                                st.info("Rheology analysis not available or failed")
+                        
+                        # Export options
+                        with st.expander("💾 Export Results", expanded=False):
+                            if st.button("Export DDM Data as CSV"):
+                                try:
+                                    # Create DataFrame with key results
+                                    export_df = pd.DataFrame({
+                                        'q_um_inv': ddm_res['q_values_um_inv'],
+                                        'lag_time_s': ddm_res['lag_times_s'][:len(ddm_res['q_values_um_inv'])],
+                                    })
+                                    
+                                    csv = export_df.to_csv(index=False)
+                                    st.download_button(
+                                        label="Download CSV",
+                                        data=csv,
+                                        file_name="ddm_results.csv",
+                                        mime="text/csv"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Export error: {str(e)}")
+            
+            except ImportError:
+                st.error("❌ DDM analyzer module not available. Check installation.")
+            except Exception as e:
+                st.error(f"❌ Error in DDM interface: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
 
         # Biophysical Models tab
         with adv_tabs[0]:
