@@ -11300,12 +11300,12 @@ elif st.session_state.active_page == "Advanced Analysis":
                             with col1:
                                 st.metric("Distribution Type", waiting_time_results['distribution_type'])
                             with col2:
-                                st.metric("Mean Waiting Time", f\"{waiting_time_results['mean_waiting_time']:.3f} s\")
+                                st.metric("Mean Waiting Time", f"{waiting_time_results['mean_waiting_time']:.3f} s")
                             with col3:
                                 if waiting_time_results['is_heavy_tailed']:
-                                    st.metric("Heavy-Tailed", \"✓ Yes\")
+                                    st.metric("Heavy-Tailed", "✓ Yes")
                                 else:
-                                    st.metric("Heavy-Tailed\", \"✗ No\")
+                                    st.metric("Heavy-Tailed", "✗ No")
                             
                             # Plot waiting times
                             if len(waiting_time_results['waiting_times']) > 0:
@@ -11325,28 +11325,28 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 st.plotly_chart(fig, use_container_width=True)
                             
                             # Jump length results
-                            st.subheader(\"Jump Length Distribution\")
+                            st.subheader("Jump Length Distribution")
                             
                             if 'mean_jump_length' in jump_length_results:
                                 col1, col2 = st.columns(2)
                                 with col1:
-                                    st.metric(\"Mean Jump Length\", f\"{jump_length_results['mean_jump_length']:.3f} μm\")
+                                    st.metric("Mean Jump Length", f"{jump_length_results['mean_jump_length']:.3f} μm")
                                 with col2:
-                                    st.metric(\"Std Jump Length\", f\"{jump_length_results.get('std_jump_length', 0):.3f} μm\")
+                                    st.metric("Std Jump Length", f"{jump_length_results.get('std_jump_length', 0):.3f} μm")
                             
                             # Coupling analysis
                             if coupling_results:
-                                st.subheader(\"Waiting Time-Jump Length Coupling\")
-                                st.info(f\"Correlation: {coupling_results.get('correlation', 0):.3f}\")
+                                st.subheader("Waiting Time-Jump Length Coupling")
+                                st.info(f"Correlation: {coupling_results.get('correlation', 0):.3f}")
                         
                         except Exception as e:
-                            st.error(f\"Error in CTRW analysis: {str(e)}\")
+                            st.error(f"Error in CTRW analysis: {str(e)}")
                             import traceback
                             st.code(traceback.format_exc())
             
             # FBM Analysis tab
             with adv_tabs[7]:
-                st.header(\"Fractional Brownian Motion (FBM) Analysis\")
+                st.header("Fractional Brownian Motion (FBM) Analysis")
                 
                 st.markdown(\"\"\"
                 **Fractional Brownian Motion** characterizes anomalous diffusion through the **Hurst exponent** H:
@@ -11389,7 +11389,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             long_tracks = [g for _, g in track_groups if len(g) >= min_track_length_fbm]
                             
                             if len(long_tracks) == 0:
-                                st.error(f\"No tracks longer than {min_track_length_fbm} frames found.\")
+                                st.error(f"No tracks longer than {min_track_length_fbm} frames found.")
                             else:
                                 # Fit FBM to each track
                                 fbm_results_list = []
@@ -11408,7 +11408,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 progress_bar.empty()
                                 
                                 if len(fbm_results_list) > 0:
-                                    st.success(f\"✓ FBM analysis completed for {len(fbm_results_list)} tracks!\")
+                                    st.success(f"✓ FBM analysis completed for {len(fbm_results_list)} tracks!")
                                     
                                     # Aggregate results
                                     hurst_exponents = [r['hurst_exponent'] for r in fbm_results_list]
@@ -11431,9 +11431,9 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     
                                     col1, col2, col3 = st.columns(3)
                                     with col1:
-                                        st.metric(\"Mean Hurst Exponent\", f\"{fbm_results['mean_hurst']:.3f} ± {fbm_results['std_hurst']:.3f}\")
+                                        st.metric("Mean Hurst Exponent", f"{fbm_results['mean_hurst']:.3f} ± {fbm_results['std_hurst']:.3f}")
                                     with col2:
-                                        st.metric(\"Mean D\", f\"{fbm_results['mean_D']:.3e} μm²/s\")
+                                        st.metric("Mean D", f"{fbm_results['mean_D']:.3e} μm²/s")
                                     with col3:
                                         st.metric(\"N Tracks Analyzed\", len(fbm_results_list))
                                     
@@ -11446,7 +11446,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     else:
                                         regime = \"Superdiffusive (persistent)\"
                                     
-                                    st.info(f\"**Diffusion Regime:** {regime}\")
+                                    st.info(f"**Diffusion Regime:** {regime}")
                                     
                                     # Plot Hurst distribution
                                     import plotly.graph_objects as go
@@ -11468,7 +11468,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     st.error(\"FBM fitting failed for all tracks.\")
                         
                         except Exception as e:
-                            st.error(f\"Error in FBM analysis: {str(e)}\")
+                            st.error(f"Error in FBM analysis: {str(e)}")
                             import traceback
                             st.code(traceback.format_exc())
             
@@ -11570,7 +11570,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 
                                 if not ergodicity_df.empty:
                                     mean_eb = ergodicity_df['EB_ratio'].mean()
-                                    st.metric(\"Mean EB Ratio\", f\"{mean_eb:.3f}\")
+                                    st.metric("Mean EB Ratio", f"{mean_eb:.3f}")
                                     
                                     if mean_eb < 0.8:
                                         st.warning(\"⚠️ Strong ergodicity breaking detected (EB < 0.8)\")
@@ -11621,7 +11621,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     st.plotly_chart(fig_ngp, use_container_width=True)
                         
                         except Exception as e:
-                            st.error(f\"Error calculating advanced metrics: {str(e)}\")
+                            st.error(f"Error calculating advanced metrics: {str(e)}")
                             import traceback
                             st.code(traceback.format_exc())
             
@@ -11679,17 +11679,17 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         
                                         col1, col2, col3 = st.columns(3)
                                         with col1:
-                                            st.metric(\"χ² Statistic\", f\"{chi2_results['statistic']:.3f}\")
+                                            st.metric("χ² Statistic", f"{chi2_results['statistic']:.3f}")
                                         with col2:
-                                            st.metric(\"p-value\", f\"{chi2_results['p_value']:.4f}\")
+                                            st.metric("p-value", f"{chi2_results['p_value']:.4f}")
                                         with col3:
-                                            st.metric(\"DOF\", chi2_results['dof'])
+                                            st.metric("DOF", chi2_results['dof'])
                                         
-                                        st.info(f\"**Conclusion:** {chi2_results['conclusion']}\")
+                                        st.info(f"**Conclusion:** {chi2_results['conclusion']}")
                                     else:
                                         st.error(chi2_results['error'])
                             except Exception as e:
-                                st.error(f\"Error: {str(e)}\")
+                                st.error(f"Error: {str(e)}")
                     else:
                         st.warning(\"Run Diffusion Analysis first to use this test.\")
                 
@@ -11717,13 +11717,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                             
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric(\"Observed Mean\", f\"{ci_result['observed_statistic']:.2f}\")
+                                st.metric("Observed Mean", f"{ci_result['observed_statistic']:.2f}")
                             with col2:
-                                st.metric(\"Lower CI\", f\"{ci_result['ci_lower']:.2f}\")
+                                st.metric("Lower CI", f"{ci_result['ci_lower']:.2f}")
                             with col3:
-                                st.metric(\"Upper CI\", f\"{ci_result['ci_upper']:.2f}\")
+                                st.metric("Upper CI", f"{ci_result['ci_upper']:.2f}")
                             
-                            st.info(f\"{int(confidence_level*100)}% CI: [{ci_result['ci_lower']:.2f}, {ci_result['ci_upper']:.2f}]\")
+                            st.info(f"{int(confidence_level*100)}% CI: [{ci_result['ci_lower']:.2f}, {ci_result['ci_upper']:.2f}]")
                         
                         except Exception as e:
                             st.error(f\"Error: {str(e)}\")
