@@ -6669,6 +6669,7 @@ elif st.session_state.active_page == "Analysis":
                 "Active Transport", 
                 "Boundary Crossing", 
                 "Crowding",
+                "Polymer Physics",
                 "Biophysical Models",
                 "Microrheology"
             ])
@@ -7385,7 +7386,174 @@ elif st.session_state.active_page == "Analysis":
                         st.info("No density-mobility correlation was calculated. This requires sufficient data points across different density regions.")
             
             # Biophysical Models Analysis
+            # Polymer Physics Analysis
             with adv_tabs[5]:
+                st.header("Polymer Physics Analysis")
+                
+                st.markdown("""
+                Analyze polymer dynamics and determine the regime (Rouse, Zimm, Reptation) based on 
+                the scaling exponent of mean squared displacement: MSD ~ t^α
+                
+                **Polymer Regimes:**
+                - **Rouse (unentangled):** α ≈ 0.5 - subdiffusive motion without hydrodynamic interactions
+                - **Zimm (with hydrodynamics):** α ≈ 0.6 - includes solvent effects
+                - **Reptation (entangled):** α ≈ 0.25 - strong subdiffusion due to topological constraints
+                - **Free diffusion:** α ≈ 1.0 - normal diffusive behavior
+                """)
+                
+                # Parameters
+                st.subheader("Analysis Parameters")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    pixel_size = get_global_pixel_size()
+                    st.metric("Pixel Size", f"{pixel_size:.4f} µm")
+                    
+                    frame_interval = get_global_frame_interval()
+                    st.metric("Frame Interval", f"{frame_interval:.4f} s")
+                    
+                with col2:
+                    min_track_length = st.slider(
+                        "Minimum Track Length",
+                        min_value=5,
+                        max_value=50,
+                        value=10,
+                        help="Minimum number of frames required for polymer analysis"
+                    )
+                
+                # Run analysis
+                if st.button("Run Polymer Physics Analysis", key="polymer_physics_btn"):
+                    with st.spinner("Analyzing polymer dynamics..."):
+                        try:
+                            polymer_results = analyze_polymer_physics(
+                                st.session_state.tracks_data,
+                                pixel_size=pixel_size,
+                                frame_interval=frame_interval,
+                                min_track_length=min_track_length
+                            )
+                            
+                            if polymer_results.get('success'):
+                                st.session_state.analysis_results['polymer_physics'] = polymer_results
+                                st.success("✓ Polymer physics analysis completed!")
+                                
+                                # Display results
+                                st.subheader("Results")
+                                
+                                # Key metrics
+                                col1, col2, col3 = st.columns(3)
+                                
+                                with col1:
+                                    st.metric(
+                                        "Scaling Exponent (α)", 
+                                        f"{polymer_results['scaling_exponent']:.3f} ± {polymer_results.get('scaling_exponent_error', 0):.3f}"
+                                    )
+                                
+                                with col2:
+                                    st.metric("Regime", polymer_results['regime'])
+                                
+                                with col3:
+                                    st.metric(
+                                        "Fit Quality (R²)", 
+                                        f"{polymer_results['r_squared']:.3f}"
+                                    )
+                                
+                                # Interpretation
+                                st.subheader("Interpretation")
+                                interp = polymer_results.get('interpretation', {})
+                                st.info(f"**{interp.get('description', 'N/A')}**")
+                                st.write(interp.get('properties', ''))
+                                
+                                # MSD vs Time Plot (log-log)
+                                st.subheader("MSD vs Time (Log-Log Plot)")
+                                
+                                import plotly.graph_objects as go
+                                
+                                fig = go.Figure()
+                                
+                                # Data points
+                                fig.add_trace(go.Scatter(
+                                    x=polymer_results['lag_times'],
+                                    y=polymer_results['msd_data'],
+                                    mode='markers',
+                                    name='Data',
+                                    marker=dict(size=8, color='blue')
+                                ))
+                                
+                                # Power law fit
+                                fig.add_trace(go.Scatter(
+                                    x=polymer_results['lag_times'],
+                                    y=polymer_results['fitted_msd'],
+                                    mode='lines',
+                                    name=f'Fit: MSD = A·t^{polymer_results["scaling_exponent"]:.3f}',
+                                    line=dict(color='red', width=2, dash='dash')
+                                ))
+                                
+                                fig.update_xaxes(
+                                    title="Lag Time (s)",
+                                    type="log",
+                                    showgrid=True,
+                                    gridcolor='lightgray'
+                                )
+                                fig.update_yaxes(
+                                    title="MSD (µm²)",
+                                    type="log",
+                                    showgrid=True,
+                                    gridcolor='lightgray'
+                                )
+                                fig.update_layout(
+                                    title=f"Polymer Regime: {polymer_results['regime']}",
+                                    hovermode='closest',
+                                    height=500
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Statistical details
+                                with st.expander("📊 Statistical Details"):
+                                    st.write("**Ensemble Results:**")
+                                    for key, value in polymer_results['ensemble_results'].items():
+                                        if isinstance(value, float):
+                                            st.write(f"- {key.replace('_', ' ').title()}: {value:.4f}")
+                                        else:
+                                            st.write(f"- {key.replace('_', ' ').title()}: {value}")
+                                
+                            else:
+                                st.error(f"Analysis failed: {polymer_results.get('error', 'Unknown error')}")
+                        
+                        except Exception as e:
+                            st.error(f"Error in polymer physics analysis: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                
+                # Display previous results if available
+                elif 'polymer_physics' in st.session_state.get('analysis_results', {}):
+                    st.info("Previous analysis results available. Click 'Run Polymer Physics Analysis' to recompute.")
+                    
+                    polymer_results = st.session_state.analysis_results['polymer_physics']
+                    
+                    if polymer_results.get('success'):
+                        st.subheader("Previous Results")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric(
+                                "Scaling Exponent (α)", 
+                                f"{polymer_results['scaling_exponent']:.3f}"
+                            )
+                        
+                        with col2:
+                            st.metric("Regime", polymer_results['regime'])
+                        
+                        with col3:
+                            st.metric(
+                                "Fit Quality (R²)", 
+                                f"{polymer_results['r_squared']:.3f}"
+                            )
+            
+            # Biophysical Models Analysis
+            with adv_tabs[6]:
                 st.header("Biophysical Models Analysis")
                 
                 if st.session_state.tracks_data is not None:
@@ -7899,12 +8067,16 @@ elif st.session_state.active_page == "Advanced Analysis":
             "Advanced Tracking",
             "Intensity Analysis",
             "Microrheology",
+            "CTRW Analysis",
+            "FBM Analysis",
+            "Advanced Metrics",
+            "Statistical Tests",
             "Ornstein-Uhlenbeck",
             "HMM Analysis"
         ])
         
         # HMM Analysis tab
-        with adv_tabs[7]:
+        with adv_tabs[11]:
             st.header("Hidden Markov Model (HMM) Analysis")
             st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
 
@@ -10376,7 +10548,513 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.subheader("Frequency Sweep Data")
                             st.dataframe(results['frequency_sweep'])
 
+            # CTRW Analysis tab
             with adv_tabs[6]:
+                st.header("Continuous Time Random Walk (CTRW) Analysis")
+                
+                st.markdown("""
+                **Continuous Time Random Walk (CTRW)** models characterize anomalous diffusion through:
+                - **Waiting Time Distribution** ψ(t): Time between movement events
+                - **Jump Length Distribution** λ(r): Size of spatial jumps
+                
+                Heavy-tailed distributions indicate CTRW behavior often seen in biological systems.
+                """)
+                
+                # Parameters
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    min_pause_threshold = st.number_input(
+                        "Pause Threshold (μm)",
+                        min_value=0.001,
+                        max_value=1.0,
+                        value=0.01,
+                        step=0.001,
+                        format="%.3f",
+                        help="Minimum displacement considered as movement"
+                    )
+                    
+                with col2:
+                    fit_distribution = st.selectbox(
+                        "Distribution Model",
+                        ["auto", "exponential", "powerlaw"],
+                        help="Distribution to fit to waiting times"
+                    )
+                
+                if st.button("Run CTRW Analysis", key="ctrw_btn"):
+                    with st.spinner("Analyzing CTRW properties..."):
+                        try:
+                            from advanced_diffusion_models import CTRWAnalyzer
+                            
+                            units = get_current_units()
+                            
+                            analyzer = CTRWAnalyzer(
+                                st.session_state.tracks_data,
+                                pixel_size=units['pixel_size'],
+                                frame_interval=units['frame_interval']
+                            )
+                            
+                            # Waiting time analysis
+                            waiting_time_results = analyzer.analyze_waiting_time_distribution(
+                                min_pause_threshold=min_pause_threshold,
+                                fit_distribution=fit_distribution
+                            )
+                            
+                            # Jump length analysis
+                            jump_length_results = analyzer.analyze_jump_length_distribution()
+                            
+                            # Coupling analysis
+                            coupling_results = analyzer.analyze_coupling()
+                            
+                            ctrw_results = {
+                                'success': True,
+                                'waiting_times': waiting_time_results,
+                                'jump_lengths': jump_length_results,
+                                'coupling': coupling_results
+                            }
+                            
+                            st.session_state.analysis_results['ctrw'] = ctrw_results
+                            
+                            # Display results
+                            st.success("✓ CTRW analysis completed!")
+                            
+                            # Waiting time results
+                            st.subheader("Waiting Time Distribution")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Distribution Type", waiting_time_results['distribution_type'])
+                            with col2:
+                                st.metric("Mean Waiting Time", f\"{waiting_time_results['mean_waiting_time']:.3f} s\")
+                            with col3:
+                                if waiting_time_results['is_heavy_tailed']:
+                                    st.metric("Heavy-Tailed", \"✓ Yes\")
+                                else:
+                                    st.metric("Heavy-Tailed\", \"✗ No\")
+                            
+                            # Plot waiting times
+                            if len(waiting_time_results['waiting_times']) > 0:
+                                import plotly.graph_objects as go
+                                fig = go.Figure()
+                                fig.add_trace(go.Histogram(
+                                    x=waiting_time_results['waiting_times'],
+                                    name='Waiting Times',
+                                    nbinsx=50
+                                ))
+                                fig.update_layout(
+                                    title=\"Waiting Time Distribution\",
+                                    xaxis_title=\"Time (s)\",
+                                    yaxis_title=\"Count\",
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Jump length results
+                            st.subheader(\"Jump Length Distribution\")
+                            
+                            if 'mean_jump_length' in jump_length_results:
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric(\"Mean Jump Length\", f\"{jump_length_results['mean_jump_length']:.3f} μm\")
+                                with col2:
+                                    st.metric(\"Std Jump Length\", f\"{jump_length_results.get('std_jump_length', 0):.3f} μm\")
+                            
+                            # Coupling analysis
+                            if coupling_results:
+                                st.subheader(\"Waiting Time-Jump Length Coupling\")
+                                st.info(f\"Correlation: {coupling_results.get('correlation', 0):.3f}\")
+                        
+                        except Exception as e:
+                            st.error(f\"Error in CTRW analysis: {str(e)}\")
+                            import traceback
+                            st.code(traceback.format_exc())
+            
+            # FBM Analysis tab
+            with adv_tabs[7]:
+                st.header(\"Fractional Brownian Motion (FBM) Analysis\")
+                
+                st.markdown(\"\"\"
+                **Fractional Brownian Motion** characterizes anomalous diffusion through the **Hurst exponent** H:
+                - H = 0.5: Normal Brownian motion
+                - H < 0.5: Subdiffusive (antipersistent)
+                - H > 0.5: Superdiffusive (persistent)
+                \"\"\")
+                
+                # Parameters
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    min_track_length_fbm = st.slider(
+                        \"Minimum Track Length\",
+                        min_value=10,
+                        max_value=100,
+                        value=20,
+                        help=\"Minimum number of points for FBM fitting\"
+                    )
+                
+                with col2:
+                    confidence_level = st.slider(
+                        \"Confidence Level\",
+                        min_value=0.90,
+                        max_value=0.99,
+                        value=0.95,
+                        step=0.01,
+                        help=\"Confidence level for parameter estimation\"
+                    )
+                
+                if st.button(\"Run FBM Analysis\", key=\"fbm_btn\"):
+                    with st.spinner(\"Fitting FBM models...\"):
+                        try:
+                            from advanced_diffusion_models import fit_fbm_model
+                            
+                            units = get_current_units()
+                            
+                            # Filter tracks by length
+                            track_groups = st.session_state.tracks_data.groupby('track_id')
+                            long_tracks = [g for _, g in track_groups if len(g) >= min_track_length_fbm]
+                            
+                            if len(long_tracks) == 0:
+                                st.error(f\"No tracks longer than {min_track_length_fbm} frames found.\")
+                            else:
+                                # Fit FBM to each track
+                                fbm_results_list = []
+                                
+                                progress_bar = st.progress(0)
+                                for idx, track in enumerate(long_tracks):
+                                    track_result = fit_fbm_model(
+                                        track,
+                                        pixel_size=units['pixel_size'],
+                                        frame_interval=units['frame_interval']
+                                    )
+                                    if track_result['success']:
+                                        fbm_results_list.append(track_result)
+                                    progress_bar.progress((idx + 1) / len(long_tracks))
+                                
+                                progress_bar.empty()
+                                
+                                if len(fbm_results_list) > 0:
+                                    st.success(f\"✓ FBM analysis completed for {len(fbm_results_list)} tracks!\")
+                                    
+                                    # Aggregate results
+                                    hurst_exponents = [r['hurst_exponent'] for r in fbm_results_list]
+                                    diffusion_coeffs = [r['diffusion_coefficient'] for r in fbm_results_list]
+                                    
+                                    fbm_results = {
+                                        'success': True,
+                                        'track_results': fbm_results_list,
+                                        'mean_hurst': np.mean(hurst_exponents),
+                                        'std_hurst': np.std(hurst_exponents),
+                                        'mean_D': np.mean(diffusion_coeffs),
+                                        'hurst_distribution': hurst_exponents,
+                                        'D_distribution': diffusion_coeffs
+                                    }
+                                    
+                                    st.session_state.analysis_results['fbm'] = fbm_results
+                                    
+                                    # Display ensemble results
+                                    st.subheader(\"Ensemble Results\")
+                                    
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric(\"Mean Hurst Exponent\", f\"{fbm_results['mean_hurst']:.3f} ± {fbm_results['std_hurst']:.3f}\")
+                                    with col2:
+                                        st.metric(\"Mean D\", f\"{fbm_results['mean_D']:.3e} μm²/s\")
+                                    with col3:
+                                        st.metric(\"N Tracks Analyzed\", len(fbm_results_list))
+                                    
+                                    # Interpret mean Hurst
+                                    H_mean = fbm_results['mean_hurst']
+                                    if H_mean < 0.45:
+                                        regime = \"Subdiffusive (antipersistent)\"
+                                    elif H_mean < 0.55:
+                                        regime = \"Normal Brownian motion\"
+                                    else:
+                                        regime = \"Superdiffusive (persistent)\"
+                                    
+                                    st.info(f\"**Diffusion Regime:** {regime}\")
+                                    
+                                    # Plot Hurst distribution
+                                    import plotly.graph_objects as go
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Histogram(
+                                        x=hurst_exponents,
+                                        name='Hurst Exponent',
+                                        nbinsx=30
+                                    ))
+                                    fig.add_vline(x=0.5, line_dash=\"dash\", line_color=\"red\", 
+                                                 annotation_text=\"H=0.5 (Brownian)\")
+                                    fig.update_layout(
+                                        title=\"Hurst Exponent Distribution\",
+                                        xaxis_title=\"Hurst Exponent (H)\",
+                                        yaxis_title=\"Count\"
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                                else:
+                                    st.error(\"FBM fitting failed for all tracks.\")
+                        
+                        except Exception as e:
+                            st.error(f\"Error in FBM analysis: {str(e)}\")
+                            import traceback
+                            st.code(traceback.format_exc())
+            
+            # Advanced Metrics tab
+            with adv_tabs[8]:
+                st.header(\"Advanced Biophysical Metrics\")
+                
+                st.markdown(\"\"\"
+                Comprehensive set of advanced metrics:
+                - **TAMSD/EAMSD**: Time-averaged vs Ensemble-averaged MSD
+                - **Ergodicity Breaking (EB)**: Measure of non-ergodicity
+                - **NGP**: Non-Gaussian Parameter (deviation from Brownian)
+                - **VACF**: Velocity Autocorrelation Function
+                - **van Hove Distribution**: Displacement probability distribution
+                \"\"\")
+                
+                # Parameters
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    max_lag_metrics = st.slider(
+                        \"Maximum Lag Time\",
+                        min_value=5,
+                        max_value=50,
+                        value=20,
+                        help=\"Maximum lag for MSD and correlation calculations\"
+                    )
+                    
+                with col2:
+                    min_track_length_metrics = st.slider(
+                        \"Minimum Track Length\",
+                        min_value=5,
+                        max_value=50,
+                        value=10,
+                        help=\"Minimum points per track\"
+                    )
+                
+                if st.button(\"Calculate Advanced Metrics\", key=\"advanced_metrics_btn\"):
+                    with st.spinner(\"Computing advanced metrics...\"):
+                        try:
+                            from advanced_biophysical_metrics import AdvancedMetricsAnalyzer, MetricConfig
+                            
+                            units = get_current_units()
+                            
+                            config = MetricConfig(
+                                pixel_size=units['pixel_size'],
+                                frame_interval=units['frame_interval'],
+                                min_track_length=min_track_length_metrics,
+                                max_lag=max_lag_metrics,
+                                log_lag=True,
+                                n_bootstrap=500
+                            )
+                            
+                            analyzer = AdvancedMetricsAnalyzer(st.session_state.tracks_data, config)
+                            
+                            if analyzer.df.empty:
+                                st.error(\"No tracks meet the minimum length requirement.\")
+                            else:
+                                # Calculate TAMSD/EAMSD
+                                tamsd_df, eamsd_df = analyzer.tamsd_eamsd()
+                                
+                                # Calculate ergodicity
+                                ergodicity_df = analyzer.ergodicity_measures(tamsd_df, eamsd_df)
+                                
+                                # Calculate NGP
+                                ngp_results = []
+                                for lag in analyzer.lags:
+                                    dx, dy, dr, n_pairs = analyzer._collect_displacements(lag)
+                                    if n_pairs > 0:
+                                        from advanced_metrics import non_gaussian_parameter_2d
+                                        ngp = non_gaussian_parameter_2d(dr)
+                                        ngp_results.append({
+                                            'lag': lag,
+                                            'tau_s': lag * units['frame_interval'],
+                                            'ngp': ngp,
+                                            'n_pairs': n_pairs
+                                        })
+                                
+                                ngp_df = pd.DataFrame(ngp_results)
+                                
+                                # Calculate VACF
+                                vacf_results = analyzer.velocity_autocorrelation()
+                                
+                                metrics_results = {
+                                    'success': True,
+                                    'tamsd': tamsd_df,
+                                    'eamsd': eamsd_df,
+                                    'ergodicity': ergodicity_df,
+                                    'ngp': ngp_df,
+                                    'vacf': vacf_results
+                                }
+                                
+                                st.session_state.analysis_results['advanced_metrics'] = metrics_results
+                                
+                                st.success(\"✓ Advanced metrics calculated!\")
+                                
+                                # Display results
+                                st.subheader(\"Ergodicity Breaking (EB) Ratio\")
+                                
+                                if not ergodicity_df.empty:
+                                    mean_eb = ergodicity_df['EB_ratio'].mean()
+                                    st.metric(\"Mean EB Ratio\", f\"{mean_eb:.3f}\")
+                                    
+                                    if mean_eb < 0.8:
+                                        st.warning(\"⚠️ Strong ergodicity breaking detected (EB < 0.8)\")
+                                    elif mean_eb < 1.2:
+                                        st.info(\"ℹ️ Weakly ergodic system (0.8 < EB < 1.2)\")
+                                    else:
+                                        st.success(\"✓ Ergodic system (EB ≈ 1)\")
+                                    
+                                    # Plot EB ratio vs lag
+                                    import plotly.graph_objects as go
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatter(
+                                        x=ergodicity_df['tau_s'],
+                                        y=ergodicity_df['EB_ratio'],
+                                        mode='lines+markers',
+                                        name='EB Ratio'
+                                    ))
+                                    fig.add_hline(y=1.0, line_dash=\"dash\", line_color=\"red\",
+                                                 annotation_text=\"Ergodic (EB=1)\")
+                                    fig.update_layout(
+                                        title=\"Ergodicity Breaking Ratio vs Time\",
+                                        xaxis_title=\"Lag Time (s)\",
+                                        yaxis_title=\"EB Ratio\",
+                                        xaxis_type=\"log\",
+                                        yaxis_type=\"log\"
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                                
+                                # NGP Plot
+                                st.subheader(\"Non-Gaussian Parameter (NGP)\")
+                                
+                                if not ngp_df.empty:
+                                    fig_ngp = go.Figure()
+                                    fig_ngp.add_trace(go.Scatter(
+                                        x=ngp_df['tau_s'],
+                                        y=ngp_df['ngp'],
+                                        mode='lines+markers',
+                                        name='NGP'
+                                    ))
+                                    fig_ngp.add_hline(y=0.0, line_dash=\"dash\", line_color=\"red\",
+                                                     annotation_text=\"Gaussian (NGP=0)\")
+                                    fig_ngp.update_layout(
+                                        title=\"Non-Gaussian Parameter vs Time\",
+                                        xaxis_title=\"Lag Time (s)\",
+                                        yaxis_title=\"NGP\",
+                                        xaxis_type=\"log\"
+                                    )
+                                    st.plotly_chart(fig_ngp, use_container_width=True)
+                        
+                        except Exception as e:
+                            st.error(f\"Error calculating advanced metrics: {str(e)}\")
+                            import traceback
+                            st.code(traceback.format_exc())
+            
+            # Statistical Tests tab
+            with adv_tabs[9]:
+                st.header(\"Statistical Tests & Model Validation\")
+                
+                st.markdown(\"\"\"
+                Rigorous statistical validation tools:
+                - **Goodness-of-Fit Tests**: Chi-squared, Kolmogorov-Smirnov, Anderson-Darling
+                - **Model Selection**: AIC/BIC criteria
+                - **Bootstrap Confidence Intervals**
+                - **Non-parametric Tests**: Mann-Whitney U, Kruskal-Wallis, Wilcoxon
+                \"\"\")
+                
+                # Test selection
+                test_type = st.selectbox(
+                    \"Select Test Type\",
+                    [
+                        \"Goodness-of-Fit (Chi-squared)\",
+                        \"Kolmogorov-Smirnov Test\",
+                        \"Bootstrap CI\",
+                        \"Mann-Whitney U Test\",
+                        \"Model Comparison (AIC/BIC)\"
+                    ]
+                )
+                
+                if \"Goodness-of-Fit\" in test_type:
+                    st.subheader(\"Chi-Squared Goodness-of-Fit Test\")
+                    
+                    st.info(\"This test will be applied to diffusion analysis results if available.\")
+                    
+                    if 'diffusion' in st.session_state.get('analysis_results', {}):
+                        if st.button(\"Run Chi-Squared Test\"):
+                            try:
+                                from advanced_statistical_tests import chi_squared_goodness_of_fit, validate_model_fit
+                                
+                                diff_results = st.session_state.analysis_results['diffusion']
+                                
+                                # Get MSD data
+                                if 'msd_data' in diff_results:
+                                    observed_msd = np.array(diff_results['msd_data'])
+                                    lag_times = np.array(diff_results['lag_times'])
+                                    
+                                    # Fit linear model
+                                    from scipy.stats import linregress
+                                    slope, intercept, r_value, p_value, std_err = linregress(lag_times, observed_msd)
+                                    expected_msd = slope * lag_times + intercept
+                                    
+                                    # Chi-squared test
+                                    chi2_results = chi_squared_goodness_of_fit(observed_msd, expected_msd, n_params=2)
+                                    
+                                    if chi2_results['success']:
+                                        st.success(\"✓ Chi-squared test completed\")
+                                        
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric(\"χ² Statistic\", f\"{chi2_results['statistic']:.3f}\")
+                                        with col2:
+                                            st.metric(\"p-value\", f\"{chi2_results['p_value']:.4f}\")
+                                        with col3:
+                                            st.metric(\"DOF\", chi2_results['dof'])
+                                        
+                                        st.info(f\"**Conclusion:** {chi2_results['conclusion']}\")
+                                    else:
+                                        st.error(chi2_results['error'])
+                            except Exception as e:
+                                st.error(f\"Error: {str(e)}\")
+                    else:
+                        st.warning(\"Run Diffusion Analysis first to use this test.\")
+                
+                elif \"Bootstrap\" in test_type:
+                    st.subheader(\"Bootstrap Confidence Intervals\")
+                    
+                    n_bootstrap = st.slider(\"Number of Bootstrap Samples\", 100, 10000, 1000, 100)
+                    confidence_level = st.slider(\"Confidence Level\", 0.90, 0.99, 0.95, 0.01)
+                    
+                    if st.button(\"Calculate Bootstrap CI\"):
+                        try:
+                            from advanced_statistical_tests import bootstrap_confidence_interval
+                            
+                            # Use track lengths as example
+                            track_lengths = st.session_state.tracks_data.groupby('track_id').size().values
+                            
+                            ci_result = bootstrap_confidence_interval(
+                                track_lengths,
+                                statistic=np.mean,
+                                n_bootstrap=n_bootstrap,
+                                confidence_level=confidence_level
+                            )
+                            
+                            st.success(\"✓ Bootstrap CI calculated\")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(\"Observed Mean\", f\"{ci_result['observed_statistic']:.2f}\")
+                            with col2:
+                                st.metric(\"Lower CI\", f\"{ci_result['ci_lower']:.2f}\")
+                            with col3:
+                                st.metric(\"Upper CI\", f\"{ci_result['ci_upper']:.2f}\")
+                            
+                            st.info(f\"{int(confidence_level*100)}% CI: [{ci_result['ci_lower']:.2f}, {ci_result['ci_upper']:.2f}]\")
+                        
+                        except Exception as e:
+                            st.error(f\"Error: {str(e)}\")
+            
+            # Ornstein-Uhlenbeck Analysis tab (now index 10)
+            with adv_tabs[10]:
                 st.header("Ornstein-Uhlenbeck Analysis")
                 st.write("Analyze tracks assuming an Ornstein-Uhlenbeck process, which models a particle in a harmonic potential.")
 

@@ -1365,6 +1365,159 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
     return results
 
 
+# --- Polymer Physics Analysis ---
+
+def analyze_polymer_physics(tracks_df: pd.DataFrame,
+                           pixel_size: float = 1.0,
+                           frame_interval: float = 1.0,
+                           min_track_length: int = 10) -> Dict[str, Any]:
+    """
+    Analyze polymer dynamics from trajectory data.
+    
+    Determines polymer regime (Rouse, Zimm, Reptation) based on scaling exponent
+    of mean squared displacement: MSD ~ t^α
+    
+    Regimes:
+    - Rouse (unentangled): α ≈ 0.5
+    - Zimm (with hydrodynamics): α ≈ 0.6
+    - Reptation (entangled): α ≈ 0.25 (short time), α ≈ 1.0 (long time)
+    - Free diffusion: α ≈ 1.0
+    
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track data in standard format with track_id, frame, x, y columns
+    pixel_size : float
+        Pixel size in micrometers
+    frame_interval : float
+        Time between frames in seconds
+    min_track_length : int
+        Minimum track length for analysis
+        
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'success': bool
+        - 'scaling_exponent': float (α value)
+        - 'regime': str (identified polymer regime)
+        - 'lag_times': list of lag times
+        - 'msd_data': list of MSD values
+        - 'ensemble_results': dict with statistics
+    """
+    try:
+        # Calculate ensemble MSD
+        msd_df = calculate_msd(
+            tracks_df,
+            max_lag=min(50, tracks_df['frame'].max() // 2),
+            pixel_size=pixel_size,
+            frame_interval=frame_interval,
+            min_track_length=min_track_length
+        )
+        
+        if msd_df.empty or len(msd_df) < 3:
+            return {
+                'success': False,
+                'error': 'Insufficient data for polymer analysis'
+            }
+        
+        # Get ensemble MSD
+        lag_times = msd_df['lag_time'].values
+        msd_values = msd_df['msd'].values
+        
+        # Filter out invalid values
+        valid_mask = (msd_values > 0) & np.isfinite(msd_values)
+        lag_times = lag_times[valid_mask]
+        msd_values = msd_values[valid_mask]
+        
+        if len(lag_times) < 3:
+            return {
+                'success': False,
+                'error': 'Insufficient valid MSD data points'
+            }
+        
+        # Fit power law: MSD = A * t^α
+        # Take log: log(MSD) = log(A) + α * log(t)
+        log_t = np.log(lag_times)
+        log_msd = np.log(msd_values)
+        
+        # Linear regression on log-log data
+        slope, intercept, r_value, p_value, std_err = linregress(log_t, log_msd)
+        
+        alpha = slope  # Scaling exponent
+        A = np.exp(intercept)  # Prefactor
+        
+        # Determine regime based on alpha
+        if alpha < 0.35:
+            regime = "Reptation (short-time)"
+        elif 0.35 <= alpha < 0.55:
+            regime = "Rouse (unentangled)"
+        elif 0.55 <= alpha < 0.7:
+            regime = "Zimm (with hydrodynamics)"
+        elif 0.7 <= alpha < 1.15:
+            regime = "Free diffusion"
+        elif alpha >= 1.15:
+            regime = "Anomalous (super-diffusive)"
+        else:
+            regime = "Unknown"
+        
+        # Calculate effective diffusion coefficient at t=1s
+        D_eff = A / 4.0  # Since MSD = 4D*t for normal diffusion
+        
+        # Estimate polymer properties based on regime
+        interpretation = {
+            'regime': regime,
+            'scaling_exponent': alpha,
+            'confidence': r_value**2,
+            'effective_D': D_eff
+        }
+        
+        if "Rouse" in regime:
+            interpretation['description'] = "Unentangled polymer chain dynamics. Rouse model applies."
+            interpretation['properties'] = "Subdiffusive motion with α≈0.5, no hydrodynamic interactions."
+        elif "Zimm" in regime:
+            interpretation['description'] = "Polymer with hydrodynamic interactions."
+            interpretation['properties'] = "Subdiffusive motion with α≈0.6, includes solvent effects."
+        elif "Reptation" in regime:
+            interpretation['description'] = "Entangled polymer dynamics. Reptation model may apply."
+            interpretation['properties'] = "Strong subdiffusion (α<0.5) due to topological constraints."
+        elif "Free diffusion" in regime:
+            interpretation['description'] = "Normal diffusive behavior."
+            interpretation['properties'] = "Linear MSD growth (α≈1.0), consistent with small molecules or unconfined motion."
+        else:
+            interpretation['description'] = f"Anomalous dynamics with α={alpha:.2f}"
+            interpretation['properties'] = "Non-standard scaling behavior."
+        
+        results = {
+            'success': True,
+            'scaling_exponent': float(alpha),
+            'scaling_exponent_error': float(std_err),
+            'prefactor': float(A),
+            'regime': regime,
+            'r_squared': float(r_value**2),
+            'p_value': float(p_value),
+            'lag_times': lag_times.tolist(),
+            'msd_data': msd_values.tolist(),
+            'fitted_msd': (A * lag_times**alpha).tolist(),
+            'ensemble_results': {
+                'effective_diffusion_coefficient': float(D_eff),
+                'regime': regime,
+                'scaling_exponent': float(alpha),
+                'fit_quality': float(r_value**2),
+                'n_tracks_analyzed': len(tracks_df['track_id'].unique())
+            },
+            'interpretation': interpretation
+        }
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Polymer physics analysis failed: {str(e)}'
+        }
+
+
 # --- Diffusion Population Analysis ---
 
 def analyze_diffusion_population(tracks_df: pd.DataFrame, 

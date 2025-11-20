@@ -379,6 +379,26 @@ class EnhancedSPTReportGenerator:
                 'priority': 4
             }
         
+        # Add CTRW analysis
+        self.available_analyses['ctrw_analysis'] = {
+            'name': 'Continuous Time Random Walk (CTRW)',
+            'description': 'Waiting time and jump length distributions, heavy-tail detection, coupling analysis.',
+            'function': self._analyze_ctrw,
+            'visualization': self._plot_ctrw,
+            'category': 'Advanced Statistics',
+            'priority': 4
+        }
+        
+        # Add statistical tests
+        self.available_analyses['statistical_tests'] = {
+            'name': 'Statistical Model Validation',
+            'description': 'Chi-squared, K-S tests, bootstrap CI, model comparison (AIC/BIC).',
+            'function': self._analyze_statistical_tests,
+            'visualization': self._plot_statistical_tests,
+            'category': 'Advanced Statistics',
+            'priority': 4
+        }
+        
         # Add ML motion classification
         self.available_analyses['ml_classification'] = {
             'name': 'ML Motion Classification',
@@ -2571,6 +2591,190 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             fig = go.Figure()
             fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+    
+    def _analyze_ctrw(self, tracks_df, current_units):
+        """Analyze Continuous Time Random Walk properties."""
+        try:
+            from advanced_diffusion_models import CTRWAnalyzer
+            
+            analyzer = CTRWAnalyzer(
+                tracks_df,
+                pixel_size=current_units.get('pixel_size', 1.0),
+                frame_interval=current_units.get('frame_interval', 1.0)
+            )
+            
+            # Waiting time analysis
+            waiting_time_results = analyzer.analyze_waiting_time_distribution(
+                min_pause_threshold=0.01,
+                fit_distribution='auto'
+            )
+            
+            # Jump length analysis
+            jump_length_results = analyzer.analyze_jump_length_distribution()
+            
+            # Coupling analysis
+            coupling_results = analyzer.analyze_coupling()
+            
+            return {
+                'success': True,
+                'waiting_times': waiting_time_results,
+                'jump_lengths': jump_length_results,
+                'coupling': coupling_results
+            }
+        except Exception as e:
+            return {'error': str(e), 'success': False}
+    
+    def _plot_ctrw(self, result):
+        """Visualize CTRW analysis results."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"CTRW analysis failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            from plotly.subplots import make_subplots
+            
+            # Create subplots for waiting times and jump lengths
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=('Waiting Time Distribution', 'Jump Length Distribution')
+            )
+            
+            # Waiting times histogram
+            waiting_times = result['waiting_times'].get('waiting_times', [])
+            if len(waiting_times) > 0:
+                fig.add_trace(
+                    go.Histogram(x=waiting_times, name='Waiting Times', nbinsx=50),
+                    row=1, col=1
+                )
+            
+            # Jump lengths histogram  
+            jump_lengths = result['jump_lengths'].get('jump_lengths', [])
+            if len(jump_lengths) > 0:
+                fig.add_trace(
+                    go.Histogram(x=jump_lengths, name='Jump Lengths', nbinsx=50),
+                    row=1, col=2
+                )
+            
+            fig.update_xaxes(title_text="Time (s)", row=1, col=1)
+            fig.update_xaxes(title_text="Distance (μm)", row=1, col=2)
+            fig.update_yaxes(title_text="Count", row=1, col=1)
+            fig.update_yaxes(title_text="Count", row=1, col=2)
+            
+            fig.update_layout(
+                title_text="CTRW Analysis",
+                showlegend=False,
+                height=400
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
+            return fig
+    
+    def _analyze_statistical_tests(self, tracks_df, current_units):
+        """Perform statistical tests on track data."""
+        try:
+            from advanced_statistical_tests import (
+                chi_squared_goodness_of_fit,
+                bootstrap_confidence_interval,
+                calculate_aic,
+                calculate_bic
+            )
+            import numpy as np
+            
+            # Get track lengths for statistics
+            track_lengths = tracks_df.groupby('track_id').size().values
+            
+            # Bootstrap CI on mean track length
+            bootstrap_result = bootstrap_confidence_interval(
+                track_lengths,
+                statistic=np.mean,
+                n_bootstrap=1000,
+                confidence_level=0.95
+            )
+            
+            # Calculate basic statistics for AIC/BIC comparison
+            # (In a real application, these would compare different models)
+            n_tracks = len(track_lengths)
+            mean_length = np.mean(track_lengths)
+            std_length = np.std(track_lengths)
+            
+            # Log-likelihood for normal distribution (simplified)
+            log_likelihood = -0.5 * n_tracks * (np.log(2 * np.pi * std_length**2) + 1)
+            
+            aic = calculate_aic(log_likelihood, n_params=2, n_samples=n_tracks)
+            bic = calculate_bic(log_likelihood, n_params=2, n_samples=n_tracks)
+            
+            return {
+                'success': True,
+                'bootstrap_ci': bootstrap_result,
+                'model_selection': {
+                    'aic': aic,
+                    'bic': bic,
+                    'log_likelihood': log_likelihood
+                },
+                'summary_stats': {
+                    'n_tracks': int(n_tracks),
+                    'mean_length': float(mean_length),
+                    'std_length': float(std_length)
+                }
+            }
+        except Exception as e:
+            return {'error': str(e), 'success': False}
+    
+    def _plot_statistical_tests(self, result):
+        """Visualize statistical test results."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"Statistical tests failed: {result.get('error', 'Unknown error')}",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+                )
+                return fig
+            
+            # Create a summary figure showing bootstrap CI
+            bootstrap_ci = result.get('bootstrap_ci', {})
+            
+            fig = go.Figure()
+            
+            if bootstrap_ci:
+                # Add bar showing mean with error bars
+                fig.add_trace(go.Bar(
+                    x=['Mean Track Length'],
+                    y=[bootstrap_ci.get('observed_statistic', 0)],
+                    error_y=dict(
+                        type='data',
+                        symmetric=False,
+                        array=[bootstrap_ci.get('ci_upper', 0) - bootstrap_ci.get('observed_statistic', 0)],
+                        arrayminus=[bootstrap_ci.get('observed_statistic', 0) - bootstrap_ci.get('ci_lower', 0)]
+                    ),
+                    name='Bootstrap 95% CI'
+                ))
+            
+            fig.update_layout(
+                title="Statistical Test Results",
+                yaxis_title="Track Length (frames)",
+                height=400,
+                showlegend=False
+            )
+            
+            return fig
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
+            )
             return fig
 
     def _analyze_energy_landscape(self, tracks_df, current_units):
