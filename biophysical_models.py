@@ -701,8 +701,12 @@ class EnergyLandscapeMapper:
             epsilon = H.max() * 1e-6
             H[H < epsilon] = epsilon
 
+            # Calculate energy landscape using Boltzmann relation: U = -kBT * ln(P)
+            # where P is proportional to the density H
+            U = -np.log(H / H.max())  # Normalized to kBT units
+
             if normalize:
-                U = U  # Already normalized in kBT units by using log
+                # Already normalized in kBT units by using log
                 energy_units = "kBT"
             else:
                 U = U * self.kBT  # Convert to actual energy in Joules

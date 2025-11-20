@@ -12033,7 +12033,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             
                             ci_result = bootstrap_confidence_interval(
                                 track_lengths,
-                                statistic=np.mean,
+                                statistic_func=np.mean,
                                 n_bootstrap=n_bootstrap,
                                 confidence_level=confidence_level
                             )
@@ -12042,7 +12042,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric("Observed Mean", f"{ci_result['observed_statistic']:.2f}")
+                                st.metric("Observed Mean", f"{ci_result['point_estimate']:.2f}")
                             with col2:
                                 st.metric("Lower CI", f"{ci_result['ci_lower']:.2f}")
                             with col3:

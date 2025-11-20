@@ -918,6 +918,29 @@ class EnhancedSPTReportGenerator:
         self._display_generated_report(config, current_units)
 
     # --- Full Implementations of Analysis Wrappers ---
+    
+    def _extract_analysis_data(self, result):
+        """
+        Extract data from analysis results, handling both nested and flat structures.
+        
+        Some analysis functions return {'success': True, 'result': {...data...}}
+        while others return {'success': True, ...data...} directly.
+        This normalizes the structure.
+        """
+        if not result.get('success', False):
+            return result
+        
+        # If there's a nested 'result' key, extract it
+        if 'result' in result and isinstance(result['result'], dict):
+            # Create a new dict combining top-level metadata with nested data
+            extracted = result['result'].copy()
+            extracted['success'] = result['success']
+            if 'error' in result:
+                extracted['error'] = result['error']
+            return extracted
+        
+        # Otherwise return as-is (already flat)
+        return result
 
     def _analyze_basic_statistics(self, tracks_df, current_units):
         """Full implementation for basic statistics with safe data access."""
@@ -1041,8 +1064,11 @@ class EnhancedSPTReportGenerator:
             if not result.get('success', False):
                 return _empty_fig("Diffusion analysis failed.")
 
+            # Extract nested result data if present
+            data = self._extract_analysis_data(result)
+            
             # Parse track_results if it's a string representation of DataFrame
-            track_results = result.get('track_results', None)
+            track_results = data.get('track_results', None)
             if isinstance(track_results, str):
                 try:
                     # Parse DataFrame string representation
@@ -1051,7 +1077,7 @@ class EnhancedSPTReportGenerator:
                     track_results = None
             
             # Parse msd_data if it's a string representation of DataFrame
-            msd_data = result.get('msd_data', None)
+            msd_data = data.get('msd_data', None)
             if isinstance(msd_data, str):
                 try:
                     # Parse DataFrame string representation
@@ -1145,7 +1171,7 @@ class EnhancedSPTReportGenerator:
                     )
 
             # Panel 3: Motion type classification bar chart
-            ensemble = result.get('ensemble_results', {})
+            ensemble = data.get('ensemble_results', {})
             if ensemble:
                 motion_types = {
                     'Subdiffusive': int(ensemble.get('subdiffusive_count', 0)) if ensemble.get('subdiffusive_count') else 0,
