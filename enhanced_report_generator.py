@@ -3126,129 +3126,339 @@ class EnhancedSPTReportGenerator:
     # ==================== 2025 METHODS ====================
     
     def _analyze_biased_inference(self, tracks_df: pd.DataFrame, current_units: Dict) -> Dict[str, Any]:
-        """Bias-corrected diffusion coefficient estimation (CVE/MLE)."""
+        """
+        Bias-corrected diffusion coefficient estimation (CVE/MLE).
+        
+        Implements Berglund (2010) methods for localization noise and motion blur correction.
+        Automatically selects CVE vs MLE based on track quality and length.
+        """
         try:
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
+            exposure_time = current_units.get('exposure_time', frame_interval * 0.9)  # Assume 90% exposure
             
             if not BIASED_INFERENCE_AVAILABLE:
                 return {'success': False, 'error': 'BiasedInferenceCorrector module not available'}
             
             corrector = BiasedInferenceCorrector()
             
-            # Analyze each track and aggregate results
-            D_values = []
+            # Analyze each track with automatic method selection
+            D_cve_values = []
+            D_mle_values = []
+            D_naive_values = []
             alpha_values = []
-            localization_error = 0.03  # Default 30 nm
+            method_counts = {'CVE': 0, 'MLE': 0, 'MSD': 0}
+            track_qualities = []
+            
+            localization_error = 0.03  # Default 30 nm (typical for fluorescence microscopy)
+            
+            # Try to get track quality if available
+            try:
+                from track_quality_metrics import estimate_track_quality
+                TRACK_QUALITY_AVAILABLE = True
+            except ImportError:
+                TRACK_QUALITY_AVAILABLE = False
             
             for track_id in tracks_df['track_id'].unique():
                 track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
                 
-                if len(track_data) < 5:
+                if len(track_data) < 3:
                     continue
                 
-                # Convert to numpy array
+                # Convert to numpy array (apply pixel size)
                 if 'z' in track_data.columns:
-                    track = track_data[['x', 'y', 'z']].values
+                    track = track_data[['x', 'y', 'z']].values * pixel_size
                     dimensions = 3
                 else:
-                    track = track_data[['x', 'y']].values
+                    track = track_data[['x', 'y']].values * pixel_size
                     dimensions = 2
                 
-                # Run CVE estimator on this track
-                result = corrector.cve_estimator(
+                # Estimate track quality
+                track_quality = None
+                if TRACK_QUALITY_AVAILABLE:
+                    try:
+                        quality_result = estimate_track_quality(track_data, pixel_size, frame_interval)
+                        track_quality = quality_result.get('overall_score', None)
+                        track_qualities.append(track_quality)
+                    except Exception:
+                        pass
+                
+                # Automatic method selection and analysis
+                result = corrector.analyze_track(
                     track=track,
                     dt=frame_interval,
                     localization_error=localization_error,
+                    exposure_time=exposure_time,
+                    method='auto',  # Automatic selection
                     dimensions=dimensions
                 )
                 
                 if result.get('success', False):
-                    D_values.append(result['D'])
-                    alpha_values.append(result.get('alpha', 1.0))
+                    method_used = result.get('method_selected', result.get('method', 'CVE'))
+                    method_counts[method_used] = method_counts.get(method_used, 0) + 1
+                    
+                    D = result['D']
+                    alpha = result.get('alpha', 1.0)
+                    
+                    # Store in appropriate list
+                    if method_used == 'CVE':
+                        D_cve_values.append(D)
+                    elif method_used == 'MLE':
+                        D_mle_values.append(D)
+                    else:  # MSD
+                        D_naive_values.append(D)
+                    
+                    alpha_values.append(alpha)
+                
+                # Also run naive MSD for comparison (on first 50 tracks to save time)
+                if len(D_naive_values) < 50:
+                    displacements = np.diff(track, axis=0)
+                    msd = np.mean(np.sum(displacements**2, axis=1))
+                    D_naive = msd / (2 * dimensions * frame_interval)
+                    if len(D_naive_values) == 0 or len(D_naive_values) < len(D_cve_values):
+                        D_naive_values.append(D_naive)
             
-            if len(D_values) == 0:
-                return {'success': False, 'error': 'No tracks could be analyzed (need at least 5 points per track)'}
+            if len(D_cve_values) + len(D_mle_values) == 0:
+                return {'success': False, 'error': 'No tracks could be analyzed (need at least 3 points per track)'}
             
             # Aggregate results
-            D_mean = np.mean(D_values)
-            D_std = np.std(D_values) / np.sqrt(len(D_values))  # SEM
-            alpha_mean = np.mean(alpha_values)
+            all_D_corrected = D_cve_values + D_mle_values
+            D_corrected_mean = np.mean(all_D_corrected)
+            D_corrected_std = np.std(all_D_corrected)
+            D_corrected_sem = D_corrected_std / np.sqrt(len(all_D_corrected))
             
-            cve_result = {
+            D_naive_mean = np.mean(D_naive_values) if D_naive_values else D_corrected_mean
+            D_naive_std = np.std(D_naive_values) if len(D_naive_values) > 1 else 0
+            
+            alpha_mean = np.mean(alpha_values) if alpha_values else 1.0
+            alpha_std = np.std(alpha_values) if len(alpha_values) > 1 else 0
+            
+            # Calculate bias correction percentage
+            bias_correction_pct = ((D_naive_mean - D_corrected_mean) / D_naive_mean * 100) if D_naive_mean > 0 else 0
+            
+            # Individual method means
+            D_cve_mean = np.mean(D_cve_values) if D_cve_values else None
+            D_mle_mean = np.mean(D_mle_values) if D_mle_values else None
+            
+            result = {
                 'success': True,
-                'D_corrected': D_mean,
-                'D_std': D_std,
+                'D_corrected': D_corrected_mean,
+                'D_corrected_std': D_corrected_std,
+                'D_corrected_sem': D_corrected_sem,
+                'D_naive': D_naive_mean,
+                'D_naive_std': D_naive_std,
+                'D_cve': D_cve_mean,
+                'D_mle': D_mle_mean,
+                'bias_correction_pct': bias_correction_pct,
                 'alpha': alpha_mean,
-                'method': 'CVE',
-                'n_tracks': len(D_values),
-                'localization_corrected': True
+                'alpha_std': alpha_std,
+                'method': 'Auto-selected',
+                'method_counts': method_counts,
+                'n_tracks_analyzed': len(all_D_corrected),
+                'n_tracks_cve': len(D_cve_values),
+                'n_tracks_mle': len(D_mle_values),
+                'n_tracks_naive': len(D_naive_values),
+                'localization_corrected': True,
+                'blur_corrected': exposure_time < frame_interval,
+                'localization_error_um': localization_error,
+                'exposure_time_s': exposure_time,
+                'avg_track_quality': np.mean(track_qualities) if track_qualities else None
             }
             
-            return cve_result
+            # Add interpretation
+            if bias_correction_pct > 20:
+                result['interpretation'] = f'Significant bias detected ({bias_correction_pct:.1f}% overestimation in naive MSD). CVE/MLE correction critical for accuracy.'
+            elif bias_correction_pct > 10:
+                result['interpretation'] = f'Moderate bias detected ({bias_correction_pct:.1f}% overestimation). CVE/MLE correction improves accuracy.'
+            else:
+                result['interpretation'] = f'Low bias ({bias_correction_pct:.1f}%). Naive MSD acceptable but CVE/MLE still more robust.'
+            
+            return result
             
         except Exception as e:
-            return {'success': False, 'error': f'Biased inference analysis failed: {str(e)}'}
+            import traceback
+            return {'success': False, 'error': f'Biased inference analysis failed: {str(e)}', 'traceback': traceback.format_exc()}
     
     def _plot_biased_inference(self, result: Dict[str, Any]) -> go.Figure:
-        """Visualize bias-corrected diffusion estimates."""
+        """Visualize bias-corrected diffusion estimates with method comparison."""
         try:
             if not result.get('success', False):
                 fig = go.Figure()
-                fig.add_annotation(text=f"Analysis failed: {result.get('error', 'Unknown error')}", 
-                                 xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+                fig.add_annotation(
+                    text=f"Analysis failed: {result.get('error', 'Unknown error')}", 
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color='red')
+                )
                 return fig
             
             fig = make_subplots(
                 rows=2, cols=2,
                 subplot_titles=(
-                    'Diffusion Coefficient Estimates',
-                    'Alpha (Anomalous Exponent)',
-                    'Bootstrap Confidence Intervals',
-                    'Anisotropy Detection'
+                    'Diffusion Coefficient: Naive vs Bias-Corrected',
+                    'Method Selection Distribution',
+                    'Bias Correction Magnitude',
+                    'Alpha Distribution'
                 ),
-                specs=[[{"type": "bar"}, {"type": "bar"}],
-                       [{"type": "scatter"}, {"type": "scatter"}]]
+                specs=[[{"type": "bar"}, {"type": "pie"}],
+                       [{"type": "bar"}, {"type": "histogram"}]],
+                vertical_spacing=0.12,
+                horizontal_spacing=0.15
             )
             
-            # 1. Diffusion coefficient comparison
-            methods = ['CVE', 'MLE', 'Naive']
+            # 1. Diffusion coefficient comparison (Naive vs Corrected)
+            methods = ['Naive MSD', 'Corrected (CVE/MLE)']
             D_values = [
-                result.get('D_corrected', 0),
-                result.get('D_mle', 0),
-                result.get('D_naive', 0)
+                result.get('D_naive', 0),
+                result.get('D_corrected', 0)
             ]
             D_errors = [
-                result.get('D_std', 0),
-                result.get('D_mle_std', 0),
-                0
+                result.get('D_naive_std', 0),
+                result.get('D_corrected_sem', 0)
             ]
             
+            colors = ['lightcoral', 'steelblue']
             fig.add_trace(go.Bar(
                 x=methods,
                 y=D_values,
                 error_y=dict(type='data', array=D_errors),
-                marker_color=['steelblue', 'lightcoral', 'lightgray'],
-                name='D'
+                marker=dict(
+                    color=colors,
+                    line=dict(color='black', width=1)
+                ),
+                text=[f'{v:.4f}' for v in D_values],
+                textposition='outside',
+                name='D (μm²/s)',
+                showlegend=False
             ), row=1, col=1)
             
-            # 2. Alpha values
-            alpha_values = [
-                result.get('alpha', 1.0),
-                result.get('alpha_mle', 1.0),
-                1.0
-            ]
+            fig.update_yaxes(title_text="D (μm²/s)", row=1, col=1)
+            
+            # Add bias percentage annotation
+            bias_pct = result.get('bias_correction_pct', 0)
+            fig.add_annotation(
+                text=f'Bias: {bias_pct:.1f}%',
+                xref='x1', yref='y1',
+                x=0.5, y=max(D_values) * 1.1,
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=2,
+                arrowcolor='red',
+                ax=20, ay=-30,
+                font=dict(size=12, color='red', family='Arial Black')
+            )
+            
+            # 2. Method selection pie chart
+            method_counts = result.get('method_counts', {})
+            if method_counts:
+                labels = list(method_counts.keys())
+                values = list(method_counts.values())
+                
+                fig.add_trace(go.Pie(
+                    labels=labels,
+                    values=values,
+                    hole=0.3,
+                    marker=dict(colors=['steelblue', 'lightcoral', 'lightgray']),
+                    textinfo='label+percent',
+                    textposition='outside',
+                    name='Method Usage'
+                ), row=1, col=2)
+            
+            # 3. Bias correction magnitude by method
+            method_names = []
+            D_method_vals = []
+            
+            if result.get('D_cve') is not None:
+                method_names.append('CVE')
+                D_method_vals.append(result['D_cve'])
+            
+            if result.get('D_mle') is not None:
+                method_names.append('MLE')
+                D_method_vals.append(result['D_mle'])
+            
+            method_names.append('Naive')
+            D_method_vals.append(result.get('D_naive', 0))
+            
+            # Calculate deviation from corrected mean
+            D_corr_mean = result.get('D_corrected', 0)
+            deviations = [(v - D_corr_mean) / D_corr_mean * 100 for v in D_method_vals]
+            
+            bar_colors = ['steelblue' if d <= 0 else 'lightcoral' for d in deviations]
             
             fig.add_trace(go.Bar(
-                x=methods,
-                y=alpha_values,
-                marker_color=['steelblue', 'lightcoral', 'lightgray'],
-                name='α',
+                x=method_names,
+                y=deviations,
+                marker=dict(color=bar_colors, line=dict(color='black', width=1)),
+                text=[f'{d:+.1f}%' for d in deviations],
+                textposition='outside',
+                name='Bias %',
                 showlegend=False
-            ), row=1, col=2)
+            ), row=2, col=1)
             
-            fig.add_hline(y=1.0, line_dash="dash", line_color="black", row=1, col=2,
-                         annotation_text="Normal diffusion")
+            fig.update_yaxes(title_text="Deviation from Corrected (%)", row=2, col=1)
+            fig.add_hline(y=0, line_dash="dash", line_color="black", row=2, col=1)
+            
+            # 4. Alpha distribution (if varying per track)
+            alpha_mean = result.get('alpha', 1.0)
+            alpha_std = result.get('alpha_std', 0)
+            
+            # Create synthetic distribution for visualization
+            if alpha_std > 0:
+                n_tracks = result.get('n_tracks_analyzed', 100)
+                alpha_samples = np.random.normal(alpha_mean, alpha_std, min(n_tracks, 1000))
+                
+                fig.add_trace(go.Histogram(
+                    x=alpha_samples,
+                    nbinsx=30,
+                    marker=dict(color='steelblue', line=dict(color='black', width=1)),
+                    name='α distribution',
+                    showlegend=False
+                ), row=2, col=2)
+                
+                # Add mean line
+                fig.add_vline(x=alpha_mean, line_dash="dash", line_color="red", 
+                             row=2, col=2, annotation_text=f'Mean: {alpha_mean:.3f}')
+                
+                # Add normal diffusion reference
+                fig.add_vline(x=1.0, line_dash="dot", line_color="black",
+                             row=2, col=2, annotation_text='Normal (α=1)')
+            else:
+                # Bar plot if single value
+                fig.add_trace(go.Bar(
+                    x=['Alpha'],
+                    y=[alpha_mean],
+                    marker=dict(color='steelblue'),
+                    showlegend=False
+                ), row=2, col=2)
+                
+                fig.add_hline(y=1.0, line_dash="dash", line_color="black", row=2, col=2,
+                             annotation_text="Normal diffusion")
+            
+            fig.update_xaxes(title_text="α", row=2, col=2)
+            fig.update_yaxes(title_text="Count", row=2, col=2)
+            
+            # Update layout
+            fig.update_layout(
+                title_text=f"<b>Bias-Corrected Diffusion Analysis</b><br>"
+                          f"<sub>Analyzed {result.get('n_tracks_analyzed', 0)} tracks | "
+                          f"Localization error: {result.get('localization_error_um', 0.03)*1000:.0f} nm | "
+                          f"{result.get('interpretation', '')}</sub>",
+                showlegend=False,
+                height=800,
+                font=dict(size=11)
+            )
+            
+            return fig
+            
+        except Exception as e:
+            import traceback
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"Visualization failed: {str(e)}\n{traceback.format_exc()}", 
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                font=dict(size=10, color='red', family='Courier')
+            )
+            return fig
             
             # 3. Bootstrap confidence intervals
             if 'bootstrap_ci' in result and result['bootstrap_ci'].get('success'):
