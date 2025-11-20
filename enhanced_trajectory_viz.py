@@ -87,7 +87,7 @@ def plot_trajectories_temporal_color(tracks_df: pd.DataFrame,
                 mode='markers',
                 marker=dict(size=10, color='green', symbol='circle-open', line=dict(width=2)),
                 name=f'Start (Track {track_id})' if track_id == track_ids[0] else None,
-                showlegend=(track_id == track_ids[0]),
+                showlegend=bool(track_id == track_ids[0]),
                 hovertext=f'Track {track_id} Start'
             )
         )
@@ -100,7 +100,7 @@ def plot_trajectories_temporal_color(tracks_df: pd.DataFrame,
                 mode='markers',
                 marker=dict(size=10, color='red', symbol='x', line=dict(width=2)),
                 name=f'End (Track {track_id})' if track_id == track_ids[0] else None,
-                showlegend=(track_id == track_ids[0]),
+                showlegend=bool(track_id == track_ids[0]),
                 hovertext=f'Track {track_id} End'
             )
         )
