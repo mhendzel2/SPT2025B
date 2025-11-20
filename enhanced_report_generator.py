@@ -968,42 +968,142 @@ class EnhancedSPTReportGenerator:
             return {'error': f'Analysis failed: {str(e)}', 'success': False}
 
     def _plot_basic_statistics(self, result):
-        """Full implementation for basic statistics visualization."""
+        """Enhanced track statistics visualization with log-normal distributions."""
         try:
-            from visualization import plot_track_statistics, _empty_fig
+            from visualization import _empty_fig
             
             stats_df = result.get('statistics_df')
             if stats_df is None or stats_df.empty:
                 return _empty_fig("No statistics data to plot.")
 
-            # plot_track_statistics returns a dictionary of figures
-            figs = plot_track_statistics(stats_df)
-
-            if not figs:
-                return _empty_fig("No statistics plots generated.")
-
-            # Create a subplot figure. Let's assume 2x2 for the main stats.
+            # Create enhanced 2x2 subplot
             fig = make_subplots(
                 rows=2, cols=2,
-                subplot_titles=list(figs.keys())
+                subplot_titles=(
+                    "Track Length Distribution",
+                    "Diffusion Coefficient (Log-Normal)",
+                    "Displacement Distribution",
+                    "Speed Distribution"
+                )
             )
 
-            row, col = 1, 1
-            for name, sub_fig in figs.items():
-                # Each sub_fig is a go.Figure with one trace (a histogram)
-                # We extract the trace and add it to our main figure
-                if sub_fig.data:
-                    fig.add_trace(sub_fig.data[0], row=row, col=col)
+            # Panel 1: Track Length Distribution (linear)
+            if 'track_length' in stats_df.columns:
+                track_lengths = stats_df['track_length'].dropna()
+                if len(track_lengths) > 0:
+                    fig.add_trace(
+                        go.Histogram(
+                            x=track_lengths,
+                            nbinsx=30,
+                            name='Track Length',
+                            marker=dict(color='steelblue', line=dict(color='black', width=1)),
+                            showlegend=False,
+                            hovertemplate='Length: %{x}<br>Count: %{y}<extra></extra>'
+                        ),
+                        row=1, col=1
+                    )
+                    
+                    # Add mean and median lines
+                    mean_len = track_lengths.mean()
+                    median_len = track_lengths.median()
+                    fig.add_vline(
+                        x=mean_len, line_dash="dash", line_color="red",
+                        annotation_text=f"Mean: {mean_len:.1f}",
+                        row=1, col=1
+                    )
+            
+            # Panel 2: Diffusion Coefficient (Log-Normal Distribution)
+            if 'diffusion_coefficient' in stats_df.columns:
+                D_values = stats_df['diffusion_coefficient'].dropna()
+                D_values = D_values[D_values > 0]  # Filter positive values
+                
+                if len(D_values) > 0:
+                    # Use log-scale bins
+                    log_D_min = np.log10(D_values.min())
+                    log_D_max = np.log10(D_values.max())
+                    
+                    fig.add_trace(
+                        go.Histogram(
+                            x=D_values,
+                            nbinsx=30,
+                            name='Diffusion Coeff',
+                            marker=dict(
+                                color='orange',
+                                line=dict(color='black', width=1)
+                            ),
+                            showlegend=False,
+                            hovertemplate='D: %{x:.2e} μm²/s<br>Count: %{y}<extra></extra>'
+                        ),
+                        row=1, col=2
+                    )
+                    
+                    # Add geometric mean (appropriate for log-normal)
+                    geometric_mean = np.exp(np.mean(np.log(D_values)))
+                    fig.add_vline(
+                        x=geometric_mean, line_dash="dash", line_color="red",
+                        annotation_text=f"Geo Mean: {geometric_mean:.2e}",
+                        row=1, col=2
+                    )
+                    
+                    # Update to log scale
+                    fig.update_xaxes(type='log', row=1, col=2)
+            
+            # Panel 3: Total Displacement Distribution
+            if 'total_displacement' in stats_df.columns:
+                displacements = stats_df['total_displacement'].dropna()
+                if len(displacements) > 0:
+                    fig.add_trace(
+                        go.Histogram(
+                            x=displacements,
+                            nbinsx=30,
+                            name='Displacement',
+                            marker=dict(color='green', line=dict(color='black', width=1)),
+                            showlegend=False,
+                            hovertemplate='Displacement: %{x:.2f} μm<br>Count: %{y}<extra></extra>'
+                        ),
+                        row=2, col=1
+                    )
+            
+            # Panel 4: Speed Distribution
+            if 'mean_speed' in stats_df.columns:
+                speeds = stats_df['mean_speed'].dropna()
+                speeds = speeds[speeds > 0]
+                if len(speeds) > 0:
+                    fig.add_trace(
+                        go.Histogram(
+                            x=speeds,
+                            nbinsx=30,
+                            name='Mean Speed',
+                            marker=dict(color='purple', line=dict(color='black', width=1)),
+                            showlegend=False,
+                            hovertemplate='Speed: %{x:.2e} μm/s<br>Count: %{y}<extra></extra>'
+                        ),
+                        row=2, col=2
+                    )
+                    
+                    # Use log scale if values span multiple orders of magnitude
+                    if speeds.max() / speeds.min() > 100:
+                        fig.update_xaxes(type='log', row=2, col=2)
 
-                # Move to the next subplot position
-                col += 1
-                if col > 2:
-                    col = 1
-                    row += 1
-                if row > 2:
-                    break # Stop if we have more than 4 plots
+            # Update axis labels
+            fig.update_xaxes(title_text="Track Length (frames)", row=1, col=1)
+            fig.update_yaxes(title_text="Frequency", row=1, col=1)
+            
+            fig.update_xaxes(title_text="Diffusion Coefficient (μm²/s)", row=1, col=2)
+            fig.update_yaxes(title_text="Frequency", row=1, col=2)
+            
+            fig.update_xaxes(title_text="Total Displacement (μm)", row=2, col=1)
+            fig.update_yaxes(title_text="Frequency", row=2, col=1)
+            
+            fig.update_xaxes(title_text="Mean Speed (μm/s)", row=2, col=2)
+            fig.update_yaxes(title_text="Frequency", row=2, col=2)
 
-            fig.update_layout(title_text="Basic Track Statistics", showlegend=False)
+            fig.update_layout(
+                title_text="Enhanced Track Statistics with Log-Normal Distributions",
+                showlegend=False,
+                template='plotly_white',
+                height=800
+            )
             return fig
 
         except Exception as e:
@@ -1145,30 +1245,119 @@ class EnhancedSPTReportGenerator:
                                     annotation_text=f"Median: {median_val:.2e}",
                                     annotation_position="top right", row=1, col=1)
 
-            # Panel 2: MSD curves
+            # Panel 2: Enhanced MSD curves with ensemble averaging and reference slopes
             if msd_data is not None and isinstance(msd_data, pd.DataFrame):
-                # Plot MSD curves for each track
-                unique_tracks = msd_data['track_id'].unique()
+                # Calculate ensemble-averaged MSD with error bands
+                ensemble_msd = msd_data.groupby('lag_time').agg({
+                    'msd': ['mean', 'std', 'sem', 'count']
+                }).reset_index()
+                ensemble_msd.columns = ['lag_time', 'msd_mean', 'msd_std', 'msd_sem', 'n_tracks']
                 
-                # Limit to first 20 tracks for clarity
+                # Calculate 95% confidence interval
+                from scipy import stats
+                ensemble_msd['ci_95'] = ensemble_msd.apply(
+                    lambda row: stats.t.ppf(0.975, row['n_tracks']-1) * row['msd_sem'] 
+                    if row['n_tracks'] > 1 else row['msd_sem'], axis=1
+                )
+                
+                # Plot individual tracks (faded, for context)
+                unique_tracks = msd_data['track_id'].unique()
                 for i, track_id in enumerate(unique_tracks[:20]):
                     track_msd = msd_data[msd_data['track_id'] == track_id]
-                    
-                    color = f'hsl({i * 360 / min(len(unique_tracks), 20)}, 70%, 50%)'
-                    
                     fig.add_trace(
                         go.Scatter(
                             x=track_msd['lag_time'],
                             y=track_msd['msd'],
-                            mode='lines+markers',
+                            mode='lines',
                             name=f'Track {track_id}',
-                            line=dict(color=color, width=1),
-                            marker=dict(size=4),
+                            line=dict(color='lightgray', width=0.5),
+                            opacity=0.3,
                             showlegend=False,
-                            hovertemplate=f'Track {track_id}<br>Lag: %{{x:.2f}} s<br>MSD: %{{y:.2e}} μm²<extra></extra>'
+                            hoverinfo='skip'
                         ),
                         row=1, col=2
                     )
+                
+                # Plot ensemble average MSD (bold central line)
+                fig.add_trace(
+                    go.Scatter(
+                        x=ensemble_msd['lag_time'],
+                        y=ensemble_msd['msd_mean'],
+                        mode='lines+markers',
+                        name='Ensemble MSD',
+                        line=dict(color='darkblue', width=3),
+                        marker=dict(size=6, symbol='circle'),
+                        showlegend=True,
+                        hovertemplate='<b>Ensemble MSD</b><br>Lag: %{x:.3f} s<br>MSD: %{y:.2e} μm²<br>N=%{customdata}<extra></extra>',
+                        customdata=ensemble_msd['n_tracks']
+                    ),
+                    row=1, col=2
+                )
+                
+                # Add 95% confidence interval shaded region
+                fig.add_trace(
+                    go.Scatter(
+                        x=ensemble_msd['lag_time'].tolist() + ensemble_msd['lag_time'].tolist()[::-1],
+                        y=(ensemble_msd['msd_mean'] + ensemble_msd['ci_95']).tolist() + 
+                          (ensemble_msd['msd_mean'] - ensemble_msd['ci_95']).tolist()[::-1],
+                        fill='toself',
+                        fillcolor='rgba(0, 0, 139, 0.2)',
+                        line=dict(color='rgba(255,255,255,0)'),
+                        name='95% CI',
+                        showlegend=True,
+                        hoverinfo='skip'
+                    ),
+                    row=1, col=2
+                )
+                
+                # Add theoretical reference lines for motion classification
+                lag_range = ensemble_msd['lag_time'].values
+                if len(lag_range) > 0:
+                    t_min, t_max = lag_range.min(), lag_range.max()
+                    t_ref = np.logspace(np.log10(t_min), np.log10(t_max), 50)
+                    
+                    # Normalize to match ensemble MSD at mid-point for visibility
+                    mid_idx = len(ensemble_msd) // 2
+                    if mid_idx < len(ensemble_msd):
+                        t_mid = ensemble_msd['lag_time'].iloc[mid_idx]
+                        msd_mid = ensemble_msd['msd_mean'].iloc[mid_idx]
+                        scale = msd_mid / (t_mid ** 1.0)  # Normalize to α=1 at midpoint
+                        
+                        # α = 1: Brownian motion (MSD ~ t)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=t_ref, y=scale * t_ref ** 1.0,
+                                mode='lines', name='α=1 (Brownian)',
+                                line=dict(color='green', width=2, dash='dash'),
+                                showlegend=True,
+                                hovertemplate='Brownian (α=1)<br>MSD ∝ t<extra></extra>'
+                            ),
+                            row=1, col=2
+                        )
+                        
+                        # α = 0.5: Subdiffusive/crowded
+                        fig.add_trace(
+                            go.Scatter(
+                                x=t_ref, y=scale * t_ref ** 0.5,
+                                mode='lines', name='α=0.5 (Subdiffusive)',
+                                line=dict(color='orange', width=2, dash='dot'),
+                                showlegend=True,
+                                hovertemplate='Subdiffusive (α=0.5)<br>MSD ∝ t^0.5<extra></extra>'
+                            ),
+                            row=1, col=2
+                        )
+                        
+                        # α = 2: Directed motion
+                        fig.add_trace(
+                            go.Scatter(
+                                x=t_ref, y=scale * t_ref ** 2.0,
+                                mode='lines', name='α=2 (Directed)',
+                                line=dict(color='red', width=2, dash='dashdot'),
+                                showlegend=True,
+                                hovertemplate='Directed (α=2)<br>MSD ∝ t²<extra></extra>'
+                            ),
+                            row=1, col=2
+                        )
 
             # Panel 3: Motion type classification bar chart
             ensemble = data.get('ensemble_results', {})
@@ -1234,22 +1423,43 @@ class EnhancedSPTReportGenerator:
                 row=2, col=2
             )
 
-            # Update axes
+            # Update axes with log-log scaling for MSD
             fig.update_xaxes(title_text="Diffusion Coefficient (μm²/s)", type='log', row=1, col=1)
             fig.update_yaxes(title_text="Frequency", row=1, col=1)
             
-            fig.update_xaxes(title_text="Lag Time (s)", type='log', row=1, col=2)
-            fig.update_yaxes(title_text="MSD (μm²)", type='log', row=1, col=2)
+            fig.update_xaxes(
+                title_text="Lag Time (s)", 
+                type='log',
+                gridcolor='lightgray',
+                showgrid=True,
+                row=1, col=2
+            )
+            fig.update_yaxes(
+                title_text="MSD (μm²)", 
+                type='log',
+                gridcolor='lightgray',
+                showgrid=True,
+                row=1, col=2
+            )
             
             fig.update_xaxes(title_text="Motion Type", row=2, col=1)
             fig.update_yaxes(title_text="Number of Tracks", row=2, col=1)
 
-            # Update layout
+            # Update layout with legend for MSD reference lines
             fig.update_layout(
-                title_text="Comprehensive Diffusion Analysis",
+                title_text="Comprehensive Diffusion Analysis with Motion Classification",
                 template='plotly_white',
                 height=900,
-                showlegend=False
+                showlegend=True,
+                legend=dict(
+                    x=1.02,
+                    y=0.98,
+                    xanchor='left',
+                    yanchor='top',
+                    bgcolor='rgba(255,255,255,0.8)',
+                    bordercolor='gray',
+                    borderwidth=1
+                )
             )
             
             return fig
@@ -1783,41 +1993,230 @@ class EnhancedSPTReportGenerator:
             return {'success': False, 'error': f'Microrheology analysis failed: {str(e)}', 'traceback': traceback.format_exc()}
 
     def _plot_microrheology(self, result):
-        """Full implementation for microrheology visualization."""
+        """Enhanced microrheology visualization with dual-axis spectra and loss tangent."""
         try:
-            from rheology import create_rheology_plots
             from visualization import _empty_fig
 
             if not result.get('success', False):
                 return _empty_fig("Microrheology analysis failed.")
 
-            figs = create_rheology_plots(result)
-
-            if not figs:
-                return _empty_fig("No rheology plots generated.")
-
-            # Create a subplot figure.
+            # Extract data
+            frequency = result.get('frequency', [])
+            G_prime = result.get('storage_modulus', [])
+            G_double_prime = result.get('loss_modulus', [])
+            eta_star = result.get('complex_viscosity', [])
+            
+            # Convert to numpy arrays
+            frequency = np.asarray(frequency)
+            G_prime = np.asarray(G_prime)
+            G_double_prime = np.asarray(G_double_prime)
+            eta_star = np.asarray(eta_star)
+            
+            # Filter valid data
+            valid = (frequency > 0) & (G_prime > 0) & (G_double_prime > 0)
+            if not np.any(valid):
+                return _empty_fig("No valid rheology data.")
+            
+            frequency = frequency[valid]
+            G_prime = G_prime[valid]
+            G_double_prime = G_double_prime[valid]
+            eta_star = eta_star[valid]
+            
+            # Calculate loss tangent
+            tan_delta = G_double_prime / np.maximum(G_prime, 1e-12)
+            
+            # Find crossover frequency (where G' = G'')
+            crossover_freq = None
+            crossover_modulus = None
+            if len(frequency) > 1:
+                # Find where G' crosses G''
+                diff = G_prime - G_double_prime
+                sign_changes = np.diff(np.sign(diff))
+                crossover_indices = np.where(sign_changes != 0)[0]
+                if len(crossover_indices) > 0:
+                    idx = crossover_indices[0]
+                    # Linear interpolation for more accurate crossover
+                    f1, f2 = frequency[idx], frequency[idx+1]
+                    g1_prime, g2_prime = G_prime[idx], G_prime[idx+1]
+                    g1_dprime, g2_dprime = G_double_prime[idx], G_double_prime[idx+1]
+                    
+                    # Interpolate in log space
+                    if g2_dprime - g2_prime != g1_dprime - g1_prime:
+                        t = (g1_dprime - g1_prime) / ((g2_dprime - g2_prime) - (g1_dprime - g1_prime))
+                        crossover_freq = f1 * (f2/f1)**t
+                        crossover_modulus = g1_prime * (g2_prime/g1_prime)**t
+            
+            # Create 2x2 subplot: [G' & G'', Loss Tangent], [Complex Viscosity, Material State]
             fig = make_subplots(
-                rows=1, cols=2,
-                subplot_titles=list(figs.keys())
+                rows=2, cols=2,
+                subplot_titles=(
+                    "Storage (G') & Loss (G'') Moduli",
+                    "Loss Tangent (tan δ = G''/G')",
+                    "Complex Viscosity (η*)",
+                    "Material State Classification"
+                ),
+                specs=[
+                    [{"type": "scatter"}, {"type": "scatter"}],
+                    [{"type": "scatter"}, {"type": "pie"}]
+                ]
             )
-
-            row, col = 1
-            for name, sub_fig in figs.items():
-                if sub_fig.data:
-                    for trace in sub_fig.data:
-                        fig.add_trace(trace, row=row, col=col)
-
-                col += 1
-                if col > 2:
-                    break
-
-            fig.update_layout(title_text="Microrheology Analysis", showlegend=False)
+            
+            # Panel 1: Dual-axis frequency spectra (G' and G'')
+            fig.add_trace(
+                go.Scatter(
+                    x=frequency, y=G_prime,
+                    mode='lines+markers',
+                    name="G' (Storage)",
+                    line=dict(color='blue', width=2),
+                    marker=dict(size=6),
+                    hovertemplate='ω: %{x:.2e} rad/s<br>G\': %{y:.2e} Pa<extra></extra>'
+                ),
+                row=1, col=1
+            )
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=frequency, y=G_double_prime,
+                    mode='lines+markers',
+                    name='G" (Loss)',
+                    line=dict(color='red', width=2, dash='dash'),
+                    marker=dict(size=6),
+                    hovertemplate='ω: %{x:.2e} rad/s<br>G": %{y:.2e} Pa<extra></extra>'
+                ),
+                row=1, col=1
+            )
+            
+            # Mark crossover frequency
+            if crossover_freq is not None:
+                fig.add_vline(
+                    x=crossover_freq,
+                    line_dash="dot",
+                    line_color="purple",
+                    line_width=2,
+                    row=1, col=1
+                )
+                
+                # Add annotation for crossover
+                relaxation_time = 1.0 / crossover_freq
+                fig.add_annotation(
+                    x=np.log10(crossover_freq),
+                    y=np.log10(crossover_modulus) if crossover_modulus else np.log10(G_prime.mean()),
+                    text=f"Crossover<br>ω_c={crossover_freq:.2e} rad/s<br>τ={relaxation_time:.2e} s",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowcolor="purple",
+                    ax=-40, ay=-40,
+                    bgcolor="rgba(255,255,255,0.8)",
+                    bordercolor="purple",
+                    borderwidth=2,
+                    row=1, col=1
+                )
+            
+            # Panel 2: Loss Tangent
+            fig.add_trace(
+                go.Scatter(
+                    x=frequency, y=tan_delta,
+                    mode='lines+markers',
+                    name='tan(δ)',
+                    line=dict(color='purple', width=2),
+                    marker=dict(size=6),
+                    hovertemplate='ω: %{x:.2e} rad/s<br>tan(δ): %{y:.3f}<extra></extra>'
+                ),
+                row=1, col=2
+            )
+            
+            # Add reference line at tan(δ) = 1 (critical gel point)
+            fig.add_hline(
+                y=1.0,
+                line_dash="dash",
+                line_color="gray",
+                annotation_text="tan(δ)=1 (Critical Gel)",
+                annotation_position="right",
+                row=1, col=2
+            )
+            
+            # Shade regions for material state
+            if tan_delta.max() > 1.0:
+                fig.add_hrect(
+                    y0=1.0, y1=tan_delta.max()*1.2,
+                    fillcolor="rgba(255,0,0,0.1)",
+                    line_width=0,
+                    annotation_text="Liquid-like",
+                    annotation_position="top left",
+                    row=1, col=2
+                )
+            if tan_delta.min() < 1.0:
+                fig.add_hrect(
+                    y0=max(tan_delta.min()*0.8, 0.01), y1=1.0,
+                    fillcolor="rgba(0,0,255,0.1)",
+                    line_width=0,
+                    annotation_text="Solid-like",
+                    annotation_position="bottom left",
+                    row=1, col=2
+                )
+            
+            # Panel 3: Complex Viscosity
+            if len(eta_star) > 0 and np.any(eta_star > 0):
+                fig.add_trace(
+                    go.Scatter(
+                        x=frequency, y=eta_star,
+                        mode='lines+markers',
+                        name='η*',
+                        line=dict(color='green', width=2),
+                        marker=dict(size=6),
+                        hovertemplate='ω: %{x:.2e} rad/s<br>η*: %{y:.2e} Pa·s<extra></extra>'
+                    ),
+                    row=2, col=1
+                )
+            
+            # Panel 4: Material state pie chart
+            liquid_count = np.sum(tan_delta > 1.0)
+            solid_count = np.sum(tan_delta < 1.0)
+            gel_count = np.sum(np.abs(tan_delta - 1.0) < 0.1)
+            
+            fig.add_trace(
+                go.Pie(
+                    labels=['Liquid-like (tan δ>1)', 'Solid-like (tan δ<1)', 'Gel-like (tan δ≈1)'],
+                    values=[liquid_count, solid_count, gel_count],
+                    marker=dict(colors=['rgba(255,0,0,0.6)', 'rgba(0,0,255,0.6)', 'rgba(128,0,128,0.6)']),
+                    hovertemplate='%{label}<br>%{value} points (%{percent})<extra></extra>'
+                ),
+                row=2, col=2
+            )
+            
+            # Update all axes to log scale
+            fig.update_xaxes(title_text="Frequency ω (rad/s)", type='log', row=1, col=1)
+            fig.update_yaxes(title_text="Modulus (Pa)", type='log', row=1, col=1)
+            
+            fig.update_xaxes(title_text="Frequency ω (rad/s)", type='log', row=1, col=2)
+            fig.update_yaxes(title_text="Loss Tangent tan(δ)", type='log', row=1, col=2)
+            
+            fig.update_xaxes(title_text="Frequency ω (rad/s)", type='log', row=2, col=1)
+            fig.update_yaxes(title_text="Complex Viscosity (Pa·s)", type='log', row=2, col=1)
+            
+            # Update layout
+            fig.update_layout(
+                title_text="Enhanced Microrheology Analysis with Crossover Detection",
+                template='plotly_white',
+                height=1000,
+                showlegend=True,
+                legend=dict(
+                    x=1.02, y=0.5,
+                    xanchor='left', yanchor='middle'
+                )
+            )
+            
             return fig
 
         except Exception as e:
             fig = go.Figure()
-            fig.add_annotation(text=f"Plotting failed: {e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(
+                text=f"Plotting failed: {str(e)}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                showarrow=False,
+                font=dict(color="red")
+            )
             return fig
 
     def _analyze_creep_compliance(self, tracks_df, current_units):
