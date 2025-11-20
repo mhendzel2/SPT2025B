@@ -44,6 +44,97 @@ def validate_column_mapping(df, x_col, y_col, frame_col, track_id_col):
     return True
 
 
+def clean_tracks(df: pd.DataFrame, warn_user: bool = True) -> pd.DataFrame:
+    """
+    Clean track data by removing invalid values (NaN, Inf) and warning the user.
+    
+    Performs comprehensive validation:
+    - Checks for NaN and Inf values in critical columns (x, y, z, frame, track_id)
+    - Removes rows with invalid values
+    - Warns user about data quality issues
+    - Ensures all numeric columns are valid
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Track data with standard columns (track_id, frame, x, y, optional z)
+    warn_user : bool
+        Whether to display Streamlit warnings about invalid data
+        
+    Returns
+    -------
+    pd.DataFrame
+        Cleaned track data with invalid rows removed
+    """
+    if df.empty:
+        return df
+    
+    initial_rows = len(df)
+    
+    # Define critical columns that must be valid
+    critical_cols = ['track_id', 'frame', 'x', 'y']
+    if 'z' in df.columns:
+        critical_cols.append('z')
+    
+    # Filter to columns that exist
+    existing_critical_cols = [col for col in critical_cols if col in df.columns]
+    
+    if not existing_critical_cols:
+        logger.warning("No critical columns found for validation")
+        return df
+    
+    # Check for NaN values
+    nan_mask = df[existing_critical_cols].isna().any(axis=1)
+    nan_count = nan_mask.sum()
+    
+    # Check for Inf values
+    inf_mask = np.isinf(df[existing_critical_cols].select_dtypes(include=[np.number])).any(axis=1)
+    inf_count = inf_mask.sum()
+    
+    # Combined invalid mask
+    invalid_mask = nan_mask | inf_mask
+    invalid_count = invalid_mask.sum()
+    
+    if invalid_count > 0:
+        # Log details about invalid data
+        logger.warning(f"Found {invalid_count} invalid rows: {nan_count} with NaN, {inf_count} with Inf")
+        
+        if warn_user:
+            # Detailed breakdown by column
+            invalid_details = []
+            for col in existing_critical_cols:
+                col_nan = df[col].isna().sum()
+                col_inf = np.isinf(df[col]).sum() if pd.api.types.is_numeric_dtype(df[col]) else 0
+                if col_nan > 0 or col_inf > 0:
+                    invalid_details.append(f"  • {col}: {col_nan} NaN, {col_inf} Inf")
+            
+            warning_msg = f"⚠️ **Data Quality Warning**: Found {invalid_count} invalid rows ({invalid_count/initial_rows*100:.1f}%)\n\n"
+            warning_msg += "\n".join(invalid_details)
+            warning_msg += f"\n\nThese rows will be removed. {initial_rows - invalid_count} valid rows remain."
+            
+            st.warning(warning_msg)
+        
+        # Remove invalid rows
+        df_clean = df[~invalid_mask].copy()
+        
+        # Verify cleaning worked
+        remaining_invalid = df_clean[existing_critical_cols].isna().any().any() or \
+                           np.isinf(df_clean[existing_critical_cols].select_dtypes(include=[np.number])).any().any()
+        
+        if remaining_invalid:
+            logger.error("Clean operation failed - invalid values still present")
+            if warn_user:
+                st.error("❌ Critical error: Unable to fully clean data. Please check input file.")
+        else:
+            logger.info(f"Successfully cleaned {invalid_count} invalid rows")
+        
+        return df_clean
+    
+    else:
+        logger.info("Data validation passed - no invalid values found")
+        return df
+
+
 def load_image_file(file) -> List[np.ndarray]:
     """
     Load an image file into a NumPy array.
@@ -502,6 +593,9 @@ def load_tracks_file(file) -> pd.DataFrame:
             if not is_valid:
                 raise ValueError(f"Track data validation failed: {message}")
             
+            # Clean invalid values (NaN, Inf)
+            standardized_df = clean_tracks(standardized_df, warn_user=True)
+            
             sm = StateManager.get_instance()
             sm.set_tracks(standardized_df, filename=file.name)
             
@@ -668,6 +762,9 @@ def load_tracks_file(file) -> pd.DataFrame:
             is_valid, message = validate_tracks_dataframe(standardized_df)
             if not is_valid:
                 raise ValueError(f"Track data validation failed: {message}")
+            
+            # Clean invalid values (NaN, Inf)
+            standardized_df = clean_tracks(standardized_df, warn_user=True)
 
             return standardized_df
             
@@ -901,6 +998,9 @@ def load_tracks_file(file) -> pd.DataFrame:
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
             
+            # Clean invalid values (NaN, Inf)
+            standardized_df = clean_tracks(standardized_df, warn_user=True)
+            
             return standardized_df
             
         except Exception as e:
@@ -937,6 +1037,9 @@ def load_tracks_file(file) -> pd.DataFrame:
             
             # Standardize the track data format
             standardized_df = format_track_data(tracks_df)
+            
+            # Clean invalid values (NaN, Inf)
+            standardized_df = clean_tracks(standardized_df, warn_user=True)
             
             return standardized_df
             

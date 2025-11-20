@@ -50,53 +50,88 @@ def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float 
     pd.DataFrame
         DataFrame with MSD values for each track at different lag times (columns: track_id, lag_time, msd, n_points)
     """
-    # Group by track_id
-    grouped = tracks_df.groupby('track_id')
-    
-    # Initialize results dictionary
-    msd_results = {'track_id': [], 'lag_time': [], 'msd': [], 'n_points': []}
-    
-    for track_id, track_data in grouped:
-        # Skip short tracks
-        if len(track_data) < min_track_length:
-            continue
-            
-        # Sort by frame
-        track_data = track_data.sort_values('frame')
+    try:
+        # Input validation
+        if tracks_df.empty:
+            raise ValueError("Empty tracks DataFrame provided")
         
-        # Extract positions
-        x = track_data['x'].values * pixel_size
-        y = track_data['y'].values * pixel_size
-        frames = track_data['frame'].values
+        required_cols = ['track_id', 'frame', 'x', 'y']
+        missing_cols = [col for col in required_cols if col not in tracks_df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
         
-        # Calculate MSD for each lag time
-        for lag in range(1, min(max_lag + 1, len(track_data))):
-            # Calculate squared displacements
-            sd_list = []
-            lag_time_list = []
-            
-            for i in range(len(track_data) - lag):
-                dx = x[i + lag] - x[i]
-                dy = y[i + lag] - y[i]
-                sd = dx**2 + dy**2
-                dt = (frames[i + lag] - frames[i]) * frame_interval
+        # Check for NaN or Inf in critical columns
+        for col in ['x', 'y', 'frame']:
+            if tracks_df[col].isna().any():
+                raise ValueError(f"Column '{col}' contains NaN values. Use clean_tracks() first.")
+            if np.isinf(tracks_df[col]).any():
+                raise ValueError(f"Column '{col}' contains Inf values. Use clean_tracks() first.")
+        
+        # Group by track_id
+        grouped = tracks_df.groupby('track_id')
+        
+        # Initialize results dictionary
+        msd_results = {'track_id': [], 'lag_time': [], 'msd': [], 'n_points': []}
+        
+        for track_id, track_data in grouped:
+            # Skip short tracks
+            if len(track_data) < min_track_length:
+                continue
                 
-                sd_list.append(sd)
-                lag_time_list.append(dt)
+            # Sort by frame
+            track_data = track_data.sort_values('frame')
             
-            if sd_list:
-                # Store results
-                msd_results['track_id'].append(track_id)
-                # Use actual time difference in seconds
-                mean_lag_time = np.mean(lag_time_list)
-                msd_results['lag_time'].append(mean_lag_time)
-                msd_results['msd'].append(np.mean(sd_list))
-                msd_results['n_points'].append(len(sd_list))
+            # Extract positions
+            x = track_data['x'].values * pixel_size
+            y = track_data['y'].values * pixel_size
+            frames = track_data['frame'].values
+            
+            # Validate numeric data
+            if not (np.isfinite(x).all() and np.isfinite(y).all()):
+                continue  # Skip tracks with invalid positions
+            
+            # Calculate MSD for each lag time
+            for lag in range(1, min(max_lag + 1, len(track_data))):
+                # Calculate squared displacements
+                sd_list = []
+                lag_time_list = []
+                
+                for i in range(len(track_data) - lag):
+                    dx = x[i + lag] - x[i]
+                    dy = y[i + lag] - y[i]
+                    sd = dx**2 + dy**2
+                    dt = (frames[i + lag] - frames[i]) * frame_interval
+                    
+                    # Validate displacement is finite
+                    if np.isfinite(sd) and np.isfinite(dt):
+                        sd_list.append(sd)
+                        lag_time_list.append(dt)
+                
+                if sd_list:
+                    # Store results
+                    msd_results['track_id'].append(track_id)
+                    # Use actual time difference in seconds
+                    mean_lag_time = np.mean(lag_time_list)
+                    msd_results['lag_time'].append(mean_lag_time)
+                    msd_results['msd'].append(np.mean(sd_list))
+                    msd_results['n_points'].append(len(sd_list))
+        
+        # Convert to DataFrame
+        msd_df = pd.DataFrame(msd_results)
+        
+        return msd_df
     
-    # Convert to DataFrame
-    msd_df = pd.DataFrame(msd_results)
+    except ValueError as e:
+        # Return empty DataFrame with error logged
+        import logging
+        logging.error(f"calculate_msd failed: {str(e)}")
+        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
     
-    return msd_df
+    except Exception as e:
+        # Catch unexpected errors
+        import logging
+        logging.error(f"Unexpected error in calculate_msd: {str(e)}")
+        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
 
 def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
                      frame_interval: float = 1.0, min_track_length: int = 5, 
@@ -127,224 +162,314 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
     Returns
     -------
     dict
-        Dictionary containing diffusion analysis results
+        Dictionary containing diffusion analysis results with keys:
+        - 'success': bool
+        - 'result': analysis data (if success=True)
+        - 'error': error message (if success=False)
     """
-    # Calculate MSD
-    msd_df = calculate_msd(
-        tracks_df, 
-        max_lag=max_lag, 
-        pixel_size=pixel_size, 
-        frame_interval=frame_interval, 
-        min_track_length=min_track_length
-    )
-    
-    if msd_df.empty:
-        return {
-            'success': False,
-            'error': 'No tracks of sufficient length for analysis',
-            'msd_data': msd_df
+    try:
+        # Input validation
+        if tracks_df.empty:
+            return {
+                'success': False,
+                'result': None,
+                'error': 'Empty tracks DataFrame provided'
+            }
+        
+        required_cols = ['track_id', 'frame', 'x', 'y']
+        missing_cols = [col for col in required_cols if col not in tracks_df.columns]
+        if missing_cols:
+            return {
+                'success': False,
+                'result': None,
+                'error': f'Missing required columns: {missing_cols}'
+            }
+        
+        # Calculate MSD
+        msd_df = calculate_msd(
+            tracks_df, 
+            max_lag=max_lag, 
+            pixel_size=pixel_size, 
+            frame_interval=frame_interval, 
+            min_track_length=min_track_length
+        )
+        
+        if msd_df.empty:
+            return {
+                'success': False,
+                'result': None,
+                'error': 'No tracks of sufficient length for analysis',
+                'msd_data': msd_df
+            }
+        
+        # Initialize results dict
+        results = {
+            'msd_data': msd_df,
+            'track_results': [],
+            'ensemble_results': {}
         }
-    
-    # Initialize results dict
-    results = {
-        'success': True,
-        'msd_data': msd_df,
-        'track_results': [],
-        'ensemble_results': {}
-    }
-    
-    # Analyze each track individually
-    track_results = []
-    
-    for track_id, track_msd in msd_df.groupby('track_id'):
-        # Sort by lag time
-        track_msd = track_msd.sort_values('lag_time')
         
-        # Extract lag times and MSD values
-        lag_times = track_msd['lag_time'].values
-        msd_values = track_msd['msd'].values
+        # Analyze each track individually
+        track_results = []
         
-        # Initialize track result dict
-        track_result = {'track_id': track_id}
-        
-        # Standard diffusion coefficient (short time)
-        # Use only the first few points for initial diffusion coefficient
-        short_lag_cutoff = min(4, len(lag_times))
-        
-        # Linear fit: MSD = 4*D*t (2D) or MSD = 6*D*t (3D)
-        # Here we use 2D (4*D*t)
-        if fit_method == 'linear':
-            # Linear fit
-            if short_lag_cutoff >= 2:
-                slope, intercept, r_value, p_value, std_err = linregress(
-                    lag_times[:short_lag_cutoff], 
-                    msd_values[:short_lag_cutoff]
-                )
-                D_short = slope / 4  # µm²/s
-                D_err = std_err / 4
-            else:
-                D_short = np.nan
-                D_err = np.nan
+        for track_id, track_msd in msd_df.groupby('track_id'):
+            try:
+                # Sort by lag time
+                track_msd = track_msd.sort_values('lag_time')
                 
-        elif fit_method == 'weighted':
-            if short_lag_cutoff >= 2:
-                def linear_func_with_offset(t, D, offset):
-                    return 4 * D * t + offset
-                try:
-                    # Weights inversely proportional to lag time (variance ~ t)
-                    # So, sigma ~ sqrt(t) for curve_fit
-                    sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
-                    # Ensure sigma_vals are not zero
-                    sigma_vals[sigma_vals == 0] = 1e-9
-                    
-                    popt, pcov = optimize.curve_fit(
-                        linear_func_with_offset, 
-                        lag_times[:short_lag_cutoff], 
-                        msd_values[:short_lag_cutoff],
-                        sigma=sigma_vals,
-                        absolute_sigma=True
-                    )
-                    D_short = popt[0]  # µm²/s
-                    D_err = np.sqrt(pcov[0, 0])
-                except (RuntimeError, ValueError):
-                    D_short = np.nan
-                    D_err = np.nan
-            else:
-                D_short = np.nan
-                D_err = np.nan
+                # Extract lag times and MSD values
+                lag_times = track_msd['lag_time'].values
+                msd_values = track_msd['msd'].values
                 
-        elif fit_method == 'nonlinear':
-            # Nonlinear fit for MSD = 4*D*t + offset
-            if short_lag_cutoff >= 3:
-                def msd_func(t, D, offset):
-                    return 4 * D * t + offset
+                # Validate data
+                if not (np.isfinite(lag_times).all() and np.isfinite(msd_values).all()):
+                    continue  # Skip tracks with invalid MSD
                 
-                try:
-                    popt, pcov = optimize.curve_fit(
-                        msd_func, 
-                        lag_times[:short_lag_cutoff], 
-                        msd_values[:short_lag_cutoff]
-                    )
-                    D_short = popt[0]  # µm²/s
-                    D_err = np.sqrt(pcov[0, 0])
-                except:
-                    D_short = np.nan
-                    D_err = np.nan
-            else:
-                D_short = np.nan
-                D_err = np.nan
-        
-        # Store diffusion coefficient results
-        track_result['diffusion_coefficient'] = D_short
-        track_result['diffusion_coefficient_error'] = D_err
-        
-        # Analyze anomalous diffusion
-        if analyze_anomalous and len(lag_times) >= 5:
-            # Fit MSD = c * t^alpha using log-log
-            # Ensure lag_times and msd_values are positive for log
-            valid_indices = (lag_times > 0) & (msd_values > 0)
-            log_lag_valid = np.log(lag_times[valid_indices])
-            log_msd_valid = np.log(msd_values[valid_indices])
-            
-            if len(log_lag_valid) >= 2:  # Need at least 2 points for linregress
-                try:
-                    slope, intercept, r_value, p_value, std_err_slope = linregress(log_lag_valid, log_msd_valid)
-                    
-                    # Alpha is the slope in log-log space
-                    alpha = slope
-                    alpha_err = std_err_slope
-                    
-                    # Categorize diffusion type
-                    diffusion_type = 'normal'
-                    if alpha < 0.9:
-                        diffusion_type = 'subdiffusive'
-                    elif alpha > 1.1:
-                        diffusion_type = 'superdiffusive'
+                # Initialize track result dict
+                track_result = {'track_id': track_id}
+                
+                # Standard diffusion coefficient (short time)
+                # Use only the first few points for initial diffusion coefficient
+                short_lag_cutoff = min(4, len(lag_times))
+                
+                # Linear fit: MSD = 4*D*t (2D) or MSD = 6*D*t (3D)
+                # Here we use 2D (4*D*t)
+                if fit_method == 'linear':
+                    # Linear fit
+                    if short_lag_cutoff >= 2:
+                        try:
+                            slope, intercept, r_value, p_value, std_err = linregress(
+                                lag_times[:short_lag_cutoff], 
+                                msd_values[:short_lag_cutoff]
+                            )
+                            D_short = slope / 4  # µm²/s
+                            D_err = std_err / 4
+                        except (ValueError, np.linalg.LinAlgError) as e:
+                            import logging
+                            logging.warning(f"Linear fit failed for track {track_id}: {str(e)}")
+                            D_short = np.nan
+                            D_err = np.nan
+                    else:
+                        D_short = np.nan
+                        D_err = np.nan
                         
-                    track_result['alpha'] = alpha
-                    track_result['alpha_error'] = alpha_err
-                    track_result['diffusion_type'] = diffusion_type
-                except ValueError:
+                elif fit_method == 'weighted':
+                    if short_lag_cutoff >= 2:
+                        def linear_func_with_offset(t, D, offset):
+                            return 4 * D * t + offset
+                        try:
+                            # Weights inversely proportional to lag time (variance ~ t)
+                            # So, sigma ~ sqrt(t) for curve_fit
+                            sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
+                            # Ensure sigma_vals are not zero
+                            sigma_vals[sigma_vals == 0] = 1e-9
+                            
+                            popt, pcov = optimize.curve_fit(
+                                linear_func_with_offset, 
+                                lag_times[:short_lag_cutoff], 
+                                msd_values[:short_lag_cutoff],
+                                sigma=sigma_vals,
+                                absolute_sigma=True
+                            )
+                            D_short = popt[0]  # µm²/s
+                            D_err = np.sqrt(pcov[0, 0])
+                        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+                            import logging
+                            logging.warning(f"Weighted fit failed for track {track_id}: {str(e)}")
+                            D_short = np.nan
+                            D_err = np.nan
+                    else:
+                        D_short = np.nan
+                        D_err = np.nan
+                        
+                elif fit_method == 'nonlinear':
+                    # Nonlinear fit for MSD = 4*D*t + offset
+                    if short_lag_cutoff >= 3:
+                        def msd_func(t, D, offset):
+                            return 4 * D * t + offset
+                        
+                        try:
+                            popt, pcov = optimize.curve_fit(
+                                msd_func, 
+                                lag_times[:short_lag_cutoff], 
+                                msd_values[:short_lag_cutoff]
+                            )
+                            D_short = popt[0]  # µm²/s
+                            D_err = np.sqrt(pcov[0, 0])
+                        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+                            import logging
+                            logging.warning(f"Nonlinear fit failed for track {track_id}: {str(e)}")
+                            D_short = np.nan
+                            D_err = np.nan
+                    else:
+                        D_short = np.nan
+                        D_err = np.nan
+                
+                # Store diffusion coefficient results
+                track_result['diffusion_coefficient'] = D_short
+                track_result['diffusion_coefficient_error'] = D_err
+                
+                # Analyze anomalous diffusion
+                if analyze_anomalous and len(lag_times) >= 5:
+                    try:
+                        # Fit MSD = c * t^alpha using log-log
+                        # Ensure lag_times and msd_values are positive for log
+                        valid_indices = (lag_times > 0) & (msd_values > 0)
+                        log_lag_valid = np.log(lag_times[valid_indices])
+                        log_msd_valid = np.log(msd_values[valid_indices])
+                        
+                        if len(log_lag_valid) >= 2:  # Need at least 2 points for linregress
+                            slope, intercept, r_value, p_value, std_err_slope = linregress(log_lag_valid, log_msd_valid)
+                            
+                            # Alpha is the slope in log-log space
+                            alpha = slope
+                            alpha_err = std_err_slope
+                            
+                            # Categorize diffusion type
+                            diffusion_type = 'normal'
+                            if alpha < 0.9:
+                                diffusion_type = 'subdiffusive'
+                            elif alpha > 1.1:
+                                diffusion_type = 'superdiffusive'
+                                
+                            track_result['alpha'] = alpha
+                            track_result['alpha_error'] = alpha_err
+                            track_result['diffusion_type'] = diffusion_type
+                        else:
+                            track_result['alpha'] = np.nan
+                            track_result['alpha_error'] = np.nan
+                            track_result['diffusion_type'] = 'unknown'
+                    except (ValueError, np.linalg.LinAlgError) as e:
+                        import logging
+                        logging.warning(f"Anomalous diffusion fit failed for track {track_id}: {str(e)}")
+                        track_result['alpha'] = np.nan
+                        track_result['alpha_error'] = np.nan
+                        track_result['diffusion_type'] = 'unknown'
+                else:
                     track_result['alpha'] = np.nan
                     track_result['alpha_error'] = np.nan
                     track_result['diffusion_type'] = 'unknown'
-            else:
-                track_result['alpha'] = np.nan
-                track_result['alpha_error'] = np.nan
-                track_result['diffusion_type'] = 'unknown'
-        
-        # Check for confined diffusion
-        if check_confinement and len(lag_times) >= 8:
-            # Look for plateau in MSD curve
-            # Simple approach: check if MSD stops increasing with lag time
-            
-            # Calculate slope at different regions of the curve
-            early_region = min(3, len(lag_times)-1)
-            late_region = min(8, len(lag_times))
-            
-            early_slope, _, _, _, _ = linregress(
-                lag_times[:early_region], 
-                msd_values[:early_region]
-            )
-            
-            late_slope, _, _, _, _ = linregress(
-                lag_times[early_region:late_region], 
-                msd_values[early_region:late_region]
-            )
-            
-            # Check for significant decrease in slope
-            if late_slope < 0.3 * early_slope:
-                confined = True
-                # Estimate confinement radius
-                plateau_value = np.mean(msd_values[early_region:late_region])
-                confinement_radius = np.sqrt(plateau_value / 4)  # Radius = sqrt(MSD/4) for 2D
-            else:
-                confined = False
-                confinement_radius = np.nan
                 
-            track_result['confined'] = confined
-            track_result['confinement_radius'] = confinement_radius
+                # Check for confined diffusion
+                if check_confinement and len(lag_times) >= 8:
+                    try:
+                        # Look for plateau in MSD curve
+                        # Simple approach: check if MSD stops increasing with lag time
+                        
+                        # Calculate slope at different regions of the curve
+                        early_region = min(3, len(lag_times)-1)
+                        late_region = min(8, len(lag_times))
+                        
+                        early_slope, _, _, _, _ = linregress(
+                            lag_times[:early_region], 
+                            msd_values[:early_region]
+                        )
+                        
+                        late_slope, _, _, _, _ = linregress(
+                            lag_times[early_region:late_region], 
+                            msd_values[early_region:late_region]
+                        )
+                        
+                        # Check for significant decrease in slope
+                        if late_slope < 0.3 * early_slope:
+                            confined = True
+                            # Estimate confinement radius
+                            plateau_value = np.mean(msd_values[early_region:late_region])
+                            confinement_radius = np.sqrt(plateau_value / 4)  # Radius = sqrt(MSD/4) for 2D
+                        else:
+                            confined = False
+                            confinement_radius = np.nan
+                            
+                        track_result['confined'] = confined
+                        track_result['confinement_radius'] = confinement_radius
+                    except (ValueError, np.linalg.LinAlgError) as e:
+                        import logging
+                        logging.warning(f"Confinement check failed for track {track_id}: {str(e)}")
+                        track_result['confined'] = False
+                        track_result['confinement_radius'] = np.nan
+                
+                track_results.append(track_result)
+                
+            except Exception as e:
+                # Catch any unexpected errors in per-track analysis
+                import logging
+                logging.error(f"Unexpected error analyzing track {track_id}: {str(e)}")
+                continue
+        
+        # Combine track results
+        results['track_results'] = pd.DataFrame(track_results)
+        
+        # Ensemble statistics
+        if not results['track_results'].empty:
+            # Ensemble averages
+            results['ensemble_results'] = {
+                'mean_diffusion_coefficient': results['track_results']['diffusion_coefficient'].mean(),
+                'median_diffusion_coefficient': results['track_results']['diffusion_coefficient'].median(),
+                'std_diffusion_coefficient': results['track_results']['diffusion_coefficient'].std(),
+                'n_tracks': len(results['track_results'])
+            }
             
-        track_results.append(track_result)
-    
-    # Combine track results
-    results['track_results'] = pd.DataFrame(track_results)
-    
-    # Ensemble statistics
-    if not results['track_results'].empty:
-        # Ensemble averages
-        results['ensemble_results'] = {
-            'mean_diffusion_coefficient': results['track_results']['diffusion_coefficient'].mean(),
-            'median_diffusion_coefficient': results['track_results']['diffusion_coefficient'].median(),
-            'std_diffusion_coefficient': results['track_results']['diffusion_coefficient'].std(),
-            'n_tracks': len(results['track_results'])
+            if analyze_anomalous:
+                results['ensemble_results']['mean_alpha'] = results['track_results']['alpha'].mean()
+                results['ensemble_results']['median_alpha'] = results['track_results']['alpha'].median()
+                results['ensemble_results']['std_alpha'] = results['track_results']['alpha'].std()
+                
+                # Count diffusion types
+                type_counts = results['track_results']['diffusion_type'].value_counts()
+                for diff_type in ['normal', 'subdiffusive', 'superdiffusive']:
+                    if diff_type in type_counts:
+                        results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
+                        results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
+                    else:
+                        results['ensemble_results'][f'{diff_type}_count'] = 0
+                        results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
+            
+            if check_confinement:
+                confined_tracks = results['track_results'][results['track_results']['confined'] == True]
+                results['ensemble_results']['confined_count'] = len(confined_tracks)
+                results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
+                
+                if len(confined_tracks) > 0:
+                    results['ensemble_results']['mean_confinement_radius'] = confined_tracks['confinement_radius'].mean()
+                    results['ensemble_results']['median_confinement_radius'] = confined_tracks['confinement_radius'].median()
+        
+        return {
+            'success': True,
+            'result': results,
+            'error': None
         }
-        
-        if analyze_anomalous:
-            results['ensemble_results']['mean_alpha'] = results['track_results']['alpha'].mean()
-            results['ensemble_results']['median_alpha'] = results['track_results']['alpha'].median()
-            results['ensemble_results']['std_alpha'] = results['track_results']['alpha'].std()
-            
-            # Count diffusion types
-            type_counts = results['track_results']['diffusion_type'].value_counts()
-            for diff_type in ['normal', 'subdiffusive', 'superdiffusive']:
-                if diff_type in type_counts:
-                    results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
-                    results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
-                else:
-                    results['ensemble_results'][f'{diff_type}_count'] = 0
-                    results['ensemble_results'][f'{diff_type}_fraction'] = 0.0
-        
-        if check_confinement:
-            confined_tracks = results['track_results'][results['track_results']['confined'] == True]
-            results['ensemble_results']['confined_count'] = len(confined_tracks)
-            results['ensemble_results']['confined_fraction'] = len(confined_tracks) / len(results['track_results'])
-            
-            if len(confined_tracks) > 0:
-                results['ensemble_results']['mean_confinement_radius'] = confined_tracks['confinement_radius'].mean()
-                results['ensemble_results']['median_confinement_radius'] = confined_tracks['confinement_radius'].median()
     
-    return results
+    except ValueError as e:
+        # Handle validation errors
+        import logging
+        logging.error(f\"analyze_diffusion ValueError: {str(e)}\")
+        return {
+            'success': False,
+            'result': None,
+            'error': str(e)
+        }
+    
+    except np.linalg.LinAlgError as e:
+        # Handle linear algebra errors (singular matrices, etc.)
+        import logging
+        logging.error(f\"analyze_diffusion LinAlgError: {str(e)}\")
+        return {
+            'success': False,
+            'result': None,
+            'error': f'Linear algebra error: {str(e)}'
+        }
+    
+    except Exception as e:
+        # Catch-all for unexpected errors
+        import logging
+        import traceback
+        logging.error(f\"Unexpected error in analyze_diffusion: {str(e)}\")
+        logging.error(traceback.format_exc())
+        return {
+            'success': False,
+            'result': None,
+            'error': f'Unexpected error: {str(e)}'
+        }
 
 
 # --- Motion Analysis ---
