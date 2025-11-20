@@ -11317,9 +11317,9 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     nbinsx=50
                                 ))
                                 fig.update_layout(
-                                    title=\"Waiting Time Distribution\",
-                                    xaxis_title=\"Time (s)\",
-                                    yaxis_title=\"Count\",
+                                    title="Waiting Time Distribution",
+                                    xaxis_title="Time (s)",
+                                    yaxis_title="Count",
                                     showlegend=True
                                 )
                                 st.plotly_chart(fig, use_container_width=True)
@@ -11348,37 +11348,37 @@ elif st.session_state.active_page == "Advanced Analysis":
             with adv_tabs[7]:
                 st.header("Fractional Brownian Motion (FBM) Analysis")
                 
-                st.markdown(\"\"\"
+                st.markdown("""
                 **Fractional Brownian Motion** characterizes anomalous diffusion through the **Hurst exponent** H:
                 - H = 0.5: Normal Brownian motion
                 - H < 0.5: Subdiffusive (antipersistent)
                 - H > 0.5: Superdiffusive (persistent)
-                \"\"\")
+                """)
                 
                 # Parameters
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     min_track_length_fbm = st.slider(
-                        \"Minimum Track Length\",
+                        "Minimum Track Length",
                         min_value=10,
                         max_value=100,
                         value=20,
-                        help=\"Minimum number of points for FBM fitting\"
+                        help="Minimum number of points for FBM fitting"
                     )
                 
                 with col2:
                     confidence_level = st.slider(
-                        \"Confidence Level\",
+                        "Confidence Level",
                         min_value=0.90,
                         max_value=0.99,
                         value=0.95,
                         step=0.01,
-                        help=\"Confidence level for parameter estimation\"
+                        help="Confidence level for parameter estimation"
                     )
                 
-                if st.button(\"Run FBM Analysis\", key=\"fbm_btn\"):
-                    with st.spinner(\"Fitting FBM models...\"):
+                if st.button("Run FBM Analysis", key="fbm_btn"):
+                    with st.spinner("Fitting FBM models..."):
                         try:
                             from advanced_diffusion_models import fit_fbm_model
                             
@@ -11427,7 +11427,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     st.session_state.analysis_results['fbm'] = fbm_results
                                     
                                     # Display ensemble results
-                                    st.subheader(\"Ensemble Results\")
+                                    st.subheader("Ensemble Results")
                                     
                                     col1, col2, col3 = st.columns(3)
                                     with col1:
@@ -11435,16 +11435,16 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     with col2:
                                         st.metric("Mean D", f"{fbm_results['mean_D']:.3e} μm²/s")
                                     with col3:
-                                        st.metric(\"N Tracks Analyzed\", len(fbm_results_list))
+                                        st.metric("N Tracks Analyzed", len(fbm_results_list))
                                     
                                     # Interpret mean Hurst
                                     H_mean = fbm_results['mean_hurst']
                                     if H_mean < 0.45:
-                                        regime = \"Subdiffusive (antipersistent)\"
+                                        regime = "Subdiffusive (antipersistent)"
                                     elif H_mean < 0.55:
-                                        regime = \"Normal Brownian motion\"
+                                        regime = "Normal Brownian motion"
                                     else:
-                                        regime = \"Superdiffusive (persistent)\"
+                                        regime = "Superdiffusive (persistent)"
                                     
                                     st.info(f"**Diffusion Regime:** {regime}")
                                     
@@ -11456,16 +11456,16 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         name='Hurst Exponent',
                                         nbinsx=30
                                     ))
-                                    fig.add_vline(x=0.5, line_dash=\"dash\", line_color=\"red\", 
-                                                 annotation_text=\"H=0.5 (Brownian)\")
+                                    fig.add_vline(x=0.5, line_dash="dash", line_color="red", 
+                                                 annotation_text="H=0.5 (Brownian)")
                                     fig.update_layout(
-                                        title=\"Hurst Exponent Distribution\",
-                                        xaxis_title=\"Hurst Exponent (H)\",
-                                        yaxis_title=\"Count\"
+                                        title="Hurst Exponent Distribution",
+                                        xaxis_title="Hurst Exponent (H)",
+                                        yaxis_title="Count"
                                     )
                                     st.plotly_chart(fig, use_container_width=True)
                                 else:
-                                    st.error(\"FBM fitting failed for all tracks.\")
+                                    st.error("FBM fitting failed for all tracks.")
                         
                         except Exception as e:
                             st.error(f"Error in FBM analysis: {str(e)}")
@@ -11474,40 +11474,40 @@ elif st.session_state.active_page == "Advanced Analysis":
             
             # Advanced Metrics tab
             with adv_tabs[8]:
-                st.header(\"Advanced Biophysical Metrics\")
+                st.header("Advanced Biophysical Metrics")
                 
-                st.markdown(\"\"\"
+                st.markdown("""
                 Comprehensive set of advanced metrics:
                 - **TAMSD/EAMSD**: Time-averaged vs Ensemble-averaged MSD
                 - **Ergodicity Breaking (EB)**: Measure of non-ergodicity
                 - **NGP**: Non-Gaussian Parameter (deviation from Brownian)
                 - **VACF**: Velocity Autocorrelation Function
                 - **van Hove Distribution**: Displacement probability distribution
-                \"\"\")
+                """)
                 
                 # Parameters
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     max_lag_metrics = st.slider(
-                        \"Maximum Lag Time\",
+                        "Maximum Lag Time",
                         min_value=5,
                         max_value=50,
                         value=20,
-                        help=\"Maximum lag for MSD and correlation calculations\"
+                        help="Maximum lag for MSD and correlation calculations"
                     )
                     
                 with col2:
                     min_track_length_metrics = st.slider(
-                        \"Minimum Track Length\",
+                        "Minimum Track Length",
                         min_value=5,
                         max_value=50,
                         value=10,
-                        help=\"Minimum points per track\"
+                        help="Minimum points per track"
                     )
                 
-                if st.button(\"Calculate Advanced Metrics\", key=\"advanced_metrics_btn\"):
-                    with st.spinner(\"Computing advanced metrics...\"):
+                if st.button("Calculate Advanced Metrics", key="advanced_metrics_btn"):
+                    with st.spinner("Computing advanced metrics..."):
                         try:
                             from advanced_biophysical_metrics import AdvancedMetricsAnalyzer, MetricConfig
                             
