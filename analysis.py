@@ -442,7 +442,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
     except ValueError as e:
         # Handle validation errors
         import logging
-        logging.error(f\"analyze_diffusion ValueError: {str(e)}\")
+        logging.error(f"analyze_diffusion ValueError: {str(e)}")
         return {
             'success': False,
             'result': None,
@@ -452,7 +452,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
     except np.linalg.LinAlgError as e:
         # Handle linear algebra errors (singular matrices, etc.)
         import logging
-        logging.error(f\"analyze_diffusion LinAlgError: {str(e)}\")
+        logging.error(f"analyze_diffusion LinAlgError: {str(e)}")
         return {
             'success': False,
             'result': None,
@@ -463,7 +463,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
         # Catch-all for unexpected errors
         import logging
         import traceback
-        logging.error(f\"Unexpected error in analyze_diffusion: {str(e)}\")
+        logging.error(f"Unexpected error in analyze_diffusion: {str(e)}")
         logging.error(traceback.format_exc())
         return {
             'success': False,

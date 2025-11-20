@@ -11850,7 +11850,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             analyzer = AdvancedMetricsAnalyzer(st.session_state.tracks_data, config)
                             
                             if analyzer.df.empty:
-                                st.error(\"No tracks meet the minimum length requirement.\")
+                                st.error("No tracks meet the minimum length requirement.")
                             else:
                                 # Calculate TAMSD/EAMSD
                                 tamsd_df, eamsd_df = analyzer.tamsd_eamsd()
@@ -11888,21 +11888,21 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 
                                 st.session_state.analysis_results['advanced_metrics'] = metrics_results
                                 
-                                st.success(\"✓ Advanced metrics calculated!\")
+                                st.success("✓ Advanced metrics calculated!")
                                 
                                 # Display results
-                                st.subheader(\"Ergodicity Breaking (EB) Ratio\")
+                                st.subheader("Ergodicity Breaking (EB) Ratio")
                                 
                                 if not ergodicity_df.empty:
                                     mean_eb = ergodicity_df['EB_ratio'].mean()
                                     st.metric("Mean EB Ratio", f"{mean_eb:.3f}")
                                     
                                     if mean_eb < 0.8:
-                                        st.warning(\"⚠️ Strong ergodicity breaking detected (EB < 0.8)\")
+                                        st.warning("⚠️ Strong ergodicity breaking detected (EB < 0.8)")
                                     elif mean_eb < 1.2:
-                                        st.info(\"ℹ️ Weakly ergodic system (0.8 < EB < 1.2)\")
+                                        st.info("ℹ️ Weakly ergodic system (0.8 < EB < 1.2)")
                                     else:
-                                        st.success(\"✓ Ergodic system (EB ≈ 1)\")
+                                        st.success("✓ Ergodic system (EB ≈ 1)")
                                     
                                     # Plot EB ratio vs lag
                                     import plotly.graph_objects as go
@@ -11913,19 +11913,19 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         mode='lines+markers',
                                         name='EB Ratio'
                                     ))
-                                    fig.add_hline(y=1.0, line_dash=\"dash\", line_color=\"red\",
-                                                 annotation_text=\"Ergodic (EB=1)\")
+                                    fig.add_hline(y=1.0, line_dash="dash", line_color="red",
+                                                 annotation_text="Ergodic (EB=1)")
                                     fig.update_layout(
-                                        title=\"Ergodicity Breaking Ratio vs Time\",
-                                        xaxis_title=\"Lag Time (s)\",
-                                        yaxis_title=\"EB Ratio\",
-                                        xaxis_type=\"log\",
-                                        yaxis_type=\"log\"
+                                        title="Ergodicity Breaking Ratio vs Time",
+                                        xaxis_title="Lag Time (s)",
+                                        yaxis_title="EB Ratio",
+                                        xaxis_type="log",
+                                        yaxis_type="log"
                                     )
                                     st.plotly_chart(fig, use_container_width=True)
                                 
                                 # NGP Plot
-                                st.subheader(\"Non-Gaussian Parameter (NGP)\")
+                                st.subheader("Non-Gaussian Parameter (NGP)")
                                 
                                 if not ngp_df.empty:
                                     fig_ngp = go.Figure()
@@ -11935,13 +11935,13 @@ elif st.session_state.active_page == "Advanced Analysis":
                                         mode='lines+markers',
                                         name='NGP'
                                     ))
-                                    fig_ngp.add_hline(y=0.0, line_dash=\"dash\", line_color=\"red\",
-                                                     annotation_text=\"Gaussian (NGP=0)\")
+                                    fig_ngp.add_hline(y=0.0, line_dash="dash", line_color="red",
+                                                     annotation_text="Gaussian (NGP=0)")
                                     fig_ngp.update_layout(
-                                        title=\"Non-Gaussian Parameter vs Time\",
-                                        xaxis_title=\"Lag Time (s)\",
-                                        yaxis_title=\"NGP\",
-                                        xaxis_type=\"log\"
+                                        title="Non-Gaussian Parameter vs Time",
+                                        xaxis_title="Lag Time (s)",
+                                        yaxis_title="NGP",
+                                        xaxis_type="log"
                                     )
                                     st.plotly_chart(fig_ngp, use_container_width=True)
                         
@@ -11952,35 +11952,35 @@ elif st.session_state.active_page == "Advanced Analysis":
             
             # Statistical Tests tab
             with adv_tabs[9]:
-                st.header(\"Statistical Tests & Model Validation\")
+                st.header("Statistical Tests & Model Validation")
                 
-                st.markdown(\"\"\"
+                st.markdown("""
                 Rigorous statistical validation tools:
                 - **Goodness-of-Fit Tests**: Chi-squared, Kolmogorov-Smirnov, Anderson-Darling
                 - **Model Selection**: AIC/BIC criteria
                 - **Bootstrap Confidence Intervals**
                 - **Non-parametric Tests**: Mann-Whitney U, Kruskal-Wallis, Wilcoxon
-                \"\"\")
+                """)
                 
                 # Test selection
                 test_type = st.selectbox(
-                    \"Select Test Type\",
+                    "Select Test Type",
                     [
-                        \"Goodness-of-Fit (Chi-squared)\",
-                        \"Kolmogorov-Smirnov Test\",
-                        \"Bootstrap CI\",
-                        \"Mann-Whitney U Test\",
-                        \"Model Comparison (AIC/BIC)\"
+                        "Goodness-of-Fit (Chi-squared)",
+                        "Kolmogorov-Smirnov Test",
+                        "Bootstrap CI",
+                        "Mann-Whitney U Test",
+                        "Model Comparison (AIC/BIC)"
                     ]
                 )
                 
-                if \"Goodness-of-Fit\" in test_type:
-                    st.subheader(\"Chi-Squared Goodness-of-Fit Test\")
+                if "Goodness-of-Fit" in test_type:
+                    st.subheader("Chi-Squared Goodness-of-Fit Test")
                     
-                    st.info(\"This test will be applied to diffusion analysis results if available.\")
+                    st.info("This test will be applied to diffusion analysis results if available.")
                     
                     if 'diffusion' in st.session_state.get('analysis_results', {}):
-                        if st.button(\"Run Chi-Squared Test\"):
+                        if st.button("Run Chi-Squared Test"):
                             try:
                                 from advanced_statistical_tests import chi_squared_goodness_of_fit, validate_model_fit
                                 
@@ -12000,7 +12000,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                     chi2_results = chi_squared_goodness_of_fit(observed_msd, expected_msd, n_params=2)
                                     
                                     if chi2_results['success']:
-                                        st.success(\"✓ Chi-squared test completed\")
+                                        st.success("✓ Chi-squared test completed")
                                         
                                         col1, col2, col3 = st.columns(3)
                                         with col1:
@@ -12016,15 +12016,15 @@ elif st.session_state.active_page == "Advanced Analysis":
                             except Exception as e:
                                 st.error(f"Error: {str(e)}")
                     else:
-                        st.warning(\"Run Diffusion Analysis first to use this test.\")
+                        st.warning("Run Diffusion Analysis first to use this test.")
                 
-                elif \"Bootstrap\" in test_type:
-                    st.subheader(\"Bootstrap Confidence Intervals\")
+                elif "Bootstrap" in test_type:
+                    st.subheader("Bootstrap Confidence Intervals")
                     
-                    n_bootstrap = st.slider(\"Number of Bootstrap Samples\", 100, 10000, 1000, 100)
-                    confidence_level = st.slider(\"Confidence Level\", 0.90, 0.99, 0.95, 0.01)
+                    n_bootstrap = st.slider("Number of Bootstrap Samples", 100, 10000, 1000, 100)
+                    confidence_level = st.slider("Confidence Level", 0.90, 0.99, 0.95, 0.01)
                     
-                    if st.button(\"Calculate Bootstrap CI\"):
+                    if st.button("Calculate Bootstrap CI"):
                         try:
                             from advanced_statistical_tests import bootstrap_confidence_interval
                             
@@ -12038,7 +12038,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 confidence_level=confidence_level
                             )
                             
-                            st.success(\"✓ Bootstrap CI calculated\")
+                            st.success("✓ Bootstrap CI calculated")
                             
                             col1, col2, col3 = st.columns(3)
                             with col1:
@@ -12051,7 +12051,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.info(f"{int(confidence_level*100)}% CI: [{ci_result['ci_lower']:.2f}, {ci_result['ci_upper']:.2f}]")
                         
                         except Exception as e:
-                            st.error(f\"Error: {str(e)}\")
+                            st.error(f"Error: {str(e)}")
             
             # Ornstein-Uhlenbeck Analysis tab (now index 10)
             with adv_tabs[10]:
