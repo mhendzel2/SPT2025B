@@ -1,5 +1,1 @@
-Collecting xmltodict
-  Downloading xmltodict-1.0.2-py3-none-any.whl.metadata (15 kB)
-Downloading xmltodict-1.0.2-py3-none-any.whl (13 kB)
-Installing collected packages: xmltodict
-Successfully installed xmltodict-1.0.2
+Requirement already satisfied: xmltodict in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (1.0.2)

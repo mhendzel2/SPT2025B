@@ -1,6 +1,1 @@
-Collecting lxml
-  Downloading lxml-6.0.2-cp313-cp313-win_amd64.whl.metadata (3.7 kB)
-Downloading lxml-6.0.2-cp313-cp313-win_amd64.whl (4.0 MB)
-   ---------------------------------------- 4.0/4.0 MB 25.0 MB/s  0:00:00
-Installing collected packages: lxml
-Successfully installed lxml-6.0.2
+Requirement already satisfied: lxml in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (6.0.2)

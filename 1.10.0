@@ -1,6 +1,2 @@
-Collecting scipy
-  Using cached scipy-1.16.2-cp313-cp313-win_amd64.whl.metadata (60 kB)
-Requirement already satisfied: numpy<2.6,>=1.25.2 in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from scipy) (2.3.3)
-Using cached scipy-1.16.2-cp313-cp313-win_amd64.whl (38.5 MB)
-Installing collected packages: scipy
-Successfully installed scipy-1.16.2
+Requirement already satisfied: scipy in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (1.16.2)
+Requirement already satisfied: numpy<2.6,>=1.25.2 in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from scipy) (2.2.6)

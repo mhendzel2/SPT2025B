@@ -1926,18 +1926,6 @@ def analyze_boundary_crossing(tracks_df: pd.DataFrame,
 # Note: correct_kinetic_rates_photobleaching is defined later in this file (line ~3107)
 # with more comprehensive parameter handling including confidence_level parameter.
 # This location previously contained a duplicate definition that has been removed.
-        n_total = len(sorted_times)
-        survival = 1.0 - np.arange(n_total) / n_total
-        
-        # Remove zeros to avoid log(0) issues
-        nonzero_mask = survival > 0
-        sorted_times = sorted_times[nonzero_mask]
-        survival = survival[nonzero_mask]
-        
-        # 2. Define exponential decay model
-        def survival_model(t, A, k_app):
-            """Exponential survival: P(t) = A * exp(-k_app * t)"""
-            return A * np.exp(-k_app * t)
         
         # 3. Fit observed data to get k_apparent
         try:
