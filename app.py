@@ -2786,15 +2786,26 @@ elif st.session_state.active_page == "Project Management":
                                         n_points = len(df)
                                         
                                         cond_results = report_results['conditions'].get(name, {})
-                                        status = "✅ Success" if cond_results.get('success', False) else "❌ Failed"
                                         
-                                        summary_data.append({
+                                        if cond_results.get('success', False):
+                                            status = "✅ Success"
+                                            error_msg = ""
+                                        else:
+                                            status = "❌ Failed"
+                                            error_msg = cond_results.get('error', 'Unknown error')
+                                        
+                                        summary_row = {
                                             'Condition': name,
                                             'Status': status,
                                             'Tracks': n_tracks,
                                             'Frames': n_frames,
                                             'Data Points': n_points
-                                        })
+                                        }
+                                        
+                                        if error_msg:
+                                            summary_row['Error'] = error_msg
+                                        
+                                        summary_data.append(summary_row)
                                     
                                     summary_df = pd.DataFrame(summary_data)
                                     st.dataframe(summary_df, use_container_width=True)
@@ -2805,6 +2816,19 @@ elif st.session_state.active_page == "Project Management":
                                             if cond_result.get('success', False):
                                                 st.write(f"**Analyses completed:** {len(cond_result.get('analysis_results', {}))}")
                                                 st.write(f"**Figures generated:** {len(cond_result.get('figures', {}))}")
+                                                
+                                                # Show individual analysis statuses
+                                                analysis_results = cond_result.get('analysis_results', {})
+                                                if analysis_results:
+                                                    st.write("**Analysis Status:**")
+                                                    for analysis_key, analysis_result in analysis_results.items():
+                                                        if isinstance(analysis_result, dict):
+                                                            if analysis_result.get('success', True) and 'error' not in analysis_result:
+                                                                st.write(f"- ✅ {analysis_key}")
+                                                            else:
+                                                                st.write(f"- ❌ {analysis_key}: {analysis_result.get('error', 'Unknown error')}")
+                                                        else:
+                                                            st.write(f"- ✅ {analysis_key}")
                                                 
                                                 # Show figures - handle both Plotly and Matplotlib
                                                 for analysis_key, fig in cond_result.get('figures', {}).items():
