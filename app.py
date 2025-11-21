@@ -6421,7 +6421,7 @@ elif st.session_state.active_page == "Analysis":
                         if analysis_type == "Whole Image Analysis":
                             # Standard whole-image diffusion analysis
                             st.subheader("Whole Image Diffusion Analysis")
-                            diffusion_results = analyze_diffusion(
+                            result = analyze_diffusion(
                                 st.session_state.tracks_data,
                                 max_lag=max_lag,
                                 pixel_size=pixel_size,
@@ -6431,6 +6431,15 @@ elif st.session_state.active_page == "Analysis":
                                 analyze_anomalous=analyze_anomalous,
                                 check_confinement=check_confinement
                             )
+                            # Extract result dict or error
+                            if result.get('success', False):
+                                diffusion_results = result['result']
+                                diffusion_results['success'] = True
+                            else:
+                                diffusion_results = {
+                                    'success': False,
+                                    'error': result.get('error', 'Unknown error')
+                                }
                         elif analysis_type == "Segmentation-Based Analysis" and selected_mask and segmentation_method:
                             # Perform class-based diffusion analysis using tracks already assigned to classes
                             st.subheader(f"Class-Based Diffusion Analysis - {segmentation_method}")
@@ -6481,7 +6490,15 @@ elif st.session_state.active_page == "Analysis":
                                         check_confinement=check_confinement
                                     )
                                     
-                                    diffusion_results[class_names.get(class_id, f'Class {class_id}')] = class_result
+                                    # Extract result dict if success, otherwise store error info
+                                    if class_result.get('success', False):
+                                        diffusion_results[class_names.get(class_id, f'Class {class_id}')] = class_result['result']
+                                        diffusion_results[class_names.get(class_id, f'Class {class_id}')]['success'] = True
+                                    else:
+                                        diffusion_results[class_names.get(class_id, f'Class {class_id}')] = {
+                                            'success': False,
+                                            'error': class_result.get('error', 'Unknown error')
+                                        }
                                 # Handle Two-Step Segmentation combined analysis if selected
                                 if (segmentation_method == "Two-Step Segmentation (3 Classes)" and 
                                     analysis_option == "Analyze classes separately, then combine Class 1 and 2"):
@@ -6501,7 +6518,15 @@ elif st.session_state.active_page == "Analysis":
                                             analyze_anomalous=analyze_anomalous,
                                             check_confinement=check_confinement
                                         )
-                                        diffusion_results["Combined Class 1+2"] = combined_result
+                                        # Extract result dict if success
+                                        if combined_result.get('success', False):
+                                            diffusion_results["Combined Class 1+2"] = combined_result['result']
+                                            diffusion_results["Combined Class 1+2"]['success'] = True
+                                        else:
+                                            diffusion_results["Combined Class 1+2"] = {
+                                                'success': False,
+                                                'error': combined_result.get('error', 'Unknown error')
+                                            }
                                     else:
                                         st.warning("Insufficient tracks for combined Class 1+2 analysis")
                             else:
@@ -6616,59 +6641,75 @@ elif st.session_state.active_page == "Analysis":
                     # Standard whole-image analysis results
                     st.subheader("Diffusion Analysis Results")
                     
+                    # Extract result dict if it's nested
+                    display_results = results.get('result', results) if 'result' in results else results
+                    
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        if 'diffusion_coefficient' in results:
-                            st.metric("Diffusion Coefficient", f"{results['diffusion_coefficient']:.4f}")
-                        elif 'mean_diffusion_coefficient' in results:
-                            st.metric("Diffusion Coefficient", f"{results['mean_diffusion_coefficient']:.4f}")
+                        # Check ensemble_results first for mean values
+                        if 'ensemble_results' in display_results and 'mean_diffusion_coefficient' in display_results['ensemble_results']:
+                            st.metric("Diffusion Coefficient", f"{display_results['ensemble_results']['mean_diffusion_coefficient']:.4f}")
+                        elif 'diffusion_coefficient' in display_results:
+                            st.metric("Diffusion Coefficient", f"{display_results['diffusion_coefficient']:.4f}")
+                        elif 'mean_diffusion_coefficient' in display_results:
+                            st.metric("Diffusion Coefficient", f"{display_results['mean_diffusion_coefficient']:.4f}")
                         else:
                             st.metric("Diffusion Coefficient", "N/A")
                     with col2:
-                        if 'alpha' in results:
-                            st.metric("Anomalous Exponent (α)", f"{results['alpha']:.3f}")
+                        if 'ensemble_results' in display_results and 'mean_alpha' in display_results['ensemble_results']:
+                            st.metric("Anomalous Exponent (α)", f"{display_results['ensemble_results']['mean_alpha']:.3f}")
+                        elif 'alpha' in display_results:
+                            st.metric("Anomalous Exponent (α)", f"{display_results['alpha']:.3f}")
                         else:
                             st.metric("Anomalous Exponent (α)", "N/A")
                     with col3:
-                        if 'fitting_quality' in results:
-                            st.metric("R² (Fit Quality)", f"{results['fitting_quality']:.3f}")
+                        if 'fitting_quality' in display_results:
+                            st.metric("R² (Fit Quality)", f"{display_results['fitting_quality']:.3f}")
                         else:
                             st.metric("R² (Fit Quality)", "N/A")
                     
                     # MSD data
-                    st.subheader("Mean Squared Displacement")
-                    st.dataframe(results["msd_data"].head())
+                    if "msd_data" in display_results and display_results["msd_data"] is not None:
+                        st.subheader("Mean Squared Displacement")
+                        st.dataframe(display_results["msd_data"].head())
                     
                     # Track results
-                    st.subheader("Diffusion Results by Track")
-                    st.dataframe(results["track_results"])
+                    if "track_results" in display_results and display_results["track_results"] is not None:
+                        st.subheader("Diffusion Results by Track")
+                        if isinstance(display_results["track_results"], pd.DataFrame) and not display_results["track_results"].empty:
+                            st.dataframe(display_results["track_results"])
+                        else:
+                            st.info("No track-level results available")
                     
                     # Ensemble results
-                    st.subheader("Ensemble Statistics")
-                    for key, value in results["ensemble_results"].items():
-                        st.text(f"{key}: {value}")
+                    if "ensemble_results" in display_results and display_results["ensemble_results"]:
+                        st.subheader("Ensemble Statistics")
+                        for key, value in display_results["ensemble_results"].items():
+                            st.text(f"{key}: {value}")
                     
                     # Display visualizations
-                    if 'ensemble_msd' in results and not results['ensemble_msd'].empty:
-                        # Define plot_msd_curves if not already defined or import from your utilities
-                        def plot_msd_curves(msd_data):
-                            import plotly.express as px
-                            if isinstance(msd_data, dict) and 'lag_time' in msd_data and 'msd' in msd_data:
-                                df = pd.DataFrame({'lag_time': msd_data['lag_time'], 'msd': msd_data['msd']})
-                            elif isinstance(msd_data, pd.DataFrame):
-                                df = msd_data
-                            else:
-                                return px.scatter(title="No MSD data available")
-                            fig = px.scatter(df, x="lag_time", y="msd", title="MSD vs Lag Time", labels={"lag_time": "Lag Time (s)", "msd": "MSD (μm²)"})
-                            fig.update_traces(mode='lines+markers')
-                            return fig
+                    if 'msd_data' in display_results and display_results['msd_data'] is not None:
+                        if isinstance(display_results['msd_data'], pd.DataFrame) and not display_results['msd_data'].empty:
+                            # Define plot_msd_curves if not already defined or import from your utilities
+                            def plot_msd_curves(msd_data):
+                                import plotly.express as px
+                                if isinstance(msd_data, dict) and 'lag_time' in msd_data and 'msd' in msd_data:
+                                    df = pd.DataFrame({'lag_time': msd_data['lag_time'], 'msd': msd_data['msd']})
+                                elif isinstance(msd_data, pd.DataFrame):
+                                    df = msd_data
+                                else:
+                                    return px.scatter(title="No MSD data available")
+                                fig = px.scatter(df, x="lag_time", y="msd", title="MSD vs Lag Time", labels={"lag_time": "Lag Time (s)", "msd": "MSD (μm²)"})
+                                fig.update_traces(mode='lines+markers')
+                                return fig
 
-                        msd_fig = plot_msd_curves(results.get('msd_data', results))
-                        st.plotly_chart(msd_fig, use_container_width=True)
+                            msd_fig = plot_msd_curves(display_results['msd_data'])
+                            st.plotly_chart(msd_fig, use_container_width=True)
                     
-                    if 'track_results' in results and not results['track_results'].empty:
-                        diff_fig = plot_diffusion_coefficients(results)
-                        st.plotly_chart(diff_fig, use_container_width=True)
+                    if 'track_results' in display_results and display_results['track_results'] is not None:
+                        if isinstance(display_results['track_results'], pd.DataFrame) and not display_results['track_results'].empty:
+                            diff_fig = plot_diffusion_coefficients(display_results)
+                            st.plotly_chart(diff_fig, use_container_width=True)
                 else:
                     st.warning(f"Analysis was not successful: {results.get('error', 'Unknown error')}")
         
