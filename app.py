@@ -5006,9 +5006,9 @@ elif st.session_state.active_page == "Tracking":
                 
                 detection_method = st.selectbox(
                     "Detection Method",
-                    ["LoG", "DoG", "Wavelet", "Intensity"],
-                    index=["LoG", "DoG", "Wavelet", "Intensity"].index(default_method),
-                    help="Method for detecting particles"
+                    ["LoG", "DoG", "Wavelet", "Intensity", "CellSAM", "Cellpose"],
+                    index=["LoG", "DoG", "Wavelet", "Intensity", "CellSAM", "Cellpose"].index(default_method) if default_method in ["LoG", "DoG", "Wavelet", "Intensity", "CellSAM", "Cellpose"] else 0,
+                    help="Method for detecting particles. CellSAM and Cellpose are AI-based methods for advanced segmentation."
                 )
                 
                 particle_size = st.number_input(
@@ -5462,6 +5462,77 @@ Dilation expands detected particles to restore size after erosion."""
                                     })
                             particles_df = pd.DataFrame(particles_list)
                         
+                        elif detection_method == "CellSAM":
+                            try:
+                                from advanced_segmentation import CellSAMSegmentation
+                                st.info("Using CellSAM (Segment Anything Model) for particle detection...")
+                                
+                                cellsam = CellSAMSegmentation()
+                                success = cellsam.load_model()
+                                
+                                if success:
+                                    masks, scores = cellsam.segment_automatic(current_frame)
+                                    
+                                    particles_list = []
+                                    for mask in masks:
+                                        props = measure.regionprops(mask.astype(int))
+                                        if props:
+                                            prop = props[0]
+                                            min_area = int(particle_size * particle_size * 0.5)
+                                            if prop.area >= min_area:
+                                                y, x = prop.centroid
+                                                intensity = current_frame[int(y), int(x)]
+                                                particles_list.append({
+                                                    'y': y, 'x': x,
+                                                    'sigma': np.sqrt(prop.area / np.pi),
+                                                    'intensity': intensity,
+                                                    'SNR': intensity / np.std(current_frame)
+                                                })
+                                    particles_df = pd.DataFrame(particles_list)
+                                else:
+                                    st.error("Failed to load CellSAM model")
+                                    particles_df = pd.DataFrame()
+                            except Exception as e:
+                                st.error(f"CellSAM detection failed: {e}")
+                                particles_df = pd.DataFrame()
+                        
+                        elif detection_method == "Cellpose":
+                            try:
+                                from advanced_segmentation import CellposeSegmentation
+                                st.info("Using Cellpose for particle detection...")
+                                
+                                cellpose = CellposeSegmentation()
+                                success = cellpose.load_model()
+                                
+                                if success:
+                                    masks, flows, _ = cellpose.segment_image(current_frame)
+                                    
+                                    particles_list = []
+                                    for region_id in np.unique(masks):
+                                        if region_id == 0:  # Skip background
+                                            continue
+                                        mask = masks == region_id
+                                        props = measure.regionprops(mask.astype(int))
+                                        if props:
+                                            prop = props[0]
+                                            min_area = int(particle_size * particle_size * 0.5)
+                                            if prop.area >= min_area:
+                                                y, x = prop.centroid
+                                                intensity = current_frame[int(y), int(x)]
+                                                particles_list.append({
+                                                    'y': y, 'x': x,
+                                                    'sigma': np.sqrt(prop.area / np.pi),
+                                                    'intensity': intensity,
+                                                    'SNR': intensity / np.std(current_frame)
+                                                })
+                                    particles_df = pd.DataFrame(particles_list)
+                                else:
+                                    st.error("Failed to load Cellpose model")
+                                    particles_df = pd.DataFrame()
+                            except Exception as e:
+                                st.error(f"Cellpose detection failed: {e}")
+                                particles_df = pd.DataFrame()
+                        
                         # Convert DataFrame to numpy array format for visualization
                         if not particles_df.empty:
                             particles = particles_df[['x', 'y']].values
@@ -5911,8 +5982,8 @@ Dilation expands detected particles to restore size after erosion."""
             with col1:
                 linking_method = st.selectbox(
                     "Linking Method",
-                    ["NearestNeighbor", "Hungarian", "IDL", "btrack"],
-                    help="Method for linking particles between frames"
+                    ["Trackpy", "btrack", "Particle Filter", "Hungarian", "LAP"],
+                    help="Method for linking particles between frames. Trackpy uses nearest-neighbor with gap closing, btrack uses Bayesian tracking, Particle Filter uses probabilistic tracking."
                 )
                 
                 max_distance = st.slider(
@@ -5986,7 +6057,34 @@ Dilation expands detected particles to restore size after erosion."""
                                     tracks_data = advanced_tracker.track_particles_btrack(all_detections_df, min_track_length)
                                 else:
                                     tracks_data = pd.DataFrame()
+                                    
+                            elif linking_method == "Particle Filter":
+                                from advanced_tracking import AdvancedTracking
+                                advanced_tracker = AdvancedTracking()
+                                # Particle filter expects dict of frame -> DataFrame
+                                tracks_data = advanced_tracker.track_particles(
+                                    detection_dict,
+                                    max_search_radius=max_distance,
+                                    motion_std=5.0,
+                                    measurement_std=2.0,
+                                    min_track_length=min_track_length
+                                )
+                                
+                            elif linking_method in ["Trackpy", "Hungarian", "LAP"]:
+                                # Use the standard link_particles function (trackpy-based)
+                                linked_tracks_df = link_particles(
+                                    detection_dict,
+                                    max_distance=max_distance,
+                                    memory=max_frame_gap,
+                                    min_track_length=min_track_length
+                                )
+                                if not linked_tracks_df.empty:
+                                    tracks_data = linked_tracks_df
+                                else:
+                                    tracks_data = pd.DataFrame()
+                                    
                             else:
+                                # Default to trackpy
                                 linked_tracks_df = link_particles(
                                     detection_dict,
                                     max_distance=max_distance,
