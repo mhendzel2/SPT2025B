@@ -8434,22 +8434,31 @@ elif st.session_state.active_page == "Analysis":
                     if polymer_results.get('success'):
                         st.subheader("Previous Results")
                         
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric(
-                                "Scaling Exponent (α)", 
-                                f"{polymer_results['scaling_exponent']:.3f}"
-                            )
-                        
-                        with col2:
-                            st.metric("Regime", polymer_results['regime'])
-                        
-                        with col3:
-                            st.metric(
-                                "Fit Quality (R²)", 
-                                f"{polymer_results['r_squared']:.3f}"
-                            )
+                        # Check if expected keys exist
+                        if 'scaling_exponent' in polymer_results and 'regime' in polymer_results:
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.metric(
+                                    "Scaling Exponent (α)", 
+                                    f"{polymer_results['scaling_exponent']:.3f}"
+                                )
+                            
+                            with col2:
+                                st.metric("Regime", polymer_results['regime'])
+                            
+                            with col3:
+                                if 'r_squared' in polymer_results:
+                                    st.metric(
+                                        "Fit Quality (R²)", 
+                                        f"{polymer_results['r_squared']:.3f}"
+                                    )
+                                else:
+                                    st.metric("Fit Quality (R²)", "N/A")
+                        else:
+                            st.warning("Previous results are in an incompatible format. Please rerun the analysis.")
+                    else:
+                        st.error(f"Previous analysis failed: {polymer_results.get('error', 'Unknown error')}")
             
             # Biophysical Models Analysis
             with adv_tabs[6]:
