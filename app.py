@@ -12081,7 +12081,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                                 ngp_df = pd.DataFrame(ngp_results)
                                 
                                 # Calculate VACF
-                                vacf_results = analyzer.velocity_autocorrelation()
+                                vacf_results = analyzer.vacf()
                                 
                                 metrics_results = {
                                     'success': True,
