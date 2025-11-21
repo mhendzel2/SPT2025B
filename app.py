@@ -8919,7 +8919,8 @@ elif st.session_state.active_page == "Advanced Analysis":
     else:
         # Create tabs for different advanced analysis modules
         adv_tabs = st.tabs([
-            "Biophysical Models", 
+            "Biophysical Models",
+            "Advanced Biophysical",
             "Changepoint Detection", 
             "Correlative Analysis",
             "Advanced Tracking",
@@ -8935,7 +8936,7 @@ elif st.session_state.active_page == "Advanced Analysis":
         ])
         
         # HMM Analysis tab
-        with adv_tabs[11]:
+        with adv_tabs[12]:
             st.header("Hidden Markov Model (HMM) Analysis")
             st.write("Model track dynamics using a Hidden Markov Model to identify distinct movement states.")
 
@@ -9361,7 +9362,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                     st.error(f"❌ Error loading iHMM interface: {str(e)}")
 
         # DDM (Tracking-Free) tab
-        with adv_tabs[12]:
+        with adv_tabs[13]:
             st.header("🔬 Differential Dynamic Microscopy (DDM)")
             st.markdown("""
             **Tracking-free diffusion analysis** from microscopy images.
@@ -11236,8 +11237,25 @@ elif st.session_state.active_page == "Advanced Analysis":
             else:
                 st.warning("No track data available. Please load track data first.")
         
-        # Changepoint Detection tab
+        # Advanced Biophysical Analysis tab
         with adv_tabs[1]:
+            st.header("🔬 Advanced Biophysical Analysis")
+            st.write("Comprehensive biophysical characterization: polymer dynamics, viscoelasticity, and active matter analysis")
+            
+            try:
+                from advanced_biophysical import show_advanced_biophysical
+                show_advanced_biophysical()
+            except ImportError as e:
+                st.error(f"Advanced biophysical module not available: {e}")
+                st.info("This module requires additional dependencies for polymer dynamics and viscoelasticity analysis.")
+            except Exception as e:
+                st.error(f"Error loading advanced biophysical analysis: {e}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+        
+        # Changepoint Detection tab
+        with adv_tabs[2]:
             st.header("Changepoint Detection")
             
             if CHANGEPOINT_DETECTION_AVAILABLE:
@@ -11362,7 +11380,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                 st.warning("Changepoint detection module is not available. Make sure the appropriate files are in the correct location.")
         
         # Correlative Analysis tab
-        with adv_tabs[2]:
+        with adv_tabs[3]:
             st.header("Correlative Analysis")
             
             if CORRELATIVE_ANALYSIS_AVAILABLE:
@@ -11538,7 +11556,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                 st.warning("Correlative analysis module is not available. Make sure the appropriate files are in the correct location.")
         
         # Advanced Tracking tab
-        with adv_tabs[3]:
+        with adv_tabs[4]:
             st.header("Advanced Tracking")
             st.write("Advanced particle tracking using Bayesian inference and particle filtering.")
             
@@ -11757,7 +11775,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                 st.warning("Advanced tracking module is not available.")
         
         # Intensity Analysis tab
-        with adv_tabs[4]:
+        with adv_tabs[5]:
             st.header("Intensity Analysis")
             st.write("Analyze intensity-motion correlations and intensity-based behavior classification.")
             
@@ -11945,7 +11963,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                 st.warning("Intensity analysis module is not available.")
         
         # Microrheology Analysis tab
-        with adv_tabs[5]:
+        with adv_tabs[6]:
             st.header("Microrheology Analysis")
             
             # Parameters
@@ -12153,7 +12171,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.dataframe(results['frequency_sweep'])
 
             # CTRW Analysis tab
-            with adv_tabs[6]:
+            with adv_tabs[7]:
                 st.header("Continuous Time Random Walk (CTRW) Analysis")
                 
                 st.markdown("""
@@ -12274,7 +12292,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.code(traceback.format_exc())
             
             # FBM Analysis tab
-            with adv_tabs[7]:
+            with adv_tabs[8]:
                 st.header("Fractional Brownian Motion (FBM) Analysis")
                 
                 st.markdown("""
@@ -12402,7 +12420,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.code(traceback.format_exc())
             
             # Advanced Metrics tab
-            with adv_tabs[8]:
+            with adv_tabs[9]:
                 st.header("Advanced Biophysical Metrics")
                 
                 st.markdown("""
@@ -12555,7 +12573,7 @@ elif st.session_state.active_page == "Advanced Analysis":
                             st.code(traceback.format_exc())
             
             # Statistical Tests tab
-            with adv_tabs[9]:
+            with adv_tabs[10]:
                 st.header("Statistical Tests & Model Validation")
                 
                 st.markdown("""
@@ -12657,8 +12675,8 @@ elif st.session_state.active_page == "Advanced Analysis":
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
             
-            # Ornstein-Uhlenbeck Analysis tab (now index 10)
-            with adv_tabs[10]:
+            # Ornstein-Uhlenbeck Analysis tab
+            with adv_tabs[11]:
                 st.header("Ornstein-Uhlenbeck Analysis")
                 st.write("Analyze tracks assuming an Ornstein-Uhlenbeck process, which models a particle in a harmonic potential.")
 
