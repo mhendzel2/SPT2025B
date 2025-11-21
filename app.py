@@ -2065,7 +2065,13 @@ elif st.session_state.active_page == "Project Management":
 
                 # Pool and preview
                 if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
-                    pooled = cond.pool_tracks()
+                    pooled_result = cond.pool_tracks()
+                    if isinstance(pooled_result, tuple):
+                        pooled, errors = pooled_result
+                    else:
+                        pooled = pooled_result
+                        errors = []
+                    
                     if pooled is not None and not pooled.empty:
                         st.session_state.tracks_data = pooled
                         try:
@@ -2073,6 +2079,8 @@ elif st.session_state.active_page == "Project Management":
                         except Exception:
                             pass
                         st.success(f"Pooled {len(pooled)} rows into current dataset.")
+                        if errors:
+                            st.warning(f"Encountered {len(errors)} errors during pooling.")
                         st.dataframe(pooled.head())
                     else:
                         st.info("No data available to pool for this condition.")
