@@ -991,12 +991,21 @@ st.sidebar.title("SPT Analysis")
 #st.sidebar.image("generated-icon.png", width=100)
 
 # Main navigation menu - Updated for multi-page architecture
+nav_options = [
+    "Home", "Project Management", "Data Loading", "Image Processing", "Tracking",
+    "Analysis", "Visualization", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
+]
+
+# Set the index based on active_page to sync programmatic navigation with sidebar
+try:
+    default_index = nav_options.index(st.session_state.active_page) if st.session_state.active_page in nav_options else 0
+except (ValueError, AttributeError):
+    default_index = 0
+
 nav_option = st.sidebar.radio(
     "Navigation",
-    [
-        "Home", "Project Management", "Data Loading", "Image Processing", "Tracking",
-        "Analysis", "Visualization", "Advanced Analysis", "AI Anomaly Detection", "Report Generation", "MD Integration", "Simulation"
-    ]
+    nav_options,
+    index=default_index
 )
 
 # Update session state based on navigation
