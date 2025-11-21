@@ -124,12 +124,47 @@ class Condition:
             errors = []
             for f in self.files:
                 try:
+                    df = None
+                    
                     if 'data' in f and f['data'] is not None:
-                        df = pd.read_csv(io.BytesIO(f['data']))
-                        pooled.append(df)
+                        # Load from bytes with encoding handling
+                        data_bytes = f['data']
+                        if isinstance(data_bytes, str):
+                            data_bytes = data_bytes.encode('utf-8')
+                        try:
+                            df = pd.read_csv(io.BytesIO(data_bytes), encoding='utf-8')
+                        except UnicodeDecodeError:
+                            df = pd.read_csv(io.BytesIO(data_bytes), encoding='latin-1')
+                            
                     elif 'data_path' in f and f['data_path'] and os.path.exists(f['data_path']):
                         df = pd.read_csv(f['data_path'])
+                    
+                    if df is not None and not df.empty:
+                        # Clean the data
+                        df = df.dropna(how='all')
+                        df.columns = df.columns.str.strip()
+                        
+                        # Check for duplicate header row
+                        if len(df) > 1:
+                            first_row = df.iloc[0]
+                            if all(isinstance(val, str) and val.strip() in df.columns for val in first_row if pd.notna(val)):
+                                df = df.iloc[1:].reset_index(drop=True)
+                        
+                        # Convert numeric columns
+                        for col in df.columns:
+                            if col in ['x', 'y', 'z', 'frame', 'track_id'] or any(x in col.lower() for x in ['frame', 'track']):
+                                try:
+                                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                                except Exception:
+                                    pass
+                        
+                        # Remove rows with NaN in critical columns
+                        critical_cols = [c for c in ['track_id', 'frame', 'x', 'y'] if c in df.columns]
+                        if critical_cols:
+                            df = df.dropna(subset=critical_cols)
+                        
                         pooled.append(df)
+                        
                 except Exception as e:
                     errors.append({
                         'file': f.get('file_name', 'unknown'),

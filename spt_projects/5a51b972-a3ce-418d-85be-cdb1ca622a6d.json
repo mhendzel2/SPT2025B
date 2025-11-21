@@ -11,18 +11,81 @@
       "description": "",
       "files": [
         {
-          "id": "3cefbaec-e8f1-493f-bcc3-5f00396048ff",
-          "name": "MS2_spots_F2C2.csv",
+          "id": "bcd38758-727f-4a15-a14d-d57391adf81d",
+          "name": "Cropped_spots_cell3.csv",
           "type": "text/csv",
-          "size": 1317,
-          "data_path": "spt_projects\\data\\3cefbaec-e8f1-493f-bcc3-5f00396048ff.csv"
+          "size": 443,
+          "data_path": "spt_projects\\data\\bcd38758-727f-4a15-a14d-d57391adf81d.csv"
         },
         {
-          "id": "73d32872-cee6-431e-987b-003d7dfbe9f5",
-          "name": "MS2_spots_F1C1.csv",
+          "id": "cfb88da8-11b3-41f1-962b-c39acfc0b47d",
+          "name": "Cropped_spots_cell2.csv",
           "type": "text/csv",
-          "size": 1359,
-          "data_path": "spt_projects\\data\\73d32872-cee6-431e-987b-003d7dfbe9f5.csv"
+          "size": 1150,
+          "data_path": "spt_projects\\data\\cfb88da8-11b3-41f1-962b-c39acfc0b47d.csv"
+        }
+      ]
+    },
+    {
+      "id": "08149578-85a7-4f35-930b-c4b203dc412e",
+      "name": "C2C12",
+      "description": "",
+      "files": [
+        {
+          "id": "c478761c-36e8-48c1-ac67-4a87bec98e6a",
+          "name": "Aligned_Cropped_spots_cell16.csv",
+          "type": "text/csv",
+          "size": 704,
+          "data_path": "spt_projects\\data\\c478761c-36e8-48c1-ac67-4a87bec98e6a.csv"
+        },
+        {
+          "id": "571c8a39-4c28-47a0-a83b-3638f7090054",
+          "name": "Aligned_Cropped_spots_cell14.csv",
+          "type": "text/csv",
+          "size": 1194,
+          "data_path": "spt_projects\\data\\571c8a39-4c28-47a0-a83b-3638f7090054.csv"
+        },
+        {
+          "id": "58b94d8b-1aef-41d5-bc6c-b4823b1d572c",
+          "name": "Cropped_spots_cell13.csv",
+          "type": "text/csv",
+          "size": 180,
+          "data_path": "spt_projects\\data\\58b94d8b-1aef-41d5-bc6c-b4823b1d572c.csv"
+        },
+        {
+          "id": "11a14e64-ee93-4fc2-86fe-a02741637140",
+          "name": "Aligned_Cropped_spots_cell7.csv",
+          "type": "text/csv",
+          "size": 743,
+          "data_path": "spt_projects\\data\\11a14e64-ee93-4fc2-86fe-a02741637140.csv"
+        },
+        {
+          "id": "ba0efa44-bbd2-454f-bbd9-bb255ec11939",
+          "name": "Cropped_spots_cell5.csv",
+          "type": "text/csv",
+          "size": 3473,
+          "data_path": "spt_projects\\data\\ba0efa44-bbd2-454f-bbd9-bb255ec11939.csv"
+        },
+        {
+          "id": "64e93c69-1eca-4524-8a27-3b7e0548a090",
+          "name": "Cropped_cell3_spots.csv",
+          "type": "text/csv",
+          "size": 1842,
+          "data_path": "spt_projects\\data\\64e93c69-1eca-4524-8a27-3b7e0548a090.csv"
+        },
+        {
+          "id": "53f3c2ff-6a09-4018-bb17-8eb41e49bb4c",
+          "name": "Aligned_Cropped_spots_cell2.csv",
+          "type": "text/csv",
+          "size": 475,
+          "data_path": "spt_projects\\data\\53f3c2ff-6a09-4018-bb17-8eb41e49bb4c.csv"
+        },
+        {
+          "id": "7cbcc508-f929-4301-84ef-f23f7a3ff3cc",
+          "name": "Cropped_spots_cell1.csv",
+          "type": "text/csv",
+          "size": 999,
+          "data_path": "spt_projects\\data\\7cbcc508-f929-4301-84ef-f23f7a3ff3cc.csv"
         }
       ]
     }

@@ -5023,6 +5023,292 @@ class EnhancedSPTReportGenerator:
         
         return results
 
+    def generate_condition_reports(self, condition_datasets: Dict[str, pd.DataFrame], 
+                                   selected_analyses: List[str],
+                                   pixel_size: float = 0.1,
+                                   frame_interval: float = 0.1) -> Dict[str, Any]:
+        """
+        Generate reports for multiple conditions.
+        
+        Parameters
+        ----------
+        condition_datasets : Dict[str, pd.DataFrame]
+            Dictionary mapping condition names to their pooled track dataframes
+        selected_analyses : List[str]
+            List of analysis keys to perform
+        pixel_size : float
+            Pixel size in micrometers
+        frame_interval : float
+            Frame interval in seconds
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary with results for each condition and comparison statistics
+        """
+        results = {
+            'conditions': {},
+            'comparisons': {},
+            'success': True,
+            'n_conditions': len(condition_datasets)
+        }
+        
+        current_units = {
+            'pixel_size': pixel_size,
+            'frame_interval': frame_interval,
+            'distance': 'μm',
+            'time': 's'
+        }
+        
+        # Generate reports for each condition
+        for cond_name, tracks_df in condition_datasets.items():
+            try:
+                cond_results = self.generate_batch_report(tracks_df, selected_analyses, cond_name)
+                results['conditions'][cond_name] = cond_results
+            except Exception as e:
+                results['conditions'][cond_name] = {
+                    'success': False,
+                    'error': str(e)
+                }
+        
+        # Perform comparative analysis if multiple conditions
+        if len(condition_datasets) >= 2:
+            try:
+                results['comparisons'] = self._compare_conditions(
+                    condition_datasets, 
+                    current_units
+                )
+            except Exception as e:
+                results['comparisons'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+        
+        return results
+
+    def _compare_conditions(self, condition_datasets: Dict[str, pd.DataFrame],
+                           current_units: Dict) -> Dict[str, Any]:
+        """
+        Compare multiple conditions using statistical tests.
+        
+        Parameters
+        ----------
+        condition_datasets : Dict[str, pd.DataFrame]
+            Dictionary mapping condition names to their track dataframes
+        current_units : Dict
+            Unit conversion parameters
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Comparison results including statistical tests and visualizations
+        """
+        from scipy import stats
+        import numpy as np
+        
+        results = {
+            'success': True,
+            'metrics': {},
+            'statistical_tests': {},
+            'figures': {}
+        }
+        
+        # Calculate key metrics for each condition
+        condition_metrics = {}
+        for cond_name, tracks_df in condition_datasets.items():
+            try:
+                # Track lengths
+                track_lengths = tracks_df.groupby('track_id').size().values
+                
+                # Displacements
+                displacements = []
+                for track_id in tracks_df['track_id'].unique():
+                    track = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                    if len(track) >= 2:
+                        dx = track['x'].iloc[-1] - track['x'].iloc[0]
+                        dy = track['y'].iloc[-1] - track['y'].iloc[0]
+                        disp = np.sqrt(dx**2 + dy**2) * current_units['pixel_size']
+                        displacements.append(disp)
+                
+                # Velocities
+                velocities = []
+                for track_id in tracks_df['track_id'].unique():
+                    track = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                    if len(track) >= 2:
+                        dx = np.diff(track['x'].values) * current_units['pixel_size']
+                        dy = np.diff(track['y'].values) * current_units['pixel_size']
+                        dt = np.diff(track['frame'].values) * current_units['frame_interval']
+                        speeds = np.sqrt(dx**2 + dy**2) / dt
+                        velocities.extend(speeds[speeds > 0])
+                
+                condition_metrics[cond_name] = {
+                    'track_lengths': track_lengths,
+                    'displacements': np.array(displacements),
+                    'velocities': np.array(velocities) if velocities else np.array([0]),
+                    'n_tracks': len(track_lengths),
+                    'n_points': len(tracks_df)
+                }
+            except Exception as e:
+                condition_metrics[cond_name] = {
+                    'error': str(e)
+                }
+        
+        # Store metrics summary
+        results['metrics'] = {
+            name: {
+                'mean_track_length': float(np.mean(m['track_lengths'])) if 'track_lengths' in m else None,
+                'mean_displacement': float(np.mean(m['displacements'])) if 'displacements' in m else None,
+                'mean_velocity': float(np.mean(m['velocities'])) if 'velocities' in m else None,
+                'n_tracks': m.get('n_tracks', 0),
+                'n_points': m.get('n_points', 0)
+            }
+            for name, m in condition_metrics.items()
+            if 'error' not in m
+        }
+        
+        # Perform pairwise statistical comparisons
+        condition_names = list(condition_datasets.keys())
+        if len(condition_names) >= 2:
+            for i, cond1 in enumerate(condition_names):
+                for cond2 in condition_names[i+1:]:
+                    if 'error' in condition_metrics[cond1] or 'error' in condition_metrics[cond2]:
+                        continue
+                    
+                    comparison_key = f"{cond1}_vs_{cond2}"
+                    results['statistical_tests'][comparison_key] = {}
+                    
+                    # Track length comparison
+                    try:
+                        t_stat, p_val = stats.ttest_ind(
+                            condition_metrics[cond1]['track_lengths'],
+                            condition_metrics[cond2]['track_lengths']
+                        )
+                        u_stat, p_val_mw = stats.mannwhitneyu(
+                            condition_metrics[cond1]['track_lengths'],
+                            condition_metrics[cond2]['track_lengths']
+                        )
+                        results['statistical_tests'][comparison_key]['track_length'] = {
+                            't_test': {'statistic': float(t_stat), 'p_value': float(p_val)},
+                            'mann_whitney': {'statistic': float(u_stat), 'p_value': float(p_val_mw)},
+                            'significant': p_val < 0.05
+                        }
+                    except Exception:
+                        pass
+                    
+                    # Displacement comparison
+                    try:
+                        if len(condition_metrics[cond1]['displacements']) > 0 and \
+                           len(condition_metrics[cond2]['displacements']) > 0:
+                            t_stat, p_val = stats.ttest_ind(
+                                condition_metrics[cond1]['displacements'],
+                                condition_metrics[cond2]['displacements']
+                            )
+                            results['statistical_tests'][comparison_key]['displacement'] = {
+                                't_test': {'statistic': float(t_stat), 'p_value': float(p_val)},
+                                'significant': p_val < 0.05
+                            }
+                    except Exception:
+                        pass
+                    
+                    # Velocity comparison
+                    try:
+                        if len(condition_metrics[cond1]['velocities']) > 0 and \
+                           len(condition_metrics[cond2]['velocities']) > 0:
+                            t_stat, p_val = stats.ttest_ind(
+                                condition_metrics[cond1]['velocities'],
+                                condition_metrics[cond2]['velocities']
+                            )
+                            results['statistical_tests'][comparison_key]['velocity'] = {
+                                't_test': {'statistic': float(t_stat), 'p_value': float(p_val)},
+                                'significant': p_val < 0.05
+                            }
+                    except Exception:
+                        pass
+        
+        # Generate comparison visualizations
+        try:
+            results['figures']['comparison_boxplots'] = self._plot_condition_comparisons(
+                condition_metrics, current_units
+            )
+        except Exception as e:
+            results['figures']['comparison_boxplots'] = None
+            results['error'] = str(e)
+        
+        return results
+
+    def _plot_condition_comparisons(self, condition_metrics: Dict, current_units: Dict):
+        """Create comparison boxplots for multiple conditions."""
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=['Track Lengths', 'Displacements (μm)', 'Velocities (μm/s)', 'Sample Sizes'],
+            specs=[[{'type': 'box'}, {'type': 'box'}],
+                   [{'type': 'box'}, {'type': 'bar'}]]
+        )
+        
+        # Track lengths
+        for cond_name, metrics in condition_metrics.items():
+            if 'error' not in metrics and 'track_lengths' in metrics:
+                fig.add_trace(
+                    go.Box(y=metrics['track_lengths'], name=cond_name, showlegend=False),
+                    row=1, col=1
+                )
+        
+        # Displacements
+        for cond_name, metrics in condition_metrics.items():
+            if 'error' not in metrics and 'displacements' in metrics and len(metrics['displacements']) > 0:
+                fig.add_trace(
+                    go.Box(y=metrics['displacements'], name=cond_name, showlegend=False),
+                    row=1, col=2
+                )
+        
+        # Velocities
+        for cond_name, metrics in condition_metrics.items():
+            if 'error' not in metrics and 'velocities' in metrics and len(metrics['velocities']) > 0:
+                fig.add_trace(
+                    go.Box(y=metrics['velocities'], name=cond_name, showlegend=False),
+                    row=2, col=1
+                )
+        
+        # Sample sizes
+        condition_names = []
+        n_tracks = []
+        n_points = []
+        for cond_name, metrics in condition_metrics.items():
+            if 'error' not in metrics:
+                condition_names.append(cond_name)
+                n_tracks.append(metrics.get('n_tracks', 0))
+                n_points.append(metrics.get('n_points', 0))
+        
+        fig.add_trace(
+            go.Bar(x=condition_names, y=n_tracks, name='Tracks', marker_color='lightblue'),
+            row=2, col=2
+        )
+        fig.add_trace(
+            go.Bar(x=condition_names, y=n_points, name='Points', marker_color='lightcoral'),
+            row=2, col=2
+        )
+        
+        fig.update_xaxes(title_text="Condition", row=1, col=1)
+        fig.update_xaxes(title_text="Condition", row=1, col=2)
+        fig.update_xaxes(title_text="Condition", row=2, col=1)
+        fig.update_xaxes(title_text="Condition", row=2, col=2)
+        
+        fig.update_yaxes(title_text="Frames", row=1, col=1)
+        fig.update_yaxes(title_text="μm", row=1, col=2)
+        fig.update_yaxes(title_text="μm/s", row=2, col=1)
+        fig.update_yaxes(title_text="Count", row=2, col=2)
+        
+        fig.update_layout(
+            height=800,
+            title_text="Condition Comparison",
+            showlegend=True
+        )
+        
+        return fig
+
     def _display_generated_report(self, config, current_units):
         """Display the generated report with download options."""
         if not self.report_results:

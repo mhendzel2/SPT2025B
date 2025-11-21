@@ -205,7 +205,7 @@ def load_file_with_retry(
     retry_delay: float = 1.0
 ) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
-    Load a file with retry logic.
+    Load a file with retry logic and robust data cleaning.
     
     Parameters
     ----------
@@ -225,15 +225,59 @@ def load_file_with_retry(
     
     for attempt in range(max_retries):
         try:
+            df = None
+            
             if 'data' in file_info and file_info['data'] is not None:
-                df = pd.read_csv(io.BytesIO(file_info['data']))
-                return df, None
+                # Load from bytes
+                data_bytes = file_info['data']
+                if isinstance(data_bytes, str):
+                    data_bytes = data_bytes.encode('utf-8')
+                
+                # Try reading with standard CSV parser
+                try:
+                    df = pd.read_csv(io.BytesIO(data_bytes), encoding='utf-8')
+                except UnicodeDecodeError:
+                    # Try alternative encoding
+                    df = pd.read_csv(io.BytesIO(data_bytes), encoding='latin-1')
+                    
             elif 'data_path' in file_info and file_info['data_path']:
                 if Path(file_info['data_path']).exists():
                     df = pd.read_csv(file_info['data_path'])
-                    return df, None
             
-            return None, "No valid data source found"
+            if df is None:
+                return None, "No valid data source found"
+            
+            # Clean the data
+            if not df.empty:
+                # Remove any completely empty rows
+                df = df.dropna(how='all')
+                
+                # Standardize column names (strip whitespace, lowercase)
+                df.columns = df.columns.str.strip()
+                
+                # Check if first row might be a duplicate header
+                if len(df) > 1:
+                    # If all values in first row are strings matching column names
+                    first_row = df.iloc[0]
+                    if all(isinstance(val, str) and val.strip() in df.columns for val in first_row if pd.notna(val)):
+                        logging.info(f"Removing duplicate header row from {file_info.get('name', 'file')}")
+                        df = df.iloc[1:].reset_index(drop=True)
+                
+                # Convert numeric columns
+                numeric_cols = ['x', 'y', 'z', 'frame', 'track_id', 'Frame', 'Track', 'TrackID']
+                for col in df.columns:
+                    if col in numeric_cols or any(x in col.lower() for x in ['frame', 'track', 'pos']):
+                        try:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        except Exception:
+                            pass
+                
+                # Remove rows with NaN in critical columns
+                critical_cols = [c for c in ['track_id', 'frame', 'x', 'y'] if c in df.columns]
+                if critical_cols:
+                    df = df.dropna(subset=critical_cols)
+            
+            return df, None
             
         except Exception as e:
             if attempt < max_retries - 1:
@@ -253,7 +297,7 @@ def pool_dataframes_efficiently(
     deduplicate: bool = True
 ) -> pd.DataFrame:
     """
-    Efficiently pool multiple DataFrames with validation.
+    Efficiently pool multiple DataFrames with validation and column standardization.
     
     Parameters
     ----------
@@ -272,16 +316,62 @@ def pool_dataframes_efficiently(
     if not dataframes:
         return pd.DataFrame()
     
+    # Filter out empty dataframes
+    dataframes = [df for df in dataframes if not df.empty]
+    
+    if not dataframes:
+        return pd.DataFrame()
+    
+    # Standardize column names across all dataframes
+    standardized_dfs = []
+    for df in dataframes:
+        df = df.copy()
+        # Strip whitespace from column names
+        df.columns = df.columns.str.strip()
+        
+        # Standardize common column name variations
+        column_mapping = {
+            'Track': 'track_id',
+            'TrackID': 'track_id',
+            'track_ID': 'track_id',
+            'Frame': 'frame',
+            'FRAME': 'frame',
+            'X': 'x',
+            'Y': 'y',
+            'Z': 'z',
+            'Position X': 'x',
+            'Position Y': 'y',
+            'Position Z': 'z',
+        }
+        
+        # Apply mapping if columns exist
+        rename_dict = {}
+        for old_name, new_name in column_mapping.items():
+            if old_name in df.columns and new_name not in df.columns:
+                rename_dict[old_name] = new_name
+        
+        if rename_dict:
+            df = df.rename(columns=rename_dict)
+            logging.info(f"Standardized column names: {rename_dict}")
+        
+        standardized_dfs.append(df)
+    
+    dataframes = standardized_dfs
+    
     # Validate schema consistency
     if validate and len(dataframes) > 1:
         first_cols = set(dataframes[0].columns)
+        inconsistent = False
         for i, df in enumerate(dataframes[1:], 1):
             if set(df.columns) != first_cols:
-                logging.warning(f"DataFrame {i} has inconsistent columns")
-                # Align columns
-                all_cols = sorted(set.union(*[set(df.columns) for df in dataframes]))
-                dataframes = [df.reindex(columns=all_cols) for df in dataframes]
-                break
+                logging.warning(f"DataFrame {i} has inconsistent columns: {set(df.columns).symmetric_difference(first_cols)}")
+                inconsistent = True
+        
+        if inconsistent:
+            # Align columns across all dataframes
+            all_cols = sorted(set.union(*[set(df.columns) for df in dataframes]))
+            dataframes = [df.reindex(columns=all_cols) for df in dataframes]
+            logging.info(f"Aligned all DataFrames to common schema with {len(all_cols)} columns")
     
     # Concatenate efficiently
     result = pd.concat(dataframes, ignore_index=True, copy=False)
@@ -289,7 +379,7 @@ def pool_dataframes_efficiently(
     # Remove duplicates if requested
     if deduplicate and 'track_id' in result.columns and 'frame' in result.columns:
         before_count = len(result)
-        result = result.drop_duplicates(subset=['track_id', 'frame'])
+        result = result.drop_duplicates(subset=['track_id', 'frame'], keep='first')
         after_count = len(result)
         if before_count > after_count:
             logging.info(f"Removed {before_count - after_count} duplicate rows")

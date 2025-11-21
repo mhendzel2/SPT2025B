@@ -2108,8 +2108,198 @@ elif st.session_state.active_page == "Project Management":
             with analysis_col2:
                 st.subheader("Analysis Options")
                 
+                # Select analyses to run
+                with st.expander("📋 Select Analyses", expanded=False):
+                    st.write("**Choose analyses to run on pooled condition data:**")
+                    
+                    if REPORT_GENERATOR_AVAILABLE:
+                        from enhanced_report_generator import EnhancedSPTReportGenerator
+                        temp_gen = EnhancedSPTReportGenerator(pd.DataFrame(), 0.1, 0.1)
+                        
+                        # Group analyses by category
+                        analyses_by_category = {}
+                        for key, analysis in temp_gen.available_analyses.items():
+                            category = analysis.get('category', 'Other')
+                            if category not in analyses_by_category:
+                                analyses_by_category[category] = []
+                            analyses_by_category[category].append((key, analysis['name']))
+                        
+                        selected_analyses = []
+                        for category, analyses in sorted(analyses_by_category.items()):
+                            st.write(f"**{category}**")
+                            for key, name in analyses:
+                                if st.checkbox(name, key=f"batch_analysis_{key}", value=key in ['basic_statistics', 'diffusion_analysis']):
+                                    selected_analyses.append(key)
+                    else:
+                        selected_analyses = []
+                        st.info("Enhanced Report Generator not available")
+                
                 # Quick analysis buttons
-                if st.button("📈 Generate Comparative Report", type="primary"):
+                if st.button("📊 Generate Individual Reports", type="primary"):
+                    if len(conditions_to_analyze) < 1:
+                        st.error("Select at least one condition to analyze")
+                    elif not REPORT_GENERATOR_AVAILABLE:
+                        st.error("Enhanced Report Generator not available")
+                    else:
+                        with st.spinner("Generating reports for each condition..."):
+                            try:
+                                # Pool data from each condition
+                                condition_datasets = {}
+                                pooling_errors = {}
+                                
+                                for cond in conditions_to_analyze:
+                                    pooled_result = cond.pool_tracks()
+                                    if isinstance(pooled_result, tuple):
+                                        pooled_df, errors = pooled_result
+                                        if errors:
+                                            pooling_errors[cond.name] = errors
+                                    else:
+                                        pooled_df = pooled_result
+                                    
+                                    if pooled_df is not None and not pooled_df.empty:
+                                        condition_datasets[cond.name] = pooled_df
+                                
+                                if not condition_datasets:
+                                    st.error("No valid data in selected conditions")
+                                else:
+                                    # Show pooling summary
+                                    st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
+                                    
+                                    if pooling_errors:
+                                        with st.expander("⚠️ Pooling Warnings", expanded=False):
+                                            for cond_name, errors in pooling_errors.items():
+                                                st.warning(f"**{cond_name}:** {len(errors)} files had errors")
+                                    
+                                    # Get units
+                                    pixel_size = st.session_state.get('pixel_size', 0.1)
+                                    frame_interval = st.session_state.get('frame_interval', 0.1)
+                                    
+                                    # Generate reports
+                                    from enhanced_report_generator import EnhancedSPTReportGenerator
+                                    generator = EnhancedSPTReportGenerator(pd.DataFrame(), pixel_size, frame_interval)
+                                    
+                                    analyses_to_run = selected_analyses if selected_analyses else ['basic_statistics', 'diffusion_analysis']
+                                    
+                                    report_results = generator.generate_condition_reports(
+                                        condition_datasets,
+                                        analyses_to_run,
+                                        pixel_size,
+                                        frame_interval
+                                    )
+                                    
+                                    # Store results in session state
+                                    st.session_state['batch_report_results'] = report_results
+                                    
+                                    # Display results
+                                    st.subheader("📊 Analysis Results")
+                                    
+                                    # Summary table
+                                    summary_data = []
+                                    for name, df in condition_datasets.items():
+                                        n_tracks = df['track_id'].nunique() if 'track_id' in df.columns else 0
+                                        n_frames = df['frame'].nunique() if 'frame' in df.columns else 0
+                                        n_points = len(df)
+                                        
+                                        cond_results = report_results['conditions'].get(name, {})
+                                        status = "✅ Success" if cond_results.get('success', False) else "❌ Failed"
+                                        
+                                        summary_data.append({
+                                            'Condition': name,
+                                            'Status': status,
+                                            'Tracks': n_tracks,
+                                            'Frames': n_frames,
+                                            'Data Points': n_points
+                                        })
+                                    
+                                    summary_df = pd.DataFrame(summary_data)
+                                    st.dataframe(summary_df, use_container_width=True)
+                                    
+                                    # Show individual condition results
+                                    for cond_name, cond_result in report_results['conditions'].items():
+                                        with st.expander(f"📈 {cond_name} - Detailed Results", expanded=False):
+                                            if cond_result.get('success', False):
+                                                st.write(f"**Analyses completed:** {len(cond_result.get('analysis_results', {}))}")
+                                                st.write(f"**Figures generated:** {len(cond_result.get('figures', {}))}")
+                                                
+                                                # Show figures
+                                                for analysis_key, fig in cond_result.get('figures', {}).items():
+                                                    if fig:
+                                                        st.plotly_chart(fig, use_container_width=True)
+                                            else:
+                                                st.error(f"Analysis failed: {cond_result.get('error', 'Unknown error')}")
+                                    
+                                    # Show comparison results if available
+                                    if report_results.get('comparisons') and len(condition_datasets) >= 2:
+                                        st.divider()
+                                        st.subheader("🔬 Statistical Comparisons")
+                                        
+                                        comparisons = report_results['comparisons']
+                                        
+                                        if comparisons.get('success', False):
+                                            # Show metrics summary
+                                            if 'metrics' in comparisons:
+                                                st.write("**Summary Metrics:**")
+                                                metrics_df = pd.DataFrame(comparisons['metrics']).T
+                                                st.dataframe(metrics_df, use_container_width=True)
+                                            
+                                            # Show statistical tests
+                                            if 'statistical_tests' in comparisons and comparisons['statistical_tests']:
+                                                st.write("**Pairwise Statistical Tests:**")
+                                                for comparison, tests in comparisons['statistical_tests'].items():
+                                                    with st.expander(f"📊 {comparison}", expanded=False):
+                                                        for metric, test_results in tests.items():
+                                                            st.write(f"**{metric.replace('_', ' ').title()}:**")
+                                                            if 't_test' in test_results:
+                                                                p_val = test_results['t_test']['p_value']
+                                                                significant = test_results.get('significant', False)
+                                                                sig_text = "✅ Significant" if significant else "❌ Not significant"
+                                                                st.write(f"- t-test p-value: {p_val:.4f} ({sig_text})")
+                                                            if 'mann_whitney' in test_results:
+                                                                p_val = test_results['mann_whitney']['p_value']
+                                                                st.write(f"- Mann-Whitney p-value: {p_val:.4f}")
+                                            
+                                            # Show comparison figures
+                                            if 'figures' in comparisons and comparisons['figures'].get('comparison_boxplots'):
+                                                st.plotly_chart(comparisons['figures']['comparison_boxplots'], use_container_width=True)
+                                        else:
+                                            st.warning(f"Comparison analysis failed: {comparisons.get('error', 'Unknown error')}")
+                                    
+                                    # Download options
+                                    st.divider()
+                                    st.subheader("💾 Export Results")
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        # JSON export
+                                        report_json = json.dumps(report_results, indent=2, default=str)
+                                        st.download_button(
+                                            "📄 Download Full Report (JSON)",
+                                            data=report_json,
+                                            file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                            mime="application/json"
+                                        )
+                                    
+                                    with col2:
+                                        # CSV export of metrics
+                                        if report_results.get('comparisons', {}).get('metrics'):
+                                            metrics_csv = pd.DataFrame(report_results['comparisons']['metrics']).T.to_csv()
+                                            st.download_button(
+                                                "📊 Download Metrics (CSV)",
+                                                data=metrics_csv,
+                                                file_name=f"batch_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                                mime="text/csv"
+                                            )
+                                    
+                            except Exception as e:
+                                st.error(f"Error generating reports: {e}")
+                                import traceback
+                                with st.expander("🐛 Error Details"):
+                                    st.code(traceback.format_exc())
+                
+                st.divider()
+                
+                # Legacy comparative report button (simpler version)
+                if st.button("📈 Generate Comparative Report", type="secondary"):
                     if len(conditions_to_analyze) < 1:
                         st.error("Select at least one condition to analyze")
                     else:
