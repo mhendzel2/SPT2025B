@@ -2224,7 +2224,7 @@ elif st.session_state.active_page == "Project Management":
                                                 # Show figures
                                                 for analysis_key, fig in cond_result.get('figures', {}).items():
                                                     if fig:
-                                                        st.plotly_chart(fig, use_container_width=True)
+                                                        st.plotly_chart(fig, use_container_width=True, key=f"fig_{cond_name}_{analysis_key}")
                                             else:
                                                 st.error(f"Analysis failed: {cond_result.get('error', 'Unknown error')}")
                                     
@@ -2260,7 +2260,7 @@ elif st.session_state.active_page == "Project Management":
                                             
                                             # Show comparison figures
                                             if 'figures' in comparisons and comparisons['figures'].get('comparison_boxplots'):
-                                                st.plotly_chart(comparisons['figures']['comparison_boxplots'], use_container_width=True)
+                                                st.plotly_chart(comparisons['figures']['comparison_boxplots'], use_container_width=True, key="comparison_boxplots")
                                         else:
                                             st.warning(f"Comparison analysis failed: {comparisons.get('error', 'Unknown error')}")
                                     
