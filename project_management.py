@@ -109,6 +109,18 @@ class Condition:
                 use_threads=True
             )
             
+            # Add cell identifiers to each dataframe before pooling
+            for idx, (df, file_info) in enumerate(zip(dataframes, self.files)):
+                if df is not None and not df.empty:
+                    # Add cell_id if not already present (preserves subpopulation assignments)
+                    if 'cell_id' not in df.columns:
+                        df['cell_id'] = f"cell_{idx}"
+                    
+                    # Add source_file if not already present
+                    if 'source_file' not in df.columns:
+                        file_name = file_info.get('file_name') or file_info.get('name', f'file_{idx}')
+                        df['source_file'] = file_name
+            
             # Pool DataFrames efficiently
             result = pool_dataframes_efficiently(
                 dataframes,
@@ -122,7 +134,7 @@ class Condition:
             # Fallback to original sequential implementation
             pooled = []
             errors = []
-            for f in self.files:
+            for idx, f in enumerate(self.files):
                 try:
                     df = None
                     
@@ -162,6 +174,14 @@ class Condition:
                         critical_cols = [c for c in ['track_id', 'frame', 'x', 'y'] if c in df.columns]
                         if critical_cols:
                             df = df.dropna(subset=critical_cols)
+                        
+                        # Add cell identifiers before pooling
+                        if 'cell_id' not in df.columns:
+                            df['cell_id'] = f"cell_{idx}"
+                        
+                        if 'source_file' not in df.columns:
+                            file_name = f.get('file_name') or f.get('name', f'file_{idx}')
+                            df['source_file'] = file_name
                         
                         pooled.append(df)
                         

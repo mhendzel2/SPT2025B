@@ -1,7 +1,77 @@
 # Comparative Group Analysis Implementation
 
 ## Overview
-Added comprehensive functionality to generate reports from pooled condition data and perform statistical comparisons between experimental groups.
+Added comprehensive functionality with **automatic subpopulation detection as the FIRST step** before pooling data. This workflow identifies heterogeneous cell populations within each condition, then intelligently pools data by subpopulation for accurate group comparisons.
+
+## Updated Workflow
+
+### 🔬 Step 1: Detect Subpopulations (NEW - REQUIRED FIRST STEP)
+**Before pooling any data**, the system now:
+
+1. **Analyzes single-cell heterogeneity** within each condition
+2. **Detects distinct subpopulations** (e.g., cell cycle stages, metabolic states)
+3. **Characterizes each subpopulation** with statistical metrics
+4. **Labels cells** with subpopulation assignments
+
+**Why This Matters:**
+- Prevents inappropriate pooling of heterogeneous populations
+- Reveals hidden biological structure masked by averaging
+- Ensures accurate statistical comparisons between matched subpopulations
+- Identifies treatment-induced population shifts
+
+**Location:** Project Management → Each Condition → "Step 1: Detect Subpopulations"
+
+**Button:** 🔬 Detect Subpopulations
+
+**What Happens:**
+- Automatically assigns cell IDs if missing (spatial clustering)
+- Runs clustering analysis (K-means, GMM, or Hierarchical)
+- Tests 2-4 cluster solutions, selects optimal
+- Reports number of subpopulations detected
+- Shows cell distribution across subpopulations
+
+**Output:**
+```
+✓ Detected 2 subpopulations in 'Control'
+📊 Analyzed 45 cells using gmm
+Subpopulation Distribution:
+- Subpop 0: 27 cells (60.0%)
+- Subpop 1: 18 cells (40.0%)
+```
+
+### 📊 Step 2: Pool by Subpopulation
+**After** subpopulation detection, choose pooling strategy:
+
+**Option A: Pool by Subpopulation (RECOMMENDED)**
+- Keeps subpopulation labels attached to each track
+- Enables subgroup-level comparisons
+- Preserves biological heterogeneity information
+- Allows analysis of:
+  - Overall group differences
+  - Subpopulation-specific effects
+  - Treatment-induced population shifts
+
+**Option B: Pool All Together**
+- Ignores subpopulation structure
+- Traditional approach (not recommended if heterogeneity detected)
+- Use only if condition appears homogeneous
+
+**Location:** Project Management → Each Condition → "Step 2: Pool by Subpopulation"
+
+**Button:** 📊 Pool & Load
+
+**Output:**
+```
+✓ Loaded 1,234 tracks with subpopulation labels
+Track distribution by subpopulation:
+- Subpopulation 0: 742 tracks
+- Subpopulation 1: 492 tracks
+```
+
+### ⚡ Quick Pool Option
+**For experienced users only:** Skip subpopulation analysis if you're certain your population is homogeneous or want traditional bulk analysis.
+
+**Button:** ⚡ Quick Pool (Skip Analysis)
 
 ## New Features
 
@@ -123,6 +193,64 @@ Treatment A vs Treatment B:
   - displacement: p=0.0000 (*) ✅ Significant
   - velocity: p=0.0000 (*) ✅ Significant
 ```
+
+## Complete Workflow Example
+
+### Scenario: Comparing Control vs. Treatment
+
+**1. Create Project with Two Conditions**
+```
+Project: "Drug Response Study"
+├── Condition 1: "Control" (5 files)
+└── Condition 2: "Treatment" (5 files)
+```
+
+**2. For Each Condition - Detect Subpopulations**
+
+**Control Condition:**
+```
+Click: 🔬 Detect Subpopulations
+Result: ✓ Detected 2 subpopulations
+- Subpop 0 (G1 phase): 60% of cells, D=0.05 μm²/s
+- Subpop 1 (S/G2 phase): 40% of cells, D=0.12 μm²/s
+```
+
+**Treatment Condition:**
+```
+Click: 🔬 Detect Subpopulations
+Result: ✓ Detected 3 subpopulations
+- Subpop 0 (G1 phase): 40% of cells, D=0.05 μm²/s
+- Subpop 1 (S/G2 phase): 35% of cells, D=0.12 μm²/s
+- Subpop 2 (Arrested): 25% of cells, D=0.02 μm²/s ← NEW!
+```
+
+**Key Insight:** Treatment induces a new arrested subpopulation (25% of cells)!
+
+**3. Pool by Subpopulation**
+```
+For each condition:
+  Select: "Pool by subpopulation"
+  Click: 📊 Pool & Load
+  Result: Tracks tagged with subpopulation labels
+```
+
+**4. Comparative Analysis**
+Now you can:
+- **Compare matched subpopulations**: Control Subpop-0 vs. Treatment Subpop-0
+- **Analyze population shifts**: Treatment has 25% arrested cells vs. 0% in control
+- **Subgroup-specific effects**: Does treatment affect G1 and S/G2 differently?
+
+**5. Generate Reports**
+```
+Select both conditions
+Choose analyses: 
+  ☑ Basic Statistics
+  ☑ Diffusion Analysis
+  ☑ Motion Classification
+Click: 📊 Generate Individual Reports
+```
+
+**Result:** Complete statistical comparison with subpopulation-aware analysis
 
 ## Workflow
 

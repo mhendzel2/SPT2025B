@@ -5026,9 +5026,17 @@ class EnhancedSPTReportGenerator:
     def generate_condition_reports(self, condition_datasets: Dict[str, pd.DataFrame], 
                                    selected_analyses: List[str],
                                    pixel_size: float = 0.1,
-                                   frame_interval: float = 0.1) -> Dict[str, Any]:
+                                   frame_interval: float = 0.1,
+                                   detect_subpopulations: bool = True,
+                                   subpop_min_tracks_per_cell: int = 10) -> Dict[str, Any]:
         """
-        Generate reports for multiple conditions.
+        Generate reports for multiple conditions with automatic subpopulation detection.
+        
+        **Workflow:**
+        1. Detect subpopulations within each condition (if cell_id available)
+        2. Generate reports for each subpopulation separately
+        3. Perform comparative analysis at subpopulation level
+        4. Also provide condition-level pooled results
         
         Parameters
         ----------
@@ -5040,17 +5048,24 @@ class EnhancedSPTReportGenerator:
             Pixel size in micrometers
         frame_interval : float
             Frame interval in seconds
+        detect_subpopulations : bool
+            Whether to detect subpopulations before analysis (default: True)
+        subpop_min_tracks_per_cell : int
+            Minimum tracks per cell for subpopulation analysis
             
         Returns
         -------
         Dict[str, Any]
-            Dictionary with results for each condition and comparison statistics
+            Dictionary with results for each condition, subpopulations, and comparisons
         """
         results = {
             'conditions': {},
+            'subpopulations': {},
             'comparisons': {},
             'success': True,
-            'n_conditions': len(condition_datasets)
+            'n_conditions': len(condition_datasets),
+            'heterogeneity_detected': False,
+            'analysis_strategy': 'pooled'  # 'pooled' or 'subpopulation-based'
         }
         
         current_units = {
@@ -5060,29 +5075,304 @@ class EnhancedSPTReportGenerator:
             'time': 's'
         }
         
-        # Generate reports for each condition
-        for cond_name, tracks_df in condition_datasets.items():
-            try:
-                cond_results = self.generate_batch_report(tracks_df, selected_analyses, cond_name)
-                results['conditions'][cond_name] = cond_results
-            except Exception as e:
-                results['conditions'][cond_name] = {
-                    'success': False,
-                    'error': str(e)
-                }
+        # Step 1: Detect subpopulations if enabled and cell_id available
+        subpopulation_results = {}
+        has_subpopulations = False
         
-        # Perform comparative analysis if multiple conditions
+        if detect_subpopulations:
+            try:
+                # Check if any condition has cell_id column
+                has_cell_ids = any('cell_id' in df.columns for df in condition_datasets.values())
+                
+                if has_cell_ids:
+                    from subpopulation_analysis import (
+                        SubpopulationAnalyzer,
+                        SubpopulationConfig
+                    )
+                    
+                    config = SubpopulationConfig(
+                        min_tracks_per_cell=subpop_min_tracks_per_cell,
+                        clustering_methods=['kmeans', 'gmm'],
+                        n_clusters_range=(2, 4),
+                        use_pca=True
+                    )
+                    
+                    analyzer = SubpopulationAnalyzer(config)
+                    
+                    # Analyze each condition
+                    for cond_name, tracks_df in condition_datasets.items():
+                        if 'cell_id' not in tracks_df.columns:
+                            continue
+                        
+                        subpop_result = analyzer.analyze_group(
+                            tracks_df, 
+                            cond_name, 
+                            cell_id_column='cell_id'
+                        )
+                        
+                        subpopulation_results[cond_name] = subpop_result
+                        
+                        if subpop_result.get('subpopulations_detected'):
+                            has_subpopulations = True
+                    
+                    results['subpopulations'] = subpopulation_results
+                    results['heterogeneity_detected'] = has_subpopulations
+                    
+                    # If heterogeneity detected, switch to subpopulation-based analysis
+                    if has_subpopulations:
+                        results['analysis_strategy'] = 'subpopulation-based'
+                        
+            except ImportError:
+                # Subpopulation analysis not available, proceed with pooled analysis
+                pass
+            except Exception as e:
+                # Log error but continue with pooled analysis
+                results['subpopulation_error'] = str(e)
+        
+        # Step 2: Generate reports based on detected structure
+        if has_subpopulations and results['analysis_strategy'] == 'subpopulation-based':
+            # Generate reports for each subpopulation separately
+            results = self._generate_subpopulation_reports(
+                condition_datasets,
+                subpopulation_results,
+                selected_analyses,
+                current_units,
+                results
+            )
+        else:
+            # Standard pooled analysis
+            results['analysis_strategy'] = 'pooled'
+            
+            for cond_name, tracks_df in condition_datasets.items():
+                try:
+                    cond_results = self.generate_batch_report(tracks_df, selected_analyses, cond_name)
+                    results['conditions'][cond_name] = cond_results
+                except Exception as e:
+                    results['conditions'][cond_name] = {
+                        'success': False,
+                        'error': str(e)
+                    }
+        
+        # Step 3: Perform comparative analysis
         if len(condition_datasets) >= 2:
             try:
-                results['comparisons'] = self._compare_conditions(
-                    condition_datasets, 
-                    current_units
-                )
+                if has_subpopulations:
+                    # Compare matched subpopulations across conditions
+                    results['comparisons'] = self._compare_subpopulations(
+                        condition_datasets,
+                        subpopulation_results,
+                        current_units
+                    )
+                else:
+                    # Compare conditions directly
+                    results['comparisons'] = self._compare_conditions(
+                        condition_datasets, 
+                        current_units
+                    )
             except Exception as e:
                 results['comparisons'] = {
                     'success': False,
                     'error': str(e)
                 }
+        
+        return results
+    
+    def _generate_subpopulation_reports(self, condition_datasets: Dict[str, pd.DataFrame],
+                                       subpopulation_results: Dict[str, Any],
+                                       selected_analyses: List[str],
+                                       current_units: Dict,
+                                       results: Dict) -> Dict[str, Any]:
+        """
+        Generate reports for each subpopulation separately.
+        
+        Parameters
+        ----------
+        condition_datasets : Dict[str, pd.DataFrame]
+            Original condition datasets
+        subpopulation_results : Dict[str, Any]
+            Subpopulation detection results for each condition
+        selected_analyses : List[str]
+            Analyses to perform
+        current_units : Dict
+            Unit parameters
+        results : Dict
+            Results dictionary to update
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Updated results with subpopulation-specific analyses
+        """
+        for cond_name, subpop_result in subpopulation_results.items():
+            if not subpop_result.get('success') or not subpop_result.get('subpopulations_detected'):
+                # Fallback to pooled analysis for this condition
+                tracks_df = condition_datasets[cond_name]
+                try:
+                    cond_results = self.generate_batch_report(tracks_df, selected_analyses, cond_name)
+                    results['conditions'][cond_name] = cond_results
+                except Exception as e:
+                    results['conditions'][cond_name] = {
+                        'success': False,
+                        'error': str(e)
+                    }
+                continue
+            
+            # Get cell-level data with subpopulation assignments
+            cell_df = subpop_result.get('cell_level_data')
+            if cell_df is None:
+                continue
+            
+            # Get original track data
+            tracks_df = condition_datasets[cond_name]
+            
+            # Generate report for each subpopulation
+            condition_subpop_results = {
+                'condition_name': cond_name,
+                'n_subpopulations': subpop_result['n_subpopulations'],
+                'subpopulations': {}
+            }
+            
+            for subpop_id in cell_df['subpopulation'].unique():
+                if subpop_id == -1:  # Skip noise points
+                    continue
+                
+                # Get cells in this subpopulation
+                subpop_cells = cell_df[cell_df['subpopulation'] == subpop_id]['cell_id'].values
+                
+                # Filter tracks to only include this subpopulation
+                subpop_tracks = tracks_df[tracks_df['cell_id'].isin(subpop_cells)].copy()
+                
+                if len(subpop_tracks) == 0:
+                    continue
+                
+                # Generate report for this subpopulation
+                try:
+                    subpop_name = f"{cond_name}_Subpop{subpop_id}"
+                    subpop_report = self.generate_batch_report(
+                        subpop_tracks, 
+                        selected_analyses, 
+                        subpop_name
+                    )
+                    
+                    # Add subpopulation metadata
+                    subpop_report['subpopulation_id'] = int(subpop_id)
+                    subpop_report['n_cells'] = len(subpop_cells)
+                    subpop_report['fraction_of_condition'] = len(subpop_cells) / len(cell_df)
+                    
+                    condition_subpop_results['subpopulations'][f'subpop_{subpop_id}'] = subpop_report
+                    
+                except Exception as e:
+                    condition_subpop_results['subpopulations'][f'subpop_{subpop_id}'] = {
+                        'success': False,
+                        'error': str(e)
+                    }
+            
+            results['conditions'][cond_name] = condition_subpop_results
+        
+        return results
+    
+    def _compare_subpopulations(self, condition_datasets: Dict[str, pd.DataFrame],
+                               subpopulation_results: Dict[str, Any],
+                               current_units: Dict) -> Dict[str, Any]:
+        """
+        Compare subpopulations across conditions.
+        
+        Strategy:
+        1. Compare subpopulation fractions between conditions
+        2. Compare matched subpopulations (e.g., Subpop0 in Control vs. Treatment)
+        3. Identify condition-specific subpopulations
+        
+        Parameters
+        ----------
+        condition_datasets : Dict[str, pd.DataFrame]
+            Track data for each condition
+        subpopulation_results : Dict[str, Any]
+            Subpopulation analysis results
+        current_units : Dict
+            Unit parameters
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Comparison results
+        """
+        from scipy import stats
+        import numpy as np
+        
+        results = {
+            'success': True,
+            'comparison_type': 'subpopulation-based',
+            'fraction_comparisons': {},
+            'matched_subpopulation_comparisons': {},
+            'figures': {}
+        }
+        
+        # 1. Compare subpopulation fractions
+        fraction_data = {}
+        for cond_name, subpop_result in subpopulation_results.items():
+            if not subpop_result.get('success') or not subpop_result.get('subpopulations_detected'):
+                continue
+            
+            subpop_chars = subpop_result.get('subpopulation_characteristics', {})
+            fractions = {}
+            
+            for subpop_name, chars in subpop_chars.items():
+                subpop_id = chars['subpopulation_id']
+                fractions[f'subpop_{subpop_id}'] = chars['fraction_of_total']
+            
+            fraction_data[cond_name] = fractions
+        
+        results['fraction_comparisons'] = fraction_data
+        
+        # 2. Compare matched subpopulations across conditions
+        # Find common subpopulation IDs
+        all_subpop_ids = set()
+        for cond_name, subpop_result in subpopulation_results.items():
+            if subpop_result.get('success') and subpop_result.get('subpopulations_detected'):
+                cell_df = subpop_result.get('cell_level_data')
+                if cell_df is not None:
+                    all_subpop_ids.update(cell_df['subpopulation'].unique())
+        
+        # Remove noise points
+        all_subpop_ids.discard(-1)
+        
+        # Compare each subpopulation across conditions
+        for subpop_id in all_subpop_ids:
+            subpop_comparison = {
+                'subpopulation_id': int(subpop_id),
+                'conditions_present': [],
+                'metrics': {}
+            }
+            
+            # Collect data for this subpopulation from each condition
+            subpop_data = {}
+            
+            for cond_name, subpop_result in subpopulation_results.items():
+                if not subpop_result.get('success'):
+                    continue
+                
+                cell_df = subpop_result.get('cell_level_data')
+                if cell_df is None or subpop_id not in cell_df['subpopulation'].values:
+                    continue
+                
+                subpop_cells = cell_df[cell_df['subpopulation'] == subpop_id]['cell_id'].values
+                tracks_df = condition_datasets[cond_name]
+                subpop_tracks = tracks_df[tracks_df['cell_id'].isin(subpop_cells)]
+                
+                if len(subpop_tracks) > 0:
+                    subpop_data[cond_name] = subpop_tracks
+                    subpop_comparison['conditions_present'].append(cond_name)
+            
+            # If this subpopulation exists in multiple conditions, compare them
+            if len(subpop_data) >= 2:
+                try:
+                    comparison_result = self._compare_conditions(subpop_data, current_units)
+                    subpop_comparison['statistical_tests'] = comparison_result.get('statistical_tests', {})
+                    subpop_comparison['metrics'] = comparison_result.get('metrics', {})
+                except Exception as e:
+                    subpop_comparison['error'] = str(e)
+            
+            results['matched_subpopulation_comparisons'][f'subpop_{subpop_id}'] = subpop_comparison
         
         return results
 

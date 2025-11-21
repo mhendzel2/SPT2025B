@@ -2308,27 +2308,336 @@ elif st.session_state.active_page == "Project Management":
                             st.success(f"All files removed from '{cond.name}'")
                             st.rerun()
 
-                # Pool and preview
-                if st.button("Pool files into condition dataset", key=f"pool_{cond.id}"):
-                    pooled_result = cond.pool_tracks()
-                    if isinstance(pooled_result, tuple):
-                        pooled, errors = pooled_result
-                    else:
-                        pooled = pooled_result
-                        errors = []
+                # Subpopulation detection and pooling workflow
+                st.write("---")
+                st.write("**Analysis Workflow:**")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Step 1: Detect Subpopulations**")
+                    if st.button("🔬 Detect Subpopulations", key=f"subpop_{cond.id}", type="primary"):
+                        with st.spinner("Analyzing single-cell heterogeneity..."):
+                            try:
+                                # Strategy: Each file represents one cell/nucleus
+                                # Analyze track-level variation within each file to characterize cells
+                                
+                                st.info(f"Analyzing {len(cond.files)} cells (files) in condition '{cond.name}'")
+                                
+                                # Collect per-cell (per-file) features
+                                cell_features_list = []
+                                all_tracks_with_cell_id = []
+                                
+                                for file_idx, file_info in enumerate(cond.files):
+                                    try:
+                                        # Load this cell's data
+                                        import pandas as pd_local, io as io_local
+                                        
+                                        # Try multiple ways to get the data
+                                        df = None
+                                        if file_info.get('data'):
+                                            # Data stored as bytes
+                                            df = pd_local.read_csv(io_local.BytesIO(file_info['data']))
+                                        elif file_info.get('data_path') and os.path.exists(file_info['data_path']):
+                                            # Data stored in file path
+                                            df = pd_local.read_csv(file_info['data_path'])
+                                        elif file_info.get('path') and os.path.exists(file_info['path']):
+                                            # Legacy path field
+                                            from data_loader import load_tracks_file
+                                            df = load_tracks_file(file_info['path'])
+                                        
+                                        if df is None or df.empty:
+                                            st.warning(f"Could not load data from {file_info.get('name', 'unknown file')}")
+                                            continue
+                                        
+                                        # Assign cell_id based on file
+                                        cell_id = f"cell_{file_idx}"
+                                        df['cell_id'] = cell_id
+                                        df['source_file'] = file_info['name']
+                                        all_tracks_with_cell_id.append(df)
+                                        
+                                        # Calculate per-cell features from track variation
+                                        n_tracks = df['track_id'].nunique()
+                                        
+                                        if n_tracks < 5:  # Need minimum tracks for meaningful statistics
+                                            continue
+                                        
+                                        # Get track-level statistics
+                                        track_stats = df.groupby('track_id').agg({
+                                            'x': ['mean', 'std'],
+                                            'y': ['mean', 'std'],
+                                            'frame': ['min', 'max', 'count']
+                                        }).reset_index()
+                                        
+                                        track_stats.columns = ['track_id', 'x_mean', 'x_std', 'y_mean', 'y_std', 
+                                                              'frame_min', 'frame_max', 'track_length']
+                                        
+                                        # Calculate displacements per track
+                                        track_displacements = []
+                                        for tid, track_df in df.groupby('track_id'):
+                                            if len(track_df) < 2:
+                                                continue
+                                            dx = np.diff(track_df['x'].values)
+                                            dy = np.diff(track_df['y'].values)
+                                            disp = np.sqrt(dx**2 + dy**2)
+                                            track_displacements.append({
+                                                'track_id': tid,
+                                                'mean_displacement': np.mean(disp),
+                                                'total_displacement': np.sum(disp)
+                                            })
+                                        
+                                        disp_df = pd.DataFrame(track_displacements)
+                                        
+                                        # Aggregate to cell-level features
+                                        cell_features = {
+                                            'cell_id': cell_id,
+                                            'source_file': file_info['name'],
+                                            'n_tracks': n_tracks,
+                                            
+                                            # Track length statistics (measures track stability/lifetime)
+                                            'mean_track_length': track_stats['track_length'].mean(),
+                                            'std_track_length': track_stats['track_length'].std(),
+                                            'cv_track_length': track_stats['track_length'].std() / track_stats['track_length'].mean() if track_stats['track_length'].mean() > 0 else 0,
+                                            
+                                            # Displacement statistics (measures mobility)
+                                            'mean_displacement_per_track': disp_df['mean_displacement'].mean() if not disp_df.empty else 0,
+                                            'std_displacement_per_track': disp_df['mean_displacement'].std() if not disp_df.empty else 0,
+                                            'cv_displacement': (disp_df['mean_displacement'].std() / disp_df['mean_displacement'].mean()) if not disp_df.empty and disp_df['mean_displacement'].mean() > 0 else 0,
+                                            
+                                            # Spatial characteristics
+                                            'spatial_extent_x': df['x'].max() - df['x'].min(),
+                                            'spatial_extent_y': df['y'].max() - df['y'].min(),
+                                            
+                                            # Temporal characteristics
+                                            'total_frames': df['frame'].max() - df['frame'].min() + 1,
+                                            
+                                            # Heterogeneity measures (variation within cell)
+                                            'track_length_heterogeneity': track_stats['track_length'].std() / track_stats['track_length'].mean() if track_stats['track_length'].mean() > 0 else 0,
+                                            'displacement_heterogeneity': disp_df['mean_displacement'].std() / disp_df['mean_displacement'].mean() if not disp_df.empty and disp_df['mean_displacement'].mean() > 0 else 0
+                                        }
+                                        
+                                        cell_features_list.append(cell_features)
+                                        
+                                    except Exception as e:
+                                        st.warning(f"Could not analyze file {file_info['name']}: {str(e)}")
+                                        continue
+                                
+                                if len(cell_features_list) < 5:
+                                    st.error(f"Insufficient cells for analysis. Found {len(cell_features_list)} cells, need at least 5.")
+                                    st.info("Each file should represent one cell with multiple tracks.")
+                                    continue
+                                
+                                # Create cell-level dataframe
+                                cell_df = pd.DataFrame(cell_features_list)
+                                
+                                # Prepare features for clustering
+                                feature_cols = [
+                                    'mean_track_length', 'cv_track_length',
+                                    'mean_displacement_per_track', 'cv_displacement',
+                                    'track_length_heterogeneity', 'displacement_heterogeneity'
+                                ]
+                                
+                                available_features = [f for f in feature_cols if f in cell_df.columns]
+                                X = cell_df[available_features].fillna(0)
+                                
+                                # Standardize features
+                                from sklearn.preprocessing import StandardScaler
+                                scaler = StandardScaler()
+                                X_scaled = scaler.fit_transform(X)
+                                
+                                # Try different numbers of clusters
+                                from sklearn.cluster import KMeans
+                                from sklearn.metrics import silhouette_score
+                                
+                                best_k = 2
+                                best_score = -1
+                                
+                                for k in range(2, min(5, len(cell_df))):
+                                    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+                                    labels = kmeans.fit_predict(X_scaled)
+                                    
+                                    if len(np.unique(labels)) > 1:
+                                        score = silhouette_score(X_scaled, labels)
+                                        if score > best_score:
+                                            best_score = score
+                                            best_k = k
+                                
+                                # Final clustering with optimal k
+                                kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+                                cell_df['subpopulation'] = kmeans.fit_predict(X_scaled)
+                                
+                                # Check if subpopulations are meaningful (silhouette > 0.25)
+                                subpops_detected = best_score > 0.25
+                                
+                                # Create result structure
+                                result = {
+                                    'success': True,
+                                    'n_cells_total': len(cell_df),
+                                    'n_subpopulations': best_k if subpops_detected else 1,
+                                    'subpopulations_detected': subpops_detected,
+                                    'clustering_method': 'kmeans',
+                                    'silhouette_score': best_score,
+                                    'cell_level_data': cell_df,
+                                    'features_used': available_features
+                                }
+                                
+                                # Characterize subpopulations
+                                if subpops_detected:
+                                    subpop_chars = {}
+                                    for subpop_id in range(best_k):
+                                        subpop_cells = cell_df[cell_df['subpopulation'] == subpop_id]
+                                        subpop_chars[f'subpop_{subpop_id}'] = {
+                                            'subpopulation_id': int(subpop_id),
+                                            'n_cells': len(subpop_cells),
+                                            'fraction_of_total': len(subpop_cells) / len(cell_df),
+                                            'feature_means': {f: float(subpop_cells[f].mean()) for f in available_features}
+                                        }
+                                    result['subpopulation_characteristics'] = subpop_chars
+                                
+                                # Concatenate all tracks with cell_id for later use
+                                if all_tracks_with_cell_id:
+                                    pooled = pd.concat(all_tracks_with_cell_id, ignore_index=True)
+                                    # Map subpopulation labels
+                                    cell_to_subpop = dict(zip(cell_df['cell_id'], cell_df['subpopulation']))
+                                    pooled['subpopulation'] = pooled['cell_id'].map(cell_to_subpop)
+                                    result['pooled_tracks'] = pooled
+                                
+                                # Store results
+                                if 'subpopulation_results' not in st.session_state:
+                                    st.session_state.subpopulation_results = {}
+                                st.session_state.subpopulation_results[cond.id] = result
+                                
+                                if result['subpopulations_detected']:
+                                    st.success(f"✓ Detected {result['n_subpopulations']} subpopulations in '{cond.name}'")
+                                    st.info(f"📊 Analyzed {result['n_cells_total']} cells (files) with silhouette score: {result['silhouette_score']:.3f}")
+                                    
+                                    # Show subpopulation breakdown
+                                    subpop_chars = result.get('subpopulation_characteristics', {})
+                                    if subpop_chars:
+                                        st.write("**Subpopulation Distribution:**")
+                                        for subpop_name, chars in subpop_chars.items():
+                                            st.write(f"- Subpop {chars['subpopulation_id']}: {chars['n_cells']} cells ({chars['fraction_of_total']:.1%})")
+                                else:
+                                    st.info(f"'{cond.name}' appears homogeneous (silhouette score: {result['silhouette_score']:.3f} < 0.25)")
+                                    
+                            except ImportError as e:
+                                st.error(f"Required module not available: {str(e)}")
+                                st.info("Install required packages: pip install scikit-learn scipy numpy")
+                            except Exception as e:
+                                st.error(f"Error in subpopulation analysis: {str(e)}")
+                                import traceback
+                                with st.expander("Error Details"):
+                                    st.code(traceback.format_exc())
+                
+                with col2:
+                    st.write("**Step 2: Pool by Subpopulation**")
                     
-                    if pooled is not None and not pooled.empty:
-                        st.session_state.tracks_data = pooled
-                        try:
-                            st.session_state.track_statistics = calculate_track_statistics(pooled)
-                        except Exception:
-                            pass
-                        st.success(f"Pooled {len(pooled)} rows into current dataset.")
-                        if errors:
-                            st.warning(f"Encountered {len(errors)} errors during pooling.")
-                        st.dataframe(pooled.head())
+                    # Check if subpopulation analysis has been run
+                    has_subpop_results = (
+                        'subpopulation_results' in st.session_state and 
+                        cond.id in st.session_state.subpopulation_results
+                    )
+                    
+                    if has_subpop_results:
+                        result = st.session_state.subpopulation_results[cond.id]
+                        
+                        if result.get('subpopulations_detected'):
+                            # Show pooling options
+                            pool_option = st.radio(
+                                "Pooling Strategy:",
+                                ["Pool all data together", "Pool by subpopulation"],
+                                key=f"pool_option_{cond.id}"
+                            )
+                            
+                            if st.button("📊 Pool & Load", key=f"pool_{cond.id}"):
+                                cell_df = result.get('cell_level_data')
+                                
+                                if pool_option == "Pool by subpopulation":
+                                    # Pool each subpopulation separately - use pre-loaded data with cell_ids
+                                    st.info("Loading data with subpopulation assignments...")
+                                    
+                                    # Use the pooled tracks from subpopulation detection (already has cell_id and subpopulation labels)
+                                    pooled = result.get('pooled_tracks')
+                                    
+                                    if pooled is not None and not pooled.empty and cell_df is not None:
+                                        if 'cell_id' in pooled.columns and 'subpopulation' in pooled.columns:
+                                            pooled['group'] = cond.name
+                                            
+                                            st.session_state.tracks_data = pooled
+                                            try:
+                                                st.session_state.track_statistics = calculate_track_statistics(pooled)
+                                            except Exception:
+                                                pass
+                                            
+                                            st.success(f"✓ Loaded {len(pooled)} tracks with subpopulation labels")
+                                            
+                                            # Show distribution
+                                            subpop_dist = pooled['subpopulation'].value_counts()
+                                            st.write("**Track distribution by subpopulation:**")
+                                            for subpop_id, count in subpop_dist.items():
+                                                st.write(f"- Subpopulation {int(subpop_id)}: {count} tracks")
+                                        else:
+                                            st.error("cell_id or subpopulation column not found in pooled data")
+                                    else:
+                                        st.error("Failed to load pooled tracks from subpopulation detection")
+                                else:
+                                    # Pool all together
+                                    pooled_result = cond.pool_tracks()
+                                    if isinstance(pooled_result, tuple):
+                                        pooled, errors = pooled_result
+                                    else:
+                                        pooled = pooled_result
+                                        errors = []
+                                    
+                                    if pooled is not None and not pooled.empty:
+                                        st.session_state.tracks_data = pooled
+                                        try:
+                                            st.session_state.track_statistics = calculate_track_statistics(pooled)
+                                        except Exception:
+                                            pass
+                                        st.success(f"✓ Pooled {len(pooled)} rows (ignoring subpopulations)")
+                                        if errors:
+                                            st.warning(f"Encountered {len(errors)} errors during pooling")
+                        else:
+                            # Homogeneous - just pool normally
+                            st.info("Condition is homogeneous")
+                            if st.button("📊 Pool Data", key=f"pool_{cond.id}"):
+                                pooled_result = cond.pool_tracks()
+                                if isinstance(pooled_result, tuple):
+                                    pooled, errors = pooled_result
+                                else:
+                                    pooled = pooled_result
+                                    errors = []
+                                
+                                if pooled is not None and not pooled.empty:
+                                    st.session_state.tracks_data = pooled
+                                    try:
+                                        st.session_state.track_statistics = calculate_track_statistics(pooled)
+                                    except Exception:
+                                        pass
+                                    st.success(f"✓ Pooled {len(pooled)} rows")
+                                    if errors:
+                                        st.warning(f"Encountered {len(errors)} errors")
                     else:
-                        st.info("No data available to pool for this condition.")
+                        st.info("👈 Run subpopulation detection first")
+                        st.caption("Or click below to pool without subpopulation analysis:")
+                        if st.button("⚡ Quick Pool (Skip Analysis)", key=f"quick_pool_{cond.id}"):
+                            pooled_result = cond.pool_tracks()
+                            if isinstance(pooled_result, tuple):
+                                pooled, errors = pooled_result
+                            else:
+                                pooled = pooled_result
+                                errors = []
+                            
+                            if pooled is not None and not pooled.empty:
+                                st.session_state.tracks_data = pooled
+                                try:
+                                    st.session_state.track_statistics = calculate_track_statistics(pooled)
+                                except Exception:
+                                    pass
+                                st.success(f"✓ Pooled {len(pooled)} rows")
+                                if errors:
+                                    st.warning(f"Encountered {len(errors)} errors")
 
         # Batch Analysis Section
         st.divider()
@@ -2388,11 +2697,36 @@ elif st.session_state.active_page == "Project Management":
                     else:
                         with st.spinner("Generating reports for each condition..."):
                             try:
-                                # Pool data from each condition
+                                # Pool data from each condition, breaking down by subpopulation if detected
                                 condition_datasets = {}
                                 pooling_errors = {}
+                                subpop_info = {}
                                 
                                 for cond in conditions_to_analyze:
+                                    # Check if subpopulation results exist for this condition
+                                    has_subpop = ('subpopulation_results' in st.session_state and 
+                                                 cond.id in st.session_state.subpopulation_results)
+                                    
+                                    if has_subpop:
+                                        result = st.session_state.subpopulation_results[cond.id]
+                                        
+                                        if result.get('subpopulations_detected'):
+                                            # Use pre-loaded pooled data with subpopulation labels
+                                            pooled_df = result.get('pooled_tracks')
+                                            
+                                            if pooled_df is not None and not pooled_df.empty and 'subpopulation' in pooled_df.columns:
+                                                # Split into separate datasets by subpopulation
+                                                n_subpops = result['n_subpopulations']
+                                                subpop_info[cond.name] = {'n_subpopulations': n_subpops}
+                                                
+                                                for subpop_id in range(n_subpops):
+                                                    subpop_df = pooled_df[pooled_df['subpopulation'] == subpop_id].copy()
+                                                    if not subpop_df.empty:
+                                                        dataset_name = f"{cond.name} - Subpop {subpop_id}"
+                                                        condition_datasets[dataset_name] = subpop_df
+                                                continue
+                                    
+                                    # No subpopulations detected or no subpopulation analysis - pool normally
                                     pooled_result = cond.pool_tracks()
                                     if isinstance(pooled_result, tuple):
                                         pooled_df, errors = pooled_result
@@ -2408,7 +2742,13 @@ elif st.session_state.active_page == "Project Management":
                                     st.error("No valid data in selected conditions")
                                 else:
                                     # Show pooling summary
-                                    st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
+                                    if subpop_info:
+                                        st.success(f"✅ Pooled data from {len(conditions_to_analyze)} conditions ({len(condition_datasets)} datasets including subpopulations)")
+                                        with st.expander("ℹ️ Subpopulation Breakdown", expanded=False):
+                                            for cond_name, info in subpop_info.items():
+                                                st.write(f"**{cond_name}:** {info['n_subpopulations']} subpopulations detected")
+                                    else:
+                                        st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
                                     
                                     if pooling_errors:
                                         with st.expander("⚠️ Pooling Warnings", expanded=False):
@@ -2607,9 +2947,35 @@ elif st.session_state.active_page == "Project Management":
                     else:
                         with st.spinner("Generating comparative report..."):
                             try:
-                                # Pool data from each condition
+                                # Pool data from each condition, breaking down by subpopulation if detected
                                 condition_datasets = {}
+                                subpop_info_comp = {}
+                                
                                 for cond in conditions_to_analyze:
+                                    # Check if subpopulation results exist for this condition
+                                    has_subpop = ('subpopulation_results' in st.session_state and 
+                                                 cond.id in st.session_state.subpopulation_results)
+                                    
+                                    if has_subpop:
+                                        result = st.session_state.subpopulation_results[cond.id]
+                                        
+                                        if result.get('subpopulations_detected'):
+                                            # Use pre-loaded pooled data with subpopulation labels
+                                            pooled_df = result.get('pooled_tracks')
+                                            
+                                            if pooled_df is not None and not pooled_df.empty and 'subpopulation' in pooled_df.columns:
+                                                # Split into separate datasets by subpopulation
+                                                n_subpops = result['n_subpopulations']
+                                                subpop_info_comp[cond.name] = {'n_subpopulations': n_subpops}
+                                                
+                                                for subpop_id in range(n_subpops):
+                                                    subpop_df = pooled_df[pooled_df['subpopulation'] == subpop_id].copy()
+                                                    if not subpop_df.empty:
+                                                        dataset_name = f"{cond.name} - Subpop {subpop_id}"
+                                                        condition_datasets[dataset_name] = subpop_df
+                                                continue
+                                    
+                                    # No subpopulations detected or no subpopulation analysis - pool normally
                                     pooled_result = cond.pool_tracks()
                                     if isinstance(pooled_result, tuple):
                                         pooled_df, _ = pooled_result
@@ -2621,7 +2987,13 @@ elif st.session_state.active_page == "Project Management":
                                 if not condition_datasets:
                                     st.error("No valid data in selected conditions")
                                 else:
-                                    st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
+                                    if subpop_info_comp:
+                                        st.success(f"✅ Pooled data from {len(conditions_to_analyze)} conditions ({len(condition_datasets)} datasets including subpopulations)")
+                                        with st.expander("ℹ️ Subpopulation Breakdown", expanded=False):
+                                            for cond_name, info in subpop_info_comp.items():
+                                                st.write(f"**{cond_name}:** {info['n_subpopulations']} subpopulations detected")
+                                    else:
+                                        st.success(f"✅ Pooled data from {len(condition_datasets)} conditions")
                                     
                                     # Show summary
                                     st.subheader("Condition Summaries")
