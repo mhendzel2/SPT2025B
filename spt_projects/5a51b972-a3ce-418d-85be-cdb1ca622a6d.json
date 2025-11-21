@@ -1,0 +1,30 @@
+{
+  "id": "5a51b972-a3ce-418d-85be-cdb1ca622a6d",
+  "name": "MS2",
+  "description": "",
+  "created_date": "2025-11-20T21:05:51.419940",
+  "last_modified": "2025-11-20T21:05:51.419940",
+  "conditions": [
+    {
+      "id": "cf6a1c77-adc2-4067-8249-b092e1185429",
+      "name": "U2OS",
+      "description": "",
+      "files": [
+        {
+          "id": "3cefbaec-e8f1-493f-bcc3-5f00396048ff",
+          "name": "MS2_spots_F2C2.csv",
+          "type": "text/csv",
+          "size": 1317,
+          "data_path": "spt_projects\\data\\3cefbaec-e8f1-493f-bcc3-5f00396048ff.csv"
+        },
+        {
+          "id": "73d32872-cee6-431e-987b-003d7dfbe9f5",
+          "name": "MS2_spots_F1C1.csv",
+          "type": "text/csv",
+          "size": 1359,
+          "data_path": "spt_projects\\data\\73d32872-cee6-431e-987b-003d7dfbe9f5.csv"
+        }
+      ]
+    }
+  ]
+}
