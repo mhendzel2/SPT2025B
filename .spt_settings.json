@@ -1,0 +1,16 @@
+{
+  "pixel_size": 0.03,
+  "frame_interval": 0.1,
+  "temperature": 300.0,
+  "viscosity": 0.001,
+  "min_track_length": 5,
+  "max_lag_frames": 20,
+  "default_colormap": "viridis",
+  "line_width": 2,
+  "marker_size": 5,
+  "use_parallel": true,
+  "num_workers": 4,
+  "max_memory_mb": 1000,
+  "auto_save": true,
+  "save_interval_minutes": 5
+}

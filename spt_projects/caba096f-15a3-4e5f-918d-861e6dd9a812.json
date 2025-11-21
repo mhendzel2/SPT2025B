@@ -30,6 +30,48 @@
           "type": "text/csv",
           "size": 5267,
           "data_path": "spt_projects\\data\\b47d0dd5-16a2-465b-935f-d83bd0a573d7.csv"
+        },
+        {
+          "id": "81935361-4368-4c41-8354-e38292004b86",
+          "name": "Cell5_tracks.xml",
+          "type": "text/csv",
+          "size": 8383,
+          "data_path": "spt_projects\\data\\81935361-4368-4c41-8354-e38292004b86.csv"
+        },
+        {
+          "id": "de6cf87a-62fa-4b76-a753-cb4490d03a6f",
+          "name": "Cell7_tracks.xml",
+          "type": "text/csv",
+          "size": 5951,
+          "data_path": "spt_projects\\data\\de6cf87a-62fa-4b76-a753-cb4490d03a6f.csv"
+        },
+        {
+          "id": "82a1be37-09c4-4ba7-9087-78cac9d1206d",
+          "name": "Cell9_tracks.xml",
+          "type": "text/csv",
+          "size": 6580,
+          "data_path": "spt_projects\\data\\82a1be37-09c4-4ba7-9087-78cac9d1206d.csv"
+        },
+        {
+          "id": "40fc806f-9ef4-4a00-a387-3575cf46d646",
+          "name": "Cell10_tracks.xml",
+          "type": "text/csv",
+          "size": 5981,
+          "data_path": "spt_projects\\data\\40fc806f-9ef4-4a00-a387-3575cf46d646.csv"
+        },
+        {
+          "id": "5a4f7771-38e1-4897-a2d8-3cca58b1f142",
+          "name": "Cell11_tracks.xml",
+          "type": "text/csv",
+          "size": 3754,
+          "data_path": "spt_projects\\data\\5a4f7771-38e1-4897-a2d8-3cca58b1f142.csv"
+        },
+        {
+          "id": "f276c4d6-2b6a-477f-93d4-88f9ddc3bed4",
+          "name": "Cell12_tracks.xml",
+          "type": "text/csv",
+          "size": 10802,
+          "data_path": "spt_projects\\data\\f276c4d6-2b6a-477f-93d4-88f9ddc3bed4.csv"
         }
       ]
     }
