@@ -1,7 +1,14 @@
 import btrack
-import deeptrack as dt
 import numpy as np
 import pandas as pd
+
+# Optional deeptrack import - handle incomplete installations gracefully
+try:
+    import deeptrack as dt
+    DEEPTRACK_AVAILABLE = True
+except (ImportError, AttributeError) as e:
+    DEEPTRACK_AVAILABLE = False
+    dt = None
 
 def run_btrack(detections: pd.DataFrame, config_path: str = "models/cell_config.json"):
     """
@@ -57,7 +64,16 @@ def preprocess_with_deeptrack(image: np.ndarray):
 
     Returns:
         The preprocessed image.
+    
+    Raises:
+        ImportError: If deeptrack is not properly installed.
     """
+    if not DEEPTRACK_AVAILABLE:
+        raise ImportError(
+            "deeptrack is not available or not properly installed. "
+            "Please install deeptrack2 with all dependencies: pip install deeptrack2"
+        )
+    
     # Create a DeepTrack2 pipeline
     pipeline = dt.Pipeline()
     pipeline.add(dt.features.Normalize())

@@ -3122,7 +3122,7 @@ class EnhancedSPTReportGenerator:
             # Bootstrap CI on mean track length
             bootstrap_result = bootstrap_confidence_interval(
                 track_lengths,
-                statistic=np.mean,
+                statistic_func=np.mean,
                 n_bootstrap=1000,
                 confidence_level=0.95
             )
