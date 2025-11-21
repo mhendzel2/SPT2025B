@@ -9,7 +9,29 @@
       "id": "41ea54cb-c084-4064-ba54-4936c6279a4d",
       "name": "Control",
       "description": "Control",
-      "files": []
+      "files": [
+        {
+          "id": "a7f7fef8-5b5d-45ef-91ec-87edffcffb2c",
+          "name": "Cell1_tracks.xml",
+          "type": "text/csv",
+          "size": 11193,
+          "data_path": "spt_projects\\data\\a7f7fef8-5b5d-45ef-91ec-87edffcffb2c.csv"
+        },
+        {
+          "id": "f0d3b796-72b2-4244-8ede-56181a3e0ab6",
+          "name": "Cell3_tracks.xml",
+          "type": "text/csv",
+          "size": 9081,
+          "data_path": "spt_projects\\data\\f0d3b796-72b2-4244-8ede-56181a3e0ab6.csv"
+        },
+        {
+          "id": "b47d0dd5-16a2-465b-935f-d83bd0a573d7",
+          "name": "Cell4_tracks.xml",
+          "type": "text/csv",
+          "size": 5267,
+          "data_path": "spt_projects\\data\\b47d0dd5-16a2-465b-935f-d83bd0a573d7.csv"
+        }
+      ]
     }
   ]
 }

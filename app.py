@@ -764,6 +764,211 @@ def get_active_tracks():
     return sm.get_tracks_or_none()
 
 
+def _generate_batch_html_report(report_results: Dict, 
+                                condition_datasets: Dict[str, pd.DataFrame],
+                                pixel_size: float,
+                                frame_interval: float,
+                                interactive: bool = True) -> bytes:
+    """
+    Generate HTML report for batch condition analysis.
+    
+    Parameters
+    ----------
+    report_results : Dict
+        Results from generate_condition_reports
+    condition_datasets : Dict[str, pd.DataFrame]
+        Original condition datasets
+    pixel_size : float
+        Pixel size in micrometers
+    frame_interval : float
+        Frame interval in seconds
+    interactive : bool
+        If True, include interactive Plotly figures; if False, convert to static images
+        
+    Returns
+    -------
+    bytes
+        HTML report as bytes
+    """
+    import html
+    import plotly.io as pio
+    from datetime import datetime as _dt
+    
+    parts = []
+    parts.append("<!DOCTYPE html><html><head><meta charset='utf-8'>")
+    parts.append("<title>SPT Batch Analysis Report</title>")
+    parts.append("<meta name='viewport' content='width=device-width, initial-scale=1'>")
+    
+    # Enhanced CSS styling
+    parts.append("""
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; border-left: 4px solid #3498db; padding-left: 10px; }
+        h3 { color: #7f8c8d; }
+        .metadata { background: #ecf0f1; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .metadata ul { list-style: none; padding: 0; }
+        .metadata li { padding: 5px 0; }
+        .condition-section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 5px; background: #fafafa; }
+        .metrics-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        .metrics-table th { background: #3498db; color: white; padding: 10px; text-align: left; }
+        .metrics-table td { padding: 8px; border-bottom: 1px solid #ddd; }
+        .metrics-table tr:hover { background: #f0f0f0; }
+        .figure { margin: 20px 0; text-align: center; }
+        .figure img { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 5px; }
+        .success { color: #27ae60; font-weight: bold; }
+        .error { color: #e74c3c; font-weight: bold; }
+        .summary-card { display: inline-block; margin: 10px; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); min-width: 200px; }
+        .summary-card h4 { margin: 0 0 10px 0; color: #3498db; }
+        .summary-card .value { font-size: 24px; font-weight: bold; color: #2c3e50; }
+        .comparison-section { background: #e8f4f8; padding: 20px; border-radius: 5px; margin: 20px 0; }
+        code { background: #f7f7f7; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; }
+    </style>
+    """)
+    
+    if interactive:
+        parts.append("<script src='https://cdn.plot.ly/plotly-2.18.0.min.js'></script>")
+    
+    parts.append("</head><body><div class='container'>")
+    
+    # Header
+    parts.append(f"<h1>📊 SPT Batch Analysis Report</h1>")
+    
+    # Metadata section
+    parts.append("<div class='metadata'>")
+    parts.append("<h3>Report Metadata</h3>")
+    parts.append("<ul>")
+    parts.append(f"<li><b>Generated:</b> {_dt.now().strftime('%Y-%m-%d %H:%M:%S')}</li>")
+    parts.append(f"<li><b>Pixel Size:</b> {pixel_size} µm</li>")
+    parts.append(f"<li><b>Frame Interval:</b> {frame_interval} s</li>")
+    parts.append(f"<li><b>Number of Conditions:</b> {len(condition_datasets)}</li>")
+    parts.append(f"<li><b>Report Type:</b> {'Interactive' if interactive else 'Static'} HTML</li>")
+    parts.append("</ul>")
+    parts.append("</div>")
+    
+    # Summary overview
+    parts.append("<h2>📈 Summary Overview</h2>")
+    parts.append("<div>")
+    for cond_name, tracks_df in condition_datasets.items():
+        n_tracks = tracks_df['track_id'].nunique() if 'track_id' in tracks_df.columns else 0
+        n_points = len(tracks_df)
+        parts.append(f"""
+        <div class='summary-card'>
+            <h4>{html.escape(cond_name)}</h4>
+            <div><b>Tracks:</b> <span class='value'>{n_tracks}</span></div>
+            <div><b>Data Points:</b> {n_points:,}</div>
+        </div>
+        """)
+    parts.append("</div><div style='clear:both;'></div>")
+    
+    # Individual condition results
+    parts.append("<h2>🔬 Condition Analysis Results</h2>")
+    for cond_name, cond_result in report_results.get('conditions', {}).items():
+        parts.append(f"<div class='condition-section'>")
+        parts.append(f"<h3>Condition: {html.escape(cond_name)}</h3>")
+        
+        if cond_result.get('success', False):
+            parts.append(f"<p class='success'>✅ Analysis completed successfully</p>")
+            parts.append(f"<p><b>Analyses performed:</b> {len(cond_result.get('analysis_results', {}))}</p>")
+            parts.append(f"<p><b>Figures generated:</b> {len(cond_result.get('figures', {}))}</p>")
+            
+            # Display figures
+            for analysis_key, fig in cond_result.get('figures', {}).items():
+                if fig:
+                    parts.append(f"<div class='figure'>")
+                    parts.append(f"<h4>{html.escape(analysis_key.replace('_', ' ').title())}</h4>")
+                    try:
+                        if interactive:
+                            # Include interactive Plotly figure
+                            fig_html = pio.to_html(fig, include_plotlyjs=False, full_html=False)
+                            parts.append(fig_html)
+                        else:
+                            # Convert to static image
+                            import base64
+                            img_bytes = pio.to_image(fig, format='png', width=1000, height=600)
+                            b64 = base64.b64encode(img_bytes).decode('utf-8')
+                            parts.append(f"<img src='data:image/png;base64,{b64}' alt='{analysis_key}'>")
+                    except Exception as e:
+                        parts.append(f"<p class='error'>Error rendering figure: {html.escape(str(e))}</p>")
+                    parts.append("</div>")
+        else:
+            parts.append(f"<p class='error'>❌ Analysis failed: {html.escape(cond_result.get('error', 'Unknown error'))}</p>")
+        
+        parts.append("</div>")
+    
+    # Comparison results
+    comparisons = report_results.get('comparisons', {})
+    if comparisons and comparisons.get('success', False) and len(condition_datasets) >= 2:
+        parts.append("<div class='comparison-section'>")
+        parts.append("<h2>📊 Statistical Comparisons</h2>")
+        
+        # Metrics table
+        if 'metrics' in comparisons:
+            parts.append("<h3>Summary Metrics by Condition</h3>")
+            parts.append("<table class='metrics-table'>")
+            parts.append("<tr><th>Condition</th><th>Mean Track Length</th><th>Mean Displacement (µm)</th><th>Mean Velocity (µm/s)</th></tr>")
+            for cond_name, metrics in comparisons['metrics'].items():
+                parts.append(f"<tr>")
+                parts.append(f"<td><b>{html.escape(cond_name)}</b></td>")
+                parts.append(f"<td>{metrics.get('mean_track_length', 0):.2f}</td>")
+                parts.append(f"<td>{metrics.get('mean_displacement', 0):.4f}</td>")
+                parts.append(f"<td>{metrics.get('mean_velocity', 0):.4f}</td>")
+                parts.append(f"</tr>")
+            parts.append("</table>")
+        
+        # Statistical tests
+        if 'statistical_tests' in comparisons and comparisons['statistical_tests']:
+            parts.append("<h3>Pairwise Statistical Tests</h3>")
+            for comparison, tests in comparisons['statistical_tests'].items():
+                parts.append(f"<h4>{html.escape(comparison)}</h4>")
+                parts.append("<table class='metrics-table'>")
+                parts.append("<tr><th>Metric</th><th>t-test p-value</th><th>Mann-Whitney p-value</th><th>Significant?</th></tr>")
+                for metric, test_results in tests.items():
+                    t_test_p = test_results.get('t_test', {}).get('p_value', 'N/A')
+                    mw_p = test_results.get('mann_whitney', {}).get('p_value', 'N/A')
+                    significant = test_results.get('significant', False)
+                    sig_text = "✅ Yes" if significant else "❌ No"
+                    
+                    parts.append(f"<tr>")
+                    parts.append(f"<td>{html.escape(metric.replace('_', ' ').title())}</td>")
+                    parts.append(f"<td>{t_test_p if isinstance(t_test_p, str) else f'{t_test_p:.4f}'}</td>")
+                    parts.append(f"<td>{mw_p if isinstance(mw_p, str) else f'{mw_p:.4f}'}</td>")
+                    parts.append(f"<td>{sig_text}</td>")
+                    parts.append(f"</tr>")
+                parts.append("</table>")
+        
+        # Comparison figures
+        if 'figures' in comparisons and comparisons['figures'].get('comparison_boxplots'):
+            parts.append("<h3>Comparison Visualizations</h3>")
+            parts.append("<div class='figure'>")
+            try:
+                fig = comparisons['figures']['comparison_boxplots']
+                if interactive:
+                    fig_html = pio.to_html(fig, include_plotlyjs=False, full_html=False)
+                    parts.append(fig_html)
+                else:
+                    import base64
+                    img_bytes = pio.to_image(fig, format='png', width=1200, height=800)
+                    b64 = base64.b64encode(img_bytes).decode('utf-8')
+                    parts.append(f"<img src='data:image/png;base64,{b64}' alt='Comparison Boxplots'>")
+            except Exception as e:
+                parts.append(f"<p class='error'>Error rendering comparison figure: {html.escape(str(e))}</p>")
+            parts.append("</div>")
+        
+        parts.append("</div>")
+    
+    # Footer
+    parts.append("<hr style='margin-top: 40px;'>")
+    parts.append("<p style='text-align: center; color: #7f8c8d;'>")
+    parts.append("Generated by SPT2025B Analysis Platform | ")
+    parts.append(f"{_dt.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    parts.append("</p>")
+    
+    parts.append("</div></body></html>")
+    
+    html_str = "".join(parts)
+    return html_str.encode('utf-8')
 
 
 # Define navigation function
@@ -1996,11 +2201,11 @@ elif st.session_state.active_page == "Project Management":
                             st.rerun()
 
                 uploaded = st.file_uploader(
-                    "Add cell files (CSV, XML)", 
-                    type=["csv", "xml"], 
+                    "Add cell files (CSV, Excel, XML)", 
+                    type=["csv", "xlsx", "xls", "xml"], 
                     accept_multiple_files=True, 
                     key=f"pm_up_{cond.id}",
-                    help="Upload track data in CSV or XML (TrackMate) format"
+                    help="Upload track data in CSV, Excel, or XML (TrackMate) format"
                 )
                 
                 # Track which files have been processed to avoid duplicates
@@ -2026,6 +2231,13 @@ elif st.session_state.active_page == "Project Management":
                                 if file_extension == '.csv':
                                     import pandas as _pd
                                     df = _pd.read_csv(uf)
+                                elif file_extension in ['.xlsx', '.xls']:
+                                    # Use the existing load_tracks_file function for Excel
+                                    from data_loader import load_tracks_file
+                                    df = load_tracks_file(uf)
+                                    if df is None or df.empty:
+                                        st.warning(f"No track data found in {uf.name}")
+                                        continue
                                 elif file_extension == '.xml':
                                     # Use the existing load_tracks_file function for XML
                                     from data_loader import load_tracks_file
@@ -2291,13 +2503,13 @@ elif st.session_state.active_page == "Project Management":
                                     # Download options
                                     st.divider()
                                     st.subheader("💾 Export Results")
-                                    col1, col2 = st.columns(2)
+                                    col1, col2, col3, col4 = st.columns(4)
                                     
                                     with col1:
                                         # JSON export
                                         report_json = json.dumps(report_results, indent=2, default=str)
                                         st.download_button(
-                                            "📄 Download Full Report (JSON)",
+                                            "📄 JSON Report",
                                             data=report_json,
                                             file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                                             mime="application/json"
@@ -2308,11 +2520,49 @@ elif st.session_state.active_page == "Project Management":
                                         if report_results.get('comparisons', {}).get('metrics'):
                                             metrics_csv = pd.DataFrame(report_results['comparisons']['metrics']).T.to_csv()
                                             st.download_button(
-                                                "📊 Download Metrics (CSV)",
+                                                "📊 Metrics CSV",
                                                 data=metrics_csv,
                                                 file_name=f"batch_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                                 mime="text/csv"
                                             )
+                                    
+                                    with col3:
+                                        # HTML export (static)
+                                        try:
+                                            html_report = _generate_batch_html_report(
+                                                report_results, 
+                                                condition_datasets, 
+                                                pixel_size, 
+                                                frame_interval,
+                                                interactive=False
+                                            )
+                                            st.download_button(
+                                                "📰 HTML Report",
+                                                data=html_report,
+                                                file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                                                mime="text/html"
+                                            )
+                                        except Exception as e:
+                                            st.error(f"HTML export error: {e}")
+                                    
+                                    with col4:
+                                        # Interactive HTML export
+                                        try:
+                                            interactive_html = _generate_batch_html_report(
+                                                report_results, 
+                                                condition_datasets, 
+                                                pixel_size, 
+                                                frame_interval,
+                                                interactive=True
+                                            )
+                                            st.download_button(
+                                                "🎨 Interactive HTML",
+                                                data=interactive_html,
+                                                file_name=f"batch_report_interactive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                                                mime="text/html"
+                                            )
+                                        except Exception as e:
+                                            st.error(f"Interactive HTML export error: {e}")
                                     
                             except Exception as e:
                                 st.error(f"Error generating reports: {e}")
