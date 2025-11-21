@@ -1,0 +1,15 @@
+{
+  "id": "caba096f-15a3-4e5f-918d-861e6dd9a812",
+  "name": "CDC12",
+  "description": "",
+  "created_date": "2025-11-20T23:26:15.861027",
+  "last_modified": "2025-11-20T23:26:15.861027",
+  "conditions": [
+    {
+      "id": "41ea54cb-c084-4064-ba54-4936c6279a4d",
+      "name": "Control",
+      "description": "Control",
+      "files": []
+    }
+  ]
+}

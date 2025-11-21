@@ -2,13 +2,10 @@ import btrack
 import numpy as np
 import pandas as pd
 
-# Optional deeptrack import - handle incomplete installations gracefully
-try:
-    import deeptrack as dt
-    DEEPTRACK_AVAILABLE = True
-except (ImportError, AttributeError) as e:
-    DEEPTRACK_AVAILABLE = False
-    dt = None
+# Don't import deeptrack at module level - it causes issues with lazy loading
+# Import only when needed in the function that uses it
+DEEPTRACK_AVAILABLE = None  # Will be checked on first use
+dt = None
 
 def run_btrack(detections: pd.DataFrame, config_path: str = "models/cell_config.json"):
     """
@@ -68,6 +65,18 @@ def preprocess_with_deeptrack(image: np.ndarray):
     Raises:
         ImportError: If deeptrack is not properly installed.
     """
+    global DEEPTRACK_AVAILABLE, dt
+    
+    # Lazy import deeptrack only when needed
+    if DEEPTRACK_AVAILABLE is None:
+        try:
+            import deeptrack as dt_module
+            dt = dt_module
+            DEEPTRACK_AVAILABLE = True
+        except (ImportError, AttributeError, Exception) as e:
+            DEEPTRACK_AVAILABLE = False
+            dt = None
+    
     if not DEEPTRACK_AVAILABLE:
         raise ImportError(
             "deeptrack is not available or not properly installed. "

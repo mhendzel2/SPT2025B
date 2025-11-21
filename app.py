@@ -1961,11 +1961,14 @@ elif st.session_state.active_page == "Project Management":
         with st.expander("Add Condition", expanded=True):
             cname = st.text_input("Condition name", key="pm_new_cond_name")
             cdesc = st.text_input("Description", key="pm_new_cond_desc")
-            if st.button("Add Condition") and cname.strip():
-                pmgr.add_condition(proj, cname.strip(), cdesc.strip())
-                pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
-                st.success("Condition added.")
-                st.rerun()
+            if st.button("Add Condition", key="pm_add_condition_btn"):
+                if cname and cname.strip():
+                    pmgr.add_condition(proj, cname.strip(), cdesc.strip())
+                    pmgr.save_project(proj, os.path.join(pmgr.projects_dir, f"{proj.id}.json"))
+                    st.success("Condition added.")
+                    st.rerun()
+                else:
+                    st.error("Please enter a condition name.")
 
         # List conditions with file upload per condition
         for cond in list(proj.conditions):
@@ -1992,7 +1995,13 @@ elif st.session_state.active_page == "Project Management":
                             st.session_state.confirm_delete_condition[cond.id] = False
                             st.rerun()
 
-                uploaded = st.file_uploader("Add cell files (CSV)", type=["csv"], accept_multiple_files=True, key=f"pm_up_{cond.id}")
+                uploaded = st.file_uploader(
+                    "Add cell files (CSV, XML)", 
+                    type=["csv", "xml"], 
+                    accept_multiple_files=True, 
+                    key=f"pm_up_{cond.id}",
+                    help="Upload track data in CSV or XML (TrackMate) format"
+                )
                 
                 # Track which files have been processed to avoid duplicates
                 upload_key = f"pm_upload_processed_{cond.id}"
@@ -2011,8 +2020,23 @@ elif st.session_state.active_page == "Project Management":
                     if new_files:
                         for uf, file_id in new_files:
                             try:
-                                import pandas as _pd
-                                df = _pd.read_csv(uf)
+                                file_extension = os.path.splitext(uf.name)[1].lower()
+                                
+                                # Handle different file types
+                                if file_extension == '.csv':
+                                    import pandas as _pd
+                                    df = _pd.read_csv(uf)
+                                elif file_extension == '.xml':
+                                    # Use the existing load_tracks_file function for XML
+                                    from data_loader import load_tracks_file
+                                    df = load_tracks_file(uf)
+                                    if df is None or df.empty:
+                                        st.warning(f"No track data found in {uf.name}")
+                                        continue
+                                else:
+                                    st.warning(f"Unsupported file type: {file_extension}")
+                                    continue
+                                
                                 pmgr.add_file_to_condition(proj, cond.id, uf.name, df)
                                 st.session_state[upload_key].add(file_id)
                             except Exception as e:
