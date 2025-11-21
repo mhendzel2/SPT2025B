@@ -6224,11 +6224,11 @@ elif st.session_state.active_page == "Analysis":
         with tabs[1]:
             st.header("Diffusion Analysis")
             
-            # Primary analysis choice: whole image vs segmentation-based
+            # Primary analysis choice: whole image vs segmentation-based vs subpopulation
             analysis_type = st.radio(
                 "Analysis Type",
-                ["Whole Image Analysis", "Segmentation-Based Analysis"],
-                help="Choose whether to analyze all tracks together or segment them by regions"
+                ["Whole Image Analysis", "Segmentation-Based Analysis", "Subpopulation Analysis (by Cell)"],
+                help="Choose analysis approach: whole image, segmentation-based, or detect subpopulations within groups"
             )
             
             selected_mask = None
@@ -6712,6 +6712,302 @@ elif st.session_state.active_page == "Analysis":
                             st.plotly_chart(diff_fig, use_container_width=True)
                 else:
                     st.warning(f"Analysis was not successful: {results.get('error', 'Unknown error')}")
+            
+            # Subpopulation Analysis Section
+            elif analysis_type == "Subpopulation Analysis (by Cell)":
+                st.subheader("🔬 Single-Cell Subpopulation Analysis")
+                
+                st.markdown("""
+                **Detect heterogeneous subpopulations within your data:**
+                - Identifies distinct subgroups based on tracking behavior
+                - Useful for detecting cell cycle stages, metabolic states, or treatment responses
+                - Requires cell identifiers in your tracking data
+                """)
+                
+                # Check if cell_id column exists
+                if 'cell_id' not in st.session_state.tracks_data.columns:
+                    st.error("""
+                    **Cell identifiers required!**
+                    
+                    Your tracking data must include a 'cell_id' column to perform subpopulation analysis.
+                    Each track should be associated with a specific cell/nucleus.
+                    
+                    **Options:**
+                    1. Load data with cell identifiers already included
+                    2. Use segmentation masks to assign tracks to cells
+                    3. Manually add cell_id column based on spatial proximity
+                    """)
+                    
+                    # Offer to assign cell IDs based on spatial clustering
+                    if st.checkbox("Auto-assign cell IDs based on spatial clustering"):
+                        st.info("This will group nearby tracks into cells based on spatial proximity.")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            clustering_radius = st.number_input(
+                                "Clustering Radius (pixels)",
+                                min_value=5.0,
+                                max_value=200.0,
+                                value=50.0,
+                                help="Maximum distance for tracks to be considered part of the same cell"
+                            )
+                        with col2:
+                            min_tracks_per_cell = st.number_input(
+                                "Min Tracks per Cell",
+                                min_value=1,
+                                max_value=50,
+                                value=5,
+                                help="Minimum tracks required to form a cell group"
+                            )
+                        
+                        if st.button("Assign Cell IDs"):
+                            with st.spinner("Clustering tracks into cells..."):
+                                try:
+                                    from sklearn.cluster import DBSCAN
+                                    
+                                    # Get mean position per track
+                                    track_positions = st.session_state.tracks_data.groupby('track_id')[['x', 'y']].mean()
+                                    
+                                    # Perform DBSCAN clustering
+                                    clustering = DBSCAN(eps=clustering_radius, min_samples=min_tracks_per_cell)
+                                    cell_labels = clustering.fit_predict(track_positions)
+                                    
+                                    # Map track_id to cell_id
+                                    track_to_cell = dict(zip(track_positions.index, cell_labels))
+                                    st.session_state.tracks_data['cell_id'] = st.session_state.tracks_data['track_id'].map(track_to_cell)
+                                    
+                                    # Filter out noise points (-1)
+                                    st.session_state.tracks_data = st.session_state.tracks_data[st.session_state.tracks_data['cell_id'] != -1]
+                                    
+                                    n_cells = len(st.session_state.tracks_data['cell_id'].unique())
+                                    st.success(f"✓ Assigned tracks to {n_cells} cells")
+                                    st.rerun()
+                                    
+                                except ImportError:
+                                    st.error("scikit-learn required for spatial clustering. Please install: pip install scikit-learn")
+                                except Exception as e:
+                                    st.error(f"Error assigning cell IDs: {str(e)}")
+                else:
+                    # Cell IDs are available - proceed with analysis
+                    n_cells = st.session_state.tracks_data['cell_id'].nunique()
+                    st.success(f"✓ Found {n_cells} cells in tracking data")
+                    
+                    # Configuration parameters
+                    st.subheader("Analysis Configuration")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        min_tracks_per_cell = st.slider(
+                            "Min Tracks/Cell",
+                            min_value=5,
+                            max_value=50,
+                            value=10,
+                            help="Minimum tracks required to include a cell in analysis"
+                        )
+                    
+                    with col2:
+                        clustering_method = st.selectbox(
+                            "Clustering Method",
+                            ["kmeans", "gmm", "hierarchical"],
+                            help="Algorithm for detecting subpopulations"
+                        )
+                    
+                    with col3:
+                        max_clusters = st.slider(
+                            "Max Clusters",
+                            min_value=2,
+                            max_value=6,
+                            value=4,
+                            help="Maximum subpopulations to test"
+                        )
+                    
+                    # Group selection (if multiple groups/conditions exist)
+                    st.subheader("Group Selection")
+                    
+                    if 'group' in st.session_state.tracks_data.columns or 'condition' in st.session_state.tracks_data.columns:
+                        group_column = 'group' if 'group' in st.session_state.tracks_data.columns else 'condition'
+                        groups = st.session_state.tracks_data[group_column].unique()
+                        
+                        analyze_all_groups = st.checkbox("Analyze all groups separately", value=True)
+                        
+                        if analyze_all_groups:
+                            selected_groups = groups.tolist()
+                        else:
+                            selected_groups = st.multiselect(
+                                "Select Groups to Analyze",
+                                groups.tolist(),
+                                default=[groups[0]] if len(groups) > 0 else []
+                            )
+                    else:
+                        st.info("No group/condition column found. Analyzing all data as one group.")
+                        selected_groups = ["All Data"]
+                        group_column = None
+                    
+                    # Run analysis
+                    if st.button("🔬 Detect Subpopulations", type="primary"):
+                        if not selected_groups:
+                            st.warning("Please select at least one group to analyze.")
+                        else:
+                            with st.spinner("Analyzing single-cell heterogeneity..."):
+                                try:
+                                    from subpopulation_analysis import (
+                                        SubpopulationAnalyzer,
+                                        SubpopulationConfig,
+                                        create_subpopulation_visualizations
+                                    )
+                                    
+                                    # Initialize analyzer
+                                    config = SubpopulationConfig(
+                                        min_tracks_per_cell=min_tracks_per_cell,
+                                        clustering_methods=[clustering_method],
+                                        n_clusters_range=(2, max_clusters),
+                                        use_pca=True
+                                    )
+                                    
+                                    analyzer = SubpopulationAnalyzer(config)
+                                    
+                                    # Analyze each group
+                                    all_results = {}
+                                    
+                                    for group_name in selected_groups:
+                                        st.write(f"### Analyzing: {group_name}")
+                                        
+                                        # Filter data for this group
+                                        if group_column is not None:
+                                            group_data = st.session_state.tracks_data[
+                                                st.session_state.tracks_data[group_column] == group_name
+                                            ].copy()
+                                        else:
+                                            group_data = st.session_state.tracks_data.copy()
+                                        
+                                        # Run analysis
+                                        result = analyzer.analyze_group(group_data, group_name, cell_id_column='cell_id')
+                                        all_results[group_name] = result
+                                        
+                                        if result['success']:
+                                            if result['subpopulations_detected']:
+                                                st.success(f"✓ Detected {result['n_subpopulations']} subpopulations in {group_name}")
+                                            else:
+                                                st.info(f"No distinct subpopulations detected in {group_name} (appears homogeneous)")
+                                        else:
+                                            st.error(f"Analysis failed for {group_name}: {result.get('error', 'Unknown error')}")
+                                    
+                                    # Store results
+                                    st.session_state.analysis_results['subpopulation'] = all_results
+                                    
+                                    # Generate comparison
+                                    comparison = analyzer.compare_groups_with_subpopulations(all_results)
+                                    st.session_state.analysis_results['subpopulation_comparison'] = comparison
+                                    
+                                    st.success("✓ Subpopulation analysis complete!")
+                                    
+                                except ImportError as e:
+                                    st.error(f"Required module not available: {str(e)}")
+                                    st.info("Make sure scikit-learn is installed: pip install scikit-learn scipy")
+                                except Exception as e:
+                                    st.error(f"Error in subpopulation analysis: {str(e)}")
+                                    import traceback
+                                    with st.expander("Error Details"):
+                                        st.code(traceback.format_exc())
+                    
+                    # Display results if available
+                    if 'subpopulation' in st.session_state.get('analysis_results', {}):
+                        st.divider()
+                        st.header("📊 Subpopulation Analysis Results")
+                        
+                        results = st.session_state.analysis_results['subpopulation']
+                        comparison = st.session_state.analysis_results.get('subpopulation_comparison', {})
+                        
+                        # Summary
+                        if comparison:
+                            st.subheader("Summary")
+                            summary = comparison.get('summary', {})
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Total Groups", summary.get('total_groups', 0))
+                            with col2:
+                                st.metric("Heterogeneous", summary.get('heterogeneous_groups', 0))
+                            with col3:
+                                st.metric("Homogeneous", summary.get('homogeneous_groups', 0))
+                            
+                            st.info(f"**Recommendation:** {summary.get('recommendation', 'N/A')}")
+                        
+                        # Detailed results per group
+                        for group_name, group_result in results.items():
+                            st.divider()
+                            st.subheader(f"📍 {group_name}")
+                            
+                            if not group_result.get('success'):
+                                st.error(f"Analysis failed: {group_result.get('error', 'Unknown error')}")
+                                continue
+                            
+                            # Show metrics
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Total Cells", group_result.get('n_cells_total', 0))
+                            with col2:
+                                st.metric("Subpopulations", group_result.get('n_subpopulations', 0))
+                            with col3:
+                                st.metric("Method", group_result.get('clustering_method', 'N/A'))
+                            with col4:
+                                if 'pca_explained_variance' in group_result:
+                                    st.metric("PCA Variance", f"{group_result['pca_explained_variance']:.1%}")
+                            
+                            if group_result.get('subpopulations_detected'):
+                                # Show subpopulation characteristics
+                                st.write("**Subpopulation Characteristics:**")
+                                
+                                subpop_chars = group_result.get('subpopulation_characteristics', {})
+                                
+                                # Create comparison table
+                                comparison_data = []
+                                for subpop_name, chars in subpop_chars.items():
+                                    row = {
+                                        'Subpopulation': f"Subpop {chars['subpopulation_id']}",
+                                        'N Cells': chars['n_cells'],
+                                        'Fraction': f"{chars['fraction_of_total']:.1%}"
+                                    }
+                                    
+                                    # Add key features
+                                    feature_means = chars.get('feature_means', {})
+                                    for feature, value in list(feature_means.items())[:3]:  # Top 3 features
+                                        row[feature.replace('_', ' ').title()] = f"{value:.4f}"
+                                    
+                                    comparison_data.append(row)
+                                
+                                if comparison_data:
+                                    comparison_df = pd.DataFrame(comparison_data)
+                                    st.dataframe(comparison_df, use_container_width=True)
+                                
+                                # Visualizations
+                                try:
+                                    from subpopulation_analysis import create_subpopulation_visualizations
+                                    
+                                    figs = create_subpopulation_visualizations(group_result, group_name)
+                                    
+                                    if figs:
+                                        with st.expander(f"📈 Visualizations for {group_name}", expanded=True):
+                                            for fig_name, fig in figs.items():
+                                                if fig is not None and hasattr(fig, 'update_layout'):
+                                                    st.plotly_chart(fig, use_container_width=True)
+                                except Exception as e:
+                                    st.warning(f"Could not generate visualizations: {str(e)}")
+                                
+                                # Download cell-level data with subpopulation assignments
+                                if 'cell_level_data' in group_result:
+                                    cell_data = group_result['cell_level_data']
+                                    csv = cell_data.to_csv(index=False)
+                                    
+                                    st.download_button(
+                                        label=f"📥 Download {group_name} Cell Data with Assignments",
+                                        data=csv,
+                                        file_name=f"{group_name}_subpopulations.csv",
+                                        mime="text/csv"
+                                    )
+                            else:
+                                st.info(f"{group_name} appears homogeneous - no distinct subpopulations detected.")
         
         # Motion Analysis tab
         with tabs[2]:
