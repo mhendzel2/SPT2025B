@@ -315,7 +315,11 @@ class ProjectManager:
             generator = EnhancedSPTReportGenerator()
             conditions_results = {}
             for cond in proj.conditions:
-                pooled = cond.pool_tracks()
+                pooled_result = cond.pool_tracks()
+                if isinstance(pooled_result, tuple):
+                    pooled, _ = pooled_result
+                else:
+                    pooled = pooled_result
                 if pooled is None or pooled.empty:
                     conditions_results[cond.name] = {'success': False, 'error': 'No data'}
                     continue
@@ -391,4 +395,7 @@ def pool_tracks_from_condition(project: 'Project', condition_id: str) -> pd.Data
     cond = next((c for c in project.conditions if c.id == condition_id), None)
     if cond is None:
         return pd.DataFrame()
-    return cond.pool_tracks()
+    pooled_result = cond.pool_tracks()
+    if isinstance(pooled_result, tuple):
+        return pooled_result[0]
+    return pooled_result

@@ -2118,7 +2118,11 @@ elif st.session_state.active_page == "Project Management":
                                 # Pool data from each condition
                                 condition_datasets = {}
                                 for cond in conditions_to_analyze:
-                                    pooled_df = cond.pool_tracks()
+                                    pooled_result = cond.pool_tracks()
+                                    if isinstance(pooled_result, tuple):
+                                        pooled_df, _ = pooled_result
+                                    else:
+                                        pooled_df = pooled_result
                                     if pooled_df is not None and not pooled_df.empty:
                                         condition_datasets[cond.name] = pooled_df
                                 
@@ -2181,7 +2185,11 @@ elif st.session_state.active_page == "Project Management":
                     try:
                         export_data = {}
                         for cond in conditions_to_analyze:
-                            pooled_df = cond.pool_tracks()
+                            pooled_result = cond.pool_tracks()
+                            if isinstance(pooled_result, tuple):
+                                pooled_df, _ = pooled_result
+                            else:
+                                pooled_df = pooled_result
                             if pooled_df is not None and not pooled_df.empty:
                                 export_data[cond.name] = pooled_df
                         
