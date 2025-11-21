@@ -72,6 +72,20 @@
           "type": "text/csv",
           "size": 10802,
           "data_path": "spt_projects\\data\\f276c4d6-2b6a-477f-93d4-88f9ddc3bed4.csv"
+        },
+        {
+          "id": "3a2d8820-4304-49e3-9f49-155ee6ce8217",
+          "name": "Cell13_tracks.xml",
+          "type": "text/csv",
+          "size": 6505,
+          "data_path": "spt_projects\\data\\3a2d8820-4304-49e3-9f49-155ee6ce8217.csv"
+        },
+        {
+          "id": "90513875-560b-48f4-b200-d6d9e32c3121",
+          "name": "Cell15_tracks.xml",
+          "type": "text/csv",
+          "size": 12473,
+          "data_path": "spt_projects\\data\\90513875-560b-48f4-b200-d6d9e32c3121.csv"
         }
       ]
     }
