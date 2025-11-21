@@ -5989,14 +5989,12 @@ Dilation expands detected particles to restore size after erosion."""
                             else:
                                 linked_tracks_df = link_particles(
                                     detection_dict,
-                                    method=linking_method,
                                     max_distance=max_distance,
-                                    max_frame_gap=max_frame_gap
+                                    memory=max_frame_gap,
+                                    min_track_length=min_track_length
                                 )
                                 if not linked_tracks_df.empty:
-                                    track_lengths = linked_tracks_df.groupby('track_id').size()
-                                    valid_tracks = track_lengths[track_lengths >= min_track_length].index
-                                    tracks_data = linked_tracks_df[linked_tracks_df['track_id'].isin(valid_tracks)]
+                                    tracks_data = linked_tracks_df
                                 else:
                                     tracks_data = pd.DataFrame()
 
