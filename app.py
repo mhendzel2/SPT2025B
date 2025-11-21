@@ -2457,10 +2457,19 @@ elif st.session_state.active_page == "Project Management":
                                                 st.write(f"**Analyses completed:** {len(cond_result.get('analysis_results', {}))}")
                                                 st.write(f"**Figures generated:** {len(cond_result.get('figures', {}))}")
                                                 
-                                                # Show figures
+                                                # Show figures - handle both Plotly and Matplotlib
                                                 for analysis_key, fig in cond_result.get('figures', {}).items():
                                                     if fig:
-                                                        st.plotly_chart(fig, use_container_width=True, key=f"fig_{cond_name}_{analysis_key}")
+                                                        try:
+                                                            # Check if it's a matplotlib figure
+                                                            import matplotlib.figure
+                                                            if isinstance(fig, matplotlib.figure.Figure):
+                                                                st.pyplot(fig, use_container_width=True, key=f"fig_{cond_name}_{analysis_key}")
+                                                            else:
+                                                                # Assume it's a Plotly figure
+                                                                st.plotly_chart(fig, use_container_width=True, key=f"fig_{cond_name}_{analysis_key}")
+                                                        except Exception as e:
+                                                            st.warning(f"Could not display figure for {analysis_key}: {e}")
                                             else:
                                                 st.error(f"Analysis failed: {cond_result.get('error', 'Unknown error')}")
                                     
@@ -2496,7 +2505,17 @@ elif st.session_state.active_page == "Project Management":
                                             
                                             # Show comparison figures
                                             if 'figures' in comparisons and comparisons['figures'].get('comparison_boxplots'):
-                                                st.plotly_chart(comparisons['figures']['comparison_boxplots'], use_container_width=True, key="comparison_boxplots")
+                                                fig = comparisons['figures']['comparison_boxplots']
+                                                try:
+                                                    # Check if it's a matplotlib figure
+                                                    import matplotlib.figure
+                                                    if isinstance(fig, matplotlib.figure.Figure):
+                                                        st.pyplot(fig, use_container_width=True, key="comparison_boxplots")
+                                                    else:
+                                                        # Assume it's a Plotly figure
+                                                        st.plotly_chart(fig, use_container_width=True, key="comparison_boxplots")
+                                                except Exception as e:
+                                                    st.warning(f"Could not display comparison figure: {e}")
                                         else:
                                             st.warning(f"Comparison analysis failed: {comparisons.get('error', 'Unknown error')}")
                                     
