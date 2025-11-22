@@ -8167,60 +8167,169 @@ elif st.session_state.active_page == "Analysis":
             
             # Check if multi-channel analysis is available
             if CORRELATIVE_ANALYSIS_AVAILABLE:
-                # Create a container for the secondary data upload
-                st.subheader("Load Secondary Channel Data")
+                # Check for existing intensity channels in primary data
+                existing_channels = None
+                if st.session_state.tracks_data is not None:
+                    from intensity_analysis import extract_intensity_channels
+                    existing_channels = extract_intensity_channels(st.session_state.tracks_data)
                 
-                # File uploader for second channel
-                channel2_file = st.file_uploader(
-                    "Upload secondary channel track data",
-                    type=["csv", "txt", "xls", "xlsx", "h5", "json"],
-                    key="channel2_uploader",
-                    help="Upload track data for the second channel to analyze interactions"
-                )
+                # Display detected channels
+                if existing_channels and len(existing_channels) > 0:
+                    st.success(f"📊 Detected {len(existing_channels)} intensity channel(s) in your tracking data!")
+                    with st.expander("ℹ️ Available Intensity Channels", expanded=False):
+                        for ch_name, ch_cols in existing_channels.items():
+                            st.write(f"**{ch_name.upper()}**: {', '.join(ch_cols)}")
                 
-                if channel2_file is not None:
-                    try:
-                        # Load the second channel data
-                        with st.spinner("Loading secondary channel data..."):
-                            channel2_data = load_tracks_file(channel2_file)
-                            
-                            # Format to standard format if needed
-                            channel2_data = format_track_data(channel2_data)
-                            
-                            # Display preview
-                            st.subheader("Secondary Channel Data Preview")
-                            st.dataframe(channel2_data.head())
-                            
-                            # Display basic statistics
-                            st.metric("Tracks", len(channel2_data['track_id'].unique()))
-                            st.metric("Total Points", len(channel2_data))
-                            
-                            # Set session state for secondary channel
-                            st.session_state.channel2_data = channel2_data
-                            
-                    except Exception as e:
-                        st.error(f"Error loading secondary channel data: {str(e)}")
-                        st.session_state.channel2_data = None
+                # Data source selection
+                st.subheader("Secondary Channel Data Source")
+                
+                if existing_channels and len(existing_channels) >= 2:
+                    data_source = st.radio(
+                        "Choose data source for secondary channel:",
+                        ["Use Existing Intensity Data", "Upload Separate Tracking File"],
+                        help="Use intensity columns already in your data, or upload a separate file"
+                    )
                 else:
-                    st.info("Please upload data for the secondary channel to perform multi-channel analysis.")
-                    st.session_state.channel2_data = None
+                    st.info("💡 Your tracking data contains intensity information for multiple channels. You can analyze channel interactions without uploading additional files!")
+                    data_source = "Upload Separate Tracking File"
                 
-                # Configure the Analysis settings
-                if st.session_state.tracks_data is not None and st.session_state.channel2_data is not None:
-                    st.subheader("Multi-Channel Analysis Settings")
+                # Handle existing intensity data
+                if existing_channels and len(existing_channels) >= 2 and data_source == "Use Existing Intensity Data":
+                    st.subheader("Select Channels for Analysis")
                     
-                    # Organize parameters in columns
+                    channel_list = list(existing_channels.keys())
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        st.write("Primary Channel Settings")
-                        primary_channel_name = st.text_input("Primary Channel Name", value="Channel 1", key="primary_ch_name")
-                        primary_color = st.color_picker("Primary Channel Color", value="#FF4B4B", key="primary_ch_color")
+                        primary_channel = st.selectbox(
+                            "Primary Channel",
+                            options=channel_list,
+                            index=0,
+                            key="primary_channel_select"
+                        )
+                        primary_channel_name = st.text_input("Primary Channel Name", value=primary_channel.upper(), key="primary_ch_name_existing")
+                        primary_color = st.color_picker("Primary Channel Color", value="#FF4B4B", key="primary_ch_color_existing")
                     
                     with col2:
-                        st.write("Secondary Channel Settings")
-                        secondary_channel_name = st.text_input("Secondary Channel Name", value="Channel 2", key="secondary_ch_name")
-                        secondary_color = st.color_picker("Secondary Channel Color", value="#4B70FF", key="secondary_ch_color")
+                        # Filter out primary channel from secondary options
+                        secondary_options = [ch for ch in channel_list if ch != primary_channel]
+                        if secondary_options:
+                            secondary_channel = st.selectbox(
+                                "Secondary Channel",
+                                options=secondary_options,
+                                index=0,
+                                key="secondary_channel_select"
+                            )
+                            secondary_channel_name = st.text_input("Secondary Channel Name", value=secondary_channel.upper(), key="secondary_ch_name_existing")
+                            secondary_color = st.color_picker("Secondary Channel Color", value="#4B70FF", key="secondary_ch_color_existing")
+                        else:
+                            st.warning("Need at least 2 channels for multi-channel analysis")
+                            secondary_channel = None
+                    
+                    # Select intensity columns to use
+                    if secondary_channel:
+                        st.subheader("Select Intensity Metrics")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            primary_intensity_col = st.selectbox(
+                                f"Intensity metric for {primary_channel_name}",
+                                options=existing_channels[primary_channel],
+                                key="primary_intensity_metric"
+                            )
+                        
+                        with col2:
+                            secondary_intensity_col = st.selectbox(
+                                f"Intensity metric for {secondary_channel_name}",
+                                options=existing_channels[secondary_channel],
+                                key="secondary_intensity_metric"
+                            )
+                        
+                        # Create virtual "channel2_data" using intensity columns from primary data
+                        # This allows the existing analysis code to work without modification
+                        channel2_data_virtual = st.session_state.tracks_data[['track_id', 'frame', 'x', 'y']].copy()
+                        if 'z' in st.session_state.tracks_data.columns:
+                            channel2_data_virtual['z'] = st.session_state.tracks_data['z']
+                        
+                        # Add intensity as the "primary" metric for this virtual channel
+                        channel2_data_virtual['intensity'] = st.session_state.tracks_data[secondary_intensity_col]
+                        
+                        # Also add intensity to primary data for correlation
+                        tracks_with_intensity = st.session_state.tracks_data.copy()
+                        if 'intensity' not in tracks_with_intensity.columns:
+                            tracks_with_intensity['intensity'] = tracks_with_intensity[primary_intensity_col]
+                        
+                        st.session_state.channel2_data = channel2_data_virtual
+                        st.session_state.tracks_data_with_intensity = tracks_with_intensity
+                        
+                        st.info(f"✓ Using {primary_intensity_col} from primary data and {secondary_intensity_col} as secondary channel")
+                
+                else:
+                    # Original file upload workflow
+                    st.subheader("Load Secondary Channel Data")
+                    
+                    # File uploader for second channel
+                    channel2_file = st.file_uploader(
+                        "Upload secondary channel track data",
+                        type=["csv", "txt", "xls", "xlsx", "h5", "json"],
+                        key="channel2_uploader",
+                        help="Upload track data for the second channel to analyze interactions"
+                    )
+                    
+                    if channel2_file is not None:
+                        try:
+                            # Load the second channel data
+                            with st.spinner("Loading secondary channel data..."):
+                                channel2_data = load_tracks_file(channel2_file)
+                                
+                                # Format to standard format if needed
+                                channel2_data = format_track_data(channel2_data)
+                                
+                                # Display preview
+                                st.subheader("Secondary Channel Data Preview")
+                                st.dataframe(channel2_data.head())
+                                
+                                # Display basic statistics
+                                st.metric("Tracks", len(channel2_data['track_id'].unique()))
+                                st.metric("Total Points", len(channel2_data))
+                                
+                                # Set session state for secondary channel
+                                st.session_state.channel2_data = channel2_data
+                                
+                        except Exception as e:
+                            st.error(f"Error loading secondary channel data: {str(e)}")
+                            st.session_state.channel2_data = None
+                    else:
+                        if not (existing_channels and len(existing_channels) >= 2):
+                            st.info("Please upload data for the secondary channel to perform multi-channel analysis.")
+                        st.session_state.channel2_data = None
+                
+                # Configure the Analysis settings
+                if st.session_state.tracks_data is not None and st.session_state.channel2_data is not None:
+                    # Check if we're using existing intensity data or separate files
+                    using_existing_intensity = (existing_channels and len(existing_channels) >= 2 and 
+                                               data_source == "Use Existing Intensity Data")
+                    
+                    if not using_existing_intensity:
+                        # Only show these settings if NOT using existing intensity data
+                        # (to avoid duplicate inputs)
+                        st.subheader("Multi-Channel Analysis Settings")
+                        
+                        # Organize parameters in columns
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write("Primary Channel Settings")
+                            primary_channel_name = st.text_input("Primary Channel Name", value="Channel 1", key="primary_ch_name")
+                            primary_color = st.color_picker("Primary Channel Color", value="#FF4B4B", key="primary_ch_color")
+                        
+                        with col2:
+                            st.write("Secondary Channel Settings")
+                            secondary_channel_name = st.text_input("Secondary Channel Name", value="Channel 2", key="secondary_ch_name")
+                            secondary_color = st.color_picker("Secondary Channel Color", value="#4B70FF", key="secondary_ch_color")
+                    else:
+                        # Settings already defined above for existing intensity mode
+                        pass
                     
                     # Analysis parameters
                     st.subheader("Interaction Parameters")
@@ -8246,11 +8355,16 @@ elif st.session_state.active_page == "Analysis":
                     if st.button("Run Multi-Channel Analysis"):
                         with st.spinner("Analyzing channel interactions..."):
                             try:
+                                # Determine which data to use for primary channel
+                                primary_data = (st.session_state.tracks_data_with_intensity 
+                                              if 'tracks_data_with_intensity' in st.session_state 
+                                              else st.session_state.tracks_data)
+                                
                                 # Create analyzer
                                 analyzer = MultiChannelAnalyzer()
                                 
                                 # Add channels
-                                analyzer.add_channel(st.session_state.tracks_data, primary_channel_name)
+                                analyzer.add_channel(primary_data, primary_channel_name)
                                 analyzer.add_channel(st.session_state.channel2_data, secondary_channel_name)
                                 
                                 # Calculate colocalization
