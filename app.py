@@ -7698,6 +7698,13 @@ elif st.session_state.active_page == "Analysis":
         with tabs[4]:
             st.header("Dwell Time Analysis")
             
+            # Debug info about loaded data
+            if 'tracks_data' in st.session_state and st.session_state.tracks_data is not None:
+                with st.expander("ℹ️ Data Information", expanded=False):
+                    st.write(f"**Data shape:** {st.session_state.tracks_data.shape}")
+                    st.write(f"**Columns:** {', '.join(st.session_state.tracks_data.columns.tolist())}")
+                    st.write(f"**Number of unique tracks:** {st.session_state.tracks_data['track_id'].nunique() if 'track_id' in st.session_state.tracks_data.columns else 'N/A'}")
+            
             # Check if the loaded data contains pre-calculated dwell events
             has_precalculated = False
             if 'tracks_data' in st.session_state and st.session_state.tracks_data is not None:
@@ -7706,13 +7713,14 @@ elif st.session_state.active_page == "Analysis":
                 
                 if len(available_dwell_cols) >= 2:  # Has at least 2 dwell-related columns
                     has_precalculated = True
-                    st.info("📊 Detected pre-calculated dwell event data in your file!")
+                    st.success("📊 Detected pre-calculated dwell event data in your file!")
                     st.write(f"**Available dwell columns:** {', '.join(available_dwell_cols)}")
                     
                     analysis_mode = st.radio(
                         "Analysis Mode:",
                         ["Use Pre-calculated Data", "Re-analyze from Scratch"],
-                        help="Pre-calculated: Use existing dwell statistics from your data. Re-analyze: Detect dwell events from scratch."
+                        help="Pre-calculated: Use existing dwell statistics from your data. Re-analyze: Detect dwell events from scratch.",
+                        key="dwell_analysis_mode"
                     )
                     
                     if analysis_mode == "Use Pre-calculated Data":
@@ -7760,6 +7768,10 @@ elif st.session_state.active_page == "Analysis":
                                 st.dataframe(results['region_stats'], use_container_width=True)
                         
                         st.stop()  # Skip the rest of the standard analysis UI
+                else:
+                    # No pre-calculated data detected
+                    st.warning("⚠️ No pre-calculated dwell event data detected in your file.")
+                    st.info("Your data needs columns like 'dwell_time', 'dwell_frames', 'start_frame', 'end_frame' to use pre-calculated mode. Otherwise, use the standard analysis below to detect dwell events from x, y coordinates.")
             
             # Parameters for dwell time analysis
             st.subheader("Analysis Parameters")
