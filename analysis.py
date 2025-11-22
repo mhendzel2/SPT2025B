@@ -1368,6 +1368,134 @@ def analyze_dwell_time(tracks_df: pd.DataFrame,
     return results
 
 
+def load_precalculated_dwell_events(dwell_events_df: pd.DataFrame,
+                                     frame_interval: float = 1.0) -> Dict[str, Any]:
+    """
+    Load and process pre-calculated dwell event data.
+    
+    This function handles data that already contains dwell event statistics,
+    such as exports from other analysis tools or previous analyses.
+    
+    Parameters
+    ----------
+    dwell_events_df : pd.DataFrame
+        DataFrame containing pre-calculated dwell events with columns:
+        - track_id: Track identifier
+        - dwell_time: Pre-calculated dwell time (in seconds)
+        - dwell_frames: Number of frames in dwell event
+        - start_frame, end_frame: Frame range of dwell event
+        - region_id: (optional) Region identifier
+        - start_x, start_y, end_x, end_y, mean_x, mean_y: (optional) Position data
+    frame_interval : float
+        Time between frames in seconds (for calculating times from frames if needed)
+        
+    Returns
+    -------
+    dict
+        Dictionary containing dwell time analysis results in standard format
+    """
+    # Validate required columns
+    required_cols = ['track_id']
+    missing_cols = [col for col in required_cols if col not in dwell_events_df.columns]
+    if missing_cols:
+        return {
+            'success': False,
+            'error': f"Missing required columns: {missing_cols}"
+        }
+    
+    # Make a copy to avoid modifying original
+    df = dwell_events_df.copy()
+    
+    # If dwell_time column doesn't exist but dwell_frames does, calculate it
+    if 'dwell_time' not in df.columns and 'dwell_frames' in df.columns:
+        df['dwell_time'] = df['dwell_frames'] * frame_interval
+    elif 'dwell_time' not in df.columns:
+        return {
+            'success': False,
+            'error': "Neither 'dwell_time' nor 'dwell_frames' column found"
+        }
+    
+    # Ensure dwell_time is numeric
+    df['dwell_time'] = pd.to_numeric(df['dwell_time'], errors='coerce')
+    df = df.dropna(subset=['dwell_time'])
+    
+    if df.empty:
+        return {
+            'success': False,
+            'error': "No valid dwell time data after cleaning"
+        }
+    
+    # Calculate track-level statistics
+    track_stats = df.groupby('track_id').agg({
+        'dwell_time': ['count', 'sum', 'mean']
+    }).reset_index()
+    track_stats.columns = ['track_id', 'n_dwell_events', 'total_dwell_time', 'mean_dwell_time']
+    
+    # Calculate track durations if frame data is available
+    if 'start_frame' in df.columns and 'end_frame' in df.columns:
+        track_durations = df.groupby('track_id').agg({
+            'start_frame': 'min',
+            'end_frame': 'max'
+        }).reset_index()
+        track_durations['duration'] = (track_durations['end_frame'] - track_durations['start_frame']) * frame_interval
+        track_stats = track_stats.merge(track_durations[['track_id', 'duration']], on='track_id', how='left')
+        track_stats['dwell_fraction'] = track_stats['total_dwell_time'] / track_stats['duration']
+    
+    # Build results structure
+    results = {
+        'success': True,
+        'dwell_events': df,
+        'track_results': track_stats,
+        'data_source': 'pre-calculated'
+    }
+    
+    # Calculate ensemble statistics
+    n_tracks = df['track_id'].nunique()
+    n_tracks_with_dwell = len(track_stats[track_stats['n_dwell_events'] > 0])
+    
+    ensemble_stats = {
+        'n_tracks_analyzed': n_tracks,
+        'n_tracks_with_dwell': n_tracks_with_dwell,
+        'n_dwell_events': len(df),
+        'mean_dwell_time': df['dwell_time'].mean(),
+        'median_dwell_time': df['dwell_time'].median(),
+        'std_dwell_time': df['dwell_time'].std(),
+        'max_dwell_time': df['dwell_time'].max(),
+        'min_dwell_time': df['dwell_time'].min(),
+        'mean_dwells_per_track': track_stats['n_dwell_events'].mean(),
+        'analysis_type': 'pre-calculated',
+        'frame_interval': frame_interval
+    }
+    
+    # Add dwell fraction if available
+    if 'dwell_fraction' in track_stats.columns:
+        ensemble_stats['mean_dwell_fraction'] = track_stats['dwell_fraction'].mean()
+    
+    results['ensemble_results'] = ensemble_stats
+    
+    # Calculate region statistics if region_id is available
+    if 'region_id' in df.columns:
+        region_stats = df.groupby('region_id').agg({
+            'dwell_time': ['count', 'mean', 'median', 'std'],
+            'track_id': 'nunique'
+        }).reset_index()
+        region_stats.columns = ['region_id', 'n_dwell_events', 'mean_dwell_time', 
+                               'median_dwell_time', 'std_dwell_time', 'n_tracks']
+        results['region_stats'] = region_stats
+    
+    # Create dwell_stats dictionary for UI display
+    results['dwell_stats'] = {
+        'Total tracks analyzed': n_tracks,
+        'Tracks with dwell events': n_tracks_with_dwell,
+        'Total dwell events': len(df),
+        'Mean dwell time': f"{ensemble_stats['mean_dwell_time']:.3f} s",
+        'Median dwell time': f"{ensemble_stats['median_dwell_time']:.3f} s",
+        'Std dwell time': f"{ensemble_stats['std_dwell_time']:.3f} s"
+    }
+    
+    return results
+
+
 # --- Gel Structure Analysis ---
 
 def analyze_gel_structure(tracks_df: pd.DataFrame, 

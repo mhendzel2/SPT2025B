@@ -125,7 +125,7 @@ from multi_channel_analysis import (
 )
 from analysis import (
     calculate_msd, analyze_diffusion, analyze_motion, analyze_clustering,
-    analyze_dwell_time, analyze_gel_structure, analyze_diffusion_population,
+    analyze_dwell_time, load_precalculated_dwell_events, analyze_gel_structure, analyze_diffusion_population,
     analyze_crowding, analyze_active_transport, analyze_boundary_crossing,
     analyze_polymer_physics
 )
@@ -7697,6 +7697,69 @@ elif st.session_state.active_page == "Analysis":
         # Dwell Time Analysis tab
         with tabs[4]:
             st.header("Dwell Time Analysis")
+            
+            # Check if the loaded data contains pre-calculated dwell events
+            has_precalculated = False
+            if 'tracks_data' in st.session_state and st.session_state.tracks_data is not None:
+                dwell_cols = ['dwell_time', 'dwell_frames', 'start_frame', 'end_frame']
+                available_dwell_cols = [col for col in dwell_cols if col in st.session_state.tracks_data.columns]
+                
+                if len(available_dwell_cols) >= 2:  # Has at least 2 dwell-related columns
+                    has_precalculated = True
+                    st.info("📊 Detected pre-calculated dwell event data in your file!")
+                    st.write(f"**Available dwell columns:** {', '.join(available_dwell_cols)}")
+                    
+                    analysis_mode = st.radio(
+                        "Analysis Mode:",
+                        ["Use Pre-calculated Data", "Re-analyze from Scratch"],
+                        help="Pre-calculated: Use existing dwell statistics from your data. Re-analyze: Detect dwell events from scratch."
+                    )
+                    
+                    if analysis_mode == "Use Pre-calculated Data":
+                        # Add button to load pre-calculated dwell events
+                        if st.button("Load Pre-calculated Dwell Events"):
+                            with st.spinner("Loading dwell event statistics..."):
+                                try:
+                                    frame_interval = st.session_state.get('frame_interval', 0.1)
+                                    dwell_results = load_precalculated_dwell_events(
+                                        st.session_state.tracks_data,
+                                        frame_interval=frame_interval
+                                    )
+                                    
+                                    if dwell_results.get('success'):
+                                        st.session_state.analysis_results["dwell_time"] = dwell_results
+                                        st.success(f"✅ Loaded {dwell_results['ensemble_results']['n_dwell_events']} dwell events from {dwell_results['ensemble_results']['n_tracks_analyzed']} tracks!")
+                                    else:
+                                        st.error(f"Failed to load: {dwell_results.get('error', 'Unknown error')}")
+                                except Exception as e:
+                                    st.error(f"Error loading pre-calculated dwell events: {str(e)}")
+                        
+                        # Display results if loaded
+                        if "dwell_time" in st.session_state.analysis_results:
+                            results = st.session_state.analysis_results["dwell_time"]
+                            
+                            # Show statistics
+                            st.subheader("Dwell Statistics")
+                            if 'dwell_stats' in results:
+                                for key, value in results['dwell_stats'].items():
+                                    st.text(f"{key}: {value}")
+                            
+                            # Show dwell events table
+                            st.subheader("Dwell Events")
+                            if 'dwell_events' in results and not results['dwell_events'].empty:
+                                st.dataframe(results['dwell_events'], use_container_width=True)
+                            
+                            # Show track results
+                            if 'track_results' in results and not results['track_results'].empty:
+                                st.subheader("Track Statistics")
+                                st.dataframe(results['track_results'], use_container_width=True)
+                            
+                            # Show region stats if available
+                            if 'region_stats' in results:
+                                st.subheader("Region Statistics")
+                                st.dataframe(results['region_stats'], use_container_width=True)
+                        
+                        st.stop()  # Skip the rest of the standard analysis UI
             
             # Parameters for dwell time analysis
             st.subheader("Analysis Parameters")
