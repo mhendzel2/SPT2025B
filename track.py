@@ -1,4 +1,8 @@
-import btrack
+try:
+    import btrack
+    BTRACK_AVAILABLE = True
+except ImportError:
+    BTRACK_AVAILABLE = False
 import numpy as np
 import pandas as pd
 
@@ -21,6 +25,9 @@ def run_btrack(detections: pd.DataFrame, config_path: str = "models/cell_config.
             - properties: A dictionary of track properties.
             - graph: A dictionary representing the tracking graph.
     """
+    if not BTRACK_AVAILABLE:
+        raise ImportError("btrack is not installed. Please install it to use this feature.")
+
     # Convert detections to btrack objects
     objects = btrack.utils.segmentation_to_objects(detections, properties=('label',))
 
