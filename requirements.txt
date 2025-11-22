@@ -1,68 +1,74 @@
+# ============================================================================
+# SPT2025B Requirements - Updated for Python 3.11-3.12 compatibility
+# ============================================================================
+# Python Version Required: >=3.11, <3.13
+# Note: Python 3.13+ has compatibility issues with some dependencies
+
 # Core dependencies
-streamlit>=1.28.0
-pandas>=1.5.0
-numpy>=1.24
-plotly>=5.0.0
-matplotlib>=3.5.0
-seaborn>=0.11.0
+streamlit>=1.28.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+plotly>=5.15.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
 
 # Scientific computing
-scikit-learn>=1.3
-scikit-image>=0.19.0
-scipy>=1.10
-statsmodels>=0.13.0
-networkx>=3.0
-lazy_loader>=0.4  # Required by scikit-image
-imageio>=2.33  # Required by scikit-image
-tifffile>=2022.8.12  # Required by scikit-image
+scikit-learn>=1.3.0
+scikit-image>=0.21.0
+scipy>=1.11.0
+statsmodels>=0.14.0
+networkx>=3.1
+
+# Dependencies for scikit-image
+lazy-loader>=0.3
+imageio>=2.31.0
+tifffile>=2023.7.10
+PyWavelets>=1.4.1
 
 # File I/O
-h5py>=3.7.0
+h5py>=3.9.0
 xmltodict>=0.13.0
 lxml>=4.9.0
-openpyxl>=3.0.0
-et-xmlfile>=2.0.0  # Required by openpyxl
-Pillow>=9.0.0
+openpyxl>=3.1.0
+Pillow>=10.0.0
 
 # Image processing and tracking
-opencv-python>=4.5.0
-btrack>=0.7.0
-deeptrack>=2.0.0
-# segment-anything>=1.0  # Optional: SAM segmentation
-# cellpose>=2.0  # Optional: Cellpose segmentation
+opencv-python>=4.8.0
+trackpy>=0.6.0  # Alternative to btrack for broader compatibility
 
-# Dependencies for btrack and deeptrack
-cvxopt>=1.3.1  # Required by btrack
-pooch>=1.0.0  # Required by btrack
-pydantic>=2.0.0  # Required by btrack
-more-itertools  # Required by deeptrack
-pint  # Required by deeptrack
-rich  # Required by deeptrack
-gdown  # Required by deeptrack
+# Optional advanced tracking (may have compatibility issues)
+# btrack>=0.6.0  # Uncomment if needed, requires specific versions
+# deeptrack>=2.0.0  # Uncomment if needed
 
 # Advanced analysis
-pywavelets>=1.3.0
+pywavelets>=1.4.0
 hmmlearn>=0.3.0
-pingouin>=0.5.0
-fbm>=0.2.0
-# giotto-tda>=0.1.4  # Optional: Has dependency issues on Windows Python 3.13
+pingouin>=0.5.3
+fbm>=0.3.0
 
 # Dependencies for pingouin
-pandas-flavor>=0.7.0  # Required by pingouin
-tabulate>=0.9.0  # Required by pingouin
+pandas-flavor>=0.6.0
+tabulate>=0.9.0
 
 # Dependencies for statsmodels
-patsy>=0.5.6  # Required by statsmodels
-
-# Machine learning (optional but recommended)
-tensorflow>=2.12.0
+patsy>=0.5.3
 
 # Report generation
-reportlab>=4.0.0
+reportlab>=4.0.4
 
 # Testing
-pytest>=7.0.0
+pytest>=7.4.0
 
-# Optional development tools
-# types-requests
-# streamlit types for dev tooling
+# Utility packages
+more-itertools>=10.1.0
+rich>=13.5.0
+
+# Optional: Machine Learning (comment out if not needed to save space)
+# tensorflow>=2.13.0,<2.16.0  # TF 2.16+ requires Python 3.9-3.12
+
+# Optional: Advanced segmentation (comment out if causing issues)
+# segment-anything  # Requires PyTorch
+# cellpose>=2.2.0  # Requires PyTorch
+
+# Note: If you encounter import errors related to missing modules,
+# ensure all optional dependencies above are uncommented

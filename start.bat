@@ -1,4 +1,6 @@
 @echo off
+setlocal enabledelayedexpansion
+
 echo ========================================
 echo SPT2025B - Starting Application
 echo ========================================
@@ -11,6 +13,12 @@ if not exist venv (
     exit /b 1
 )
 
+REM Check .python-version file
+if exist .python-version (
+    set /p EXPECTED_VERSION=<.python-version
+    echo Expected Python version: !EXPECTED_VERSION!
+)
+
 REM Activate virtual environment
 echo.
 echo Activating virtual environment...
@@ -19,6 +27,22 @@ if errorlevel 1 (
     echo ERROR: Failed to activate virtual environment
     pause
     exit /b 1
+)
+
+REM Verify Python version in venv
+for /f "tokens=2" %%i in ('python --version 2^>^&1') do set CURRENT_VERSION=%%i
+echo Current Python version: !CURRENT_VERSION!
+
+if defined EXPECTED_VERSION (
+    if "!CURRENT_VERSION!" NEQ "!EXPECTED_VERSION!" (
+        echo WARNING: Python version mismatch!
+        echo Expected: !EXPECTED_VERSION!
+        echo Current:  !CURRENT_VERSION!
+        echo.
+        echo You may need to recreate the virtual environment.
+        echo Run install.bat to update.
+        echo.
+    )
 )
 
 REM Verify Streamlit is installed
