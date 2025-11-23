@@ -70,5 +70,15 @@ rich>=13.5.0
 # segment-anything  # Requires PyTorch
 # cellpose>=2.2.0  # Requires PyTorch
 
+# SAM3 Dependencies
+timm>=1.0.17
+ftfy==6.1.1
+regex
+iopath>=0.1.10
+decord
+pycocotools
+psutil
+huggingface_hub
+
 # Note: If you encounter import errors related to missing modules,
 # ensure all optional dependencies above are uncommented

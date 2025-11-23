@@ -16,6 +16,28 @@ import io
 import matplotlib.pyplot as plt
 import os
 import tempfile
+import sys
+
+# Try to import SAM3
+try:
+    # Attempt to import from installed package
+    import sam3
+    from sam3.model_builder import build_sam3_image_model
+    from sam3.model.sam3_image_processor import Sam3Processor
+    SAM3_AVAILABLE = True
+except ImportError:
+    # Fallback: check if local directory exists and add to path (dev mode)
+    if os.path.exists("sam3_lib"):
+        sys.path.append("sam3_lib")
+        try:
+            import sam3
+            from sam3.model_builder import build_sam3_image_model
+            from sam3.model.sam3_image_processor import Sam3Processor
+            SAM3_AVAILABLE = True
+        except ImportError:
+            SAM3_AVAILABLE = False
+    else:
+        SAM3_AVAILABLE = False
 
 try:
     # CellSAM imports
@@ -47,6 +69,278 @@ except ImportError:
 # Set availability flags based on imports
 CELLSAM_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE and SAM_AVAILABLE
 CELLPOSE_AVAILABLE = TORCH_AVAILABLE and OPENCV_AVAILABLE and 'CellposeModel' in locals()
+# SAM3 availability is determined above
+
+class SAM3Segmentation:
+    """
+    SAM3 (Segment Anything Model 3) implementation for particle detection.
+    Supports text-based prompting for concept segmentation.
+    """
+
+    def __init__(self, device: str = "auto"):
+        """
+        Initialize SAM3 model wrapper.
+
+        Parameters
+        ----------
+        device : str
+            Device to run on ('auto', 'cpu', 'cuda')
+        """
+        self.device = self._get_device(device)
+        self.model = None
+        self.processor = None
+        self.loaded = False
+
+    def _get_device(self, device: str) -> str:
+        """Determine the best device to use."""
+        if device == "auto":
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        return device
+
+    def load_model(self, checkpoint_path: str) -> bool:
+        """
+        Load the SAM3 model from a local checkpoint.
+
+        Parameters
+        ----------
+        checkpoint_path : str
+            Local path to the SAM3 checkpoint file (.pt)
+
+        Returns
+        -------
+        bool
+            True if model loaded successfully
+        """
+        try:
+            if not SAM3_AVAILABLE:
+                st.error("SAM3 dependencies not available.")
+                return False
+
+            if not os.path.exists(checkpoint_path):
+                st.error(f"Checkpoint file not found at: {checkpoint_path}")
+                return False
+
+            st.info(f"Loading SAM3 model from {checkpoint_path} on {self.device}...")
+
+            # Use bfloat16 or float16 for memory efficiency if on CUDA
+            # However, build_sam3_image_model doesn't expose dtype directly,
+            # but we can cast after loading if needed.
+            # For now, we stick to default loading.
+
+            with torch.no_grad():
+                self.model = build_sam3_image_model(
+                    checkpoint_path=checkpoint_path,
+                    device=self.device,
+                    eval_mode=True,
+                    load_from_HF=False  # We use local path
+                )
+
+                self.processor = Sam3Processor(
+                    self.model,
+                    device=self.device
+                )
+
+            self.loaded = True
+            st.success(f"SAM3 model loaded successfully on {self.device}")
+            return True
+
+        except Exception as e:
+            st.error(f"Failed to load SAM3 model: {str(e)}")
+            import traceback
+            st.text(traceback.format_exc())
+            return False
+
+    def detect_particles(self, image: np.ndarray,
+                        prompt: str = "object",
+                        confidence_threshold: float = 0.4,
+                        size_filter: Tuple[int, int] = (10, 1000)) -> pd.DataFrame:
+        """
+        Detect particles using SAM3 with text prompt.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Input image (RGB or Grayscale)
+        prompt : str
+            Text prompt for detection (e.g., "cell", "nucleus", "particle")
+        confidence_threshold : float
+            Confidence threshold for detection
+        size_filter : tuple
+            Min and max particle sizes (pixels)
+
+        Returns
+        -------
+        pd.DataFrame
+            Detected particle coordinates and properties
+        """
+        if not self.loaded:
+            st.error("SAM3 model not loaded.")
+            return pd.DataFrame()
+
+        try:
+            # Preprocess image to RGB PIL Image
+            if isinstance(image, np.ndarray):
+                if image.ndim == 2:
+                    image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                elif image.ndim == 3:
+                    image_rgb = image  # Assume RGB
+                else:
+                    raise ValueError(f"Unsupported image shape: {image.shape}")
+
+                pil_image = Image.fromarray(image_rgb)
+            else:
+                # Assume it's already PIL or compatible
+                pil_image = image
+
+            with torch.no_grad():
+                # 1. Set Image
+                self.processor.set_image(pil_image)
+
+                # 2. Set Confidence Threshold
+                # We can set it on the processor, or filter later.
+                # The processor has a method set_confidence_threshold which might affect internal logic.
+                # But setting it too high might miss things, setting it too low might OOM.
+                # Let's use a moderate threshold internally and filter output.
+                self.processor.set_confidence_threshold(confidence_threshold)
+
+                # 3. Run Inference with Text Prompt
+                # The processor returns state dict with 'masks', 'boxes', 'scores'
+                state = {}
+                # Note: set_image returns the state, so we should capture it
+                state = self.processor.set_image(pil_image, state=state)
+
+                # Run prompt
+                results_state = self.processor.set_text_prompt(prompt, state)
+
+                # Extract results
+                # masks: (N, H, W) bool
+                # boxes: (N, 4) float [x1, y1, x2, y2]
+                # scores: (N,) float
+
+                masks = results_state.get("masks")
+                boxes = results_state.get("boxes")
+                scores = results_state.get("scores")
+
+                if masks is None or len(masks) == 0:
+                    return pd.DataFrame(columns=['x', 'y', 'area', 'confidence', 'eccentricity', 'bbox'])
+
+                # Move to CPU/Numpy
+                masks_np = masks.cpu().numpy().astype(np.uint8)
+                scores_np = scores.cpu().numpy()
+                boxes_np = boxes.cpu().numpy()
+
+                particles = []
+
+                for i in range(len(masks_np)):
+                    mask = masks_np[i]
+                    score = float(scores_np[i])
+                    box = boxes_np[i] # [x1, y1, x2, y2]
+
+                    # Calculate properties
+                    # We can use opencv on the mask
+                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                    if not contours:
+                        continue
+
+                    # Largest contour
+                    contour = max(contours, key=cv2.contourArea)
+                    area = cv2.contourArea(contour)
+
+                    # Filter by size
+                    if not (size_filter[0] <= area <= size_filter[1]):
+                        continue
+
+                    # Centroid
+                    M = cv2.moments(contour)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                    else:
+                        cx, cy = int((box[0]+box[2])/2), int((box[1]+box[3])/2)
+
+                    # Eccentricity
+                    if len(contour) >= 5:
+                        ellipse = cv2.fitEllipse(contour)
+                        axes = ellipse[1]
+                        eccentricity = np.sqrt(1 - (min(axes) / max(axes))**2) if max(axes) > 0 else 0
+                    else:
+                        eccentricity = 0
+
+                    particles.append({
+                        'x': cx,
+                        'y': cy,
+                        'area': area,
+                        'confidence': score,
+                        'eccentricity': eccentricity,
+                        'bbox': (box[0], box[1], box[2]-box[0], box[3]-box[1]) # x, y, w, h
+                    })
+
+                if particles:
+                    return pd.DataFrame(particles)
+                else:
+                    return pd.DataFrame(columns=['x', 'y', 'area', 'confidence', 'eccentricity', 'bbox'])
+
+        except torch.cuda.OutOfMemoryError:
+            st.error("CUDA Out of Memory. Try reducing image size or running on CPU.")
+            # Optionally clear cache
+            torch.cuda.empty_cache()
+            return pd.DataFrame()
+        except Exception as e:
+            st.error(f"SAM3 inference failed: {str(e)}")
+            return pd.DataFrame()
+
+    def visualize_detections(self, image: np.ndarray, detections: pd.DataFrame) -> np.ndarray:
+        """
+        Visualize detected particles on the image.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Input image
+        detections : pd.DataFrame
+            Detected particles
+
+        Returns
+        -------
+        np.ndarray
+            Image with visualized detections
+        """
+        # Ensure image is RGB
+        if len(image.shape) == 2:
+            vis_image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            vis_image = image.copy()
+
+        # Normalize if not uint8
+        if vis_image.dtype != np.uint8:
+            vis_image = ((vis_image - vis_image.min()) / (vis_image.max() - vis_image.min()) * 255).astype(np.uint8)
+
+        # Draw detected particles
+        for _, row in detections.iterrows():
+            x, y = int(row['x']), int(row['y'])
+            radius = int(np.sqrt(row['area'] / np.pi))
+            confidence = row['confidence']
+
+            # Color based on confidence (cyan -> blue)
+            # SAM3 usually gives good confidence, so let's use a distinct color
+            color = (255, 255, 0) # Cyan/Yellow mix (BGR: 0, 255, 255 is yellow in BGR? No BGR 0,255,255 is yellow)
+            # Let's use Red for visibility
+            color = (0, 0, 255)
+
+            # Draw circle at particle position
+            cv2.circle(vis_image, (x, y), radius, color, 2)
+
+            # Draw bounding box if available
+            if 'bbox' in row and row['bbox'] is not None:
+                bbox = row['bbox']
+                if isinstance(bbox, tuple) and len(bbox) == 4:
+                    x1, y1, w, h = bbox
+                    x1, y1, w, h = int(x1), int(y1), int(w), int(h)
+                    cv2.rectangle(vis_image, (x1, y1), (x1 + w, y1 + h), (0, 255, 255), 1)
+
+        return vis_image
+
 
 class CellSAMSegmentation:
     """
@@ -564,16 +858,124 @@ def create_advanced_segmentation_interface():
     # Method selection
     method = st.selectbox(
         "Select segmentation method",
-        ["CellSAM (Segment Anything)", "Cellpose", "Compare Methods"],
-        help="Choose between CellSAM and Cellpose for particle detection"
+        ["SAM3 (Segment Anything 3)", "CellSAM (Segment Anything)", "Cellpose", "Compare Methods"],
+        help="Choose between SAM3, CellSAM, and Cellpose for particle detection"
     )
     
-    if method == "CellSAM (Segment Anything)":
+    if method == "SAM3 (Segment Anything 3)":
+        create_sam3_interface()
+    elif method == "CellSAM (Segment Anything)":
         create_cellsam_interface()
     elif method == "Cellpose":
         create_cellpose_interface()
     else:
         create_comparison_interface()
+
+def create_sam3_interface():
+    """Create interface for SAM3 segmentation."""
+    st.subheader("SAM3 Configuration")
+
+    st.markdown("""
+    **SAM3** uses text prompts to find specific concepts (e.g., "cell", "nucleus", "particle")
+    or generic objects in the image.
+    """)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        checkpoint_path = st.text_input(
+            "Path to SAM3 Checkpoint (.pt)",
+            value=os.path.join(os.getcwd(), "sam3_checkpoint.pt"),
+            help="Absolute path to the downloaded sam3.pt file"
+        )
+        text_prompt = st.text_input(
+            "Text Prompt",
+            value="cell",
+            help="What do you want to detect? (e.g., 'cell', 'nucleus', 'mitochondria')"
+        )
+
+    with col2:
+        confidence_threshold = st.slider(
+            "Confidence threshold", 0.0, 1.0, 0.4, 0.05,
+            help="Minimum confidence for particle detection"
+        )
+
+        min_size = st.number_input("Minimum particle size (pixels)", 1, 1000, 10, key="sam3_min")
+        max_size = st.number_input("Maximum particle size (pixels)", 10, 10000, 1000, key="sam3_max")
+
+    # Initialize segmentation
+    if st.button("Initialize SAM3"):
+        if not os.path.exists(checkpoint_path):
+            st.error(f"Checkpoint file not found at {checkpoint_path}. Please download it from HuggingFace (facebook/sam3) and provide the correct path.")
+        else:
+            with st.spinner("Loading SAM3 model..."):
+                segmenter = SAM3Segmentation()
+                if segmenter.load_model(checkpoint_path):
+                    st.session_state.sam3_segmenter = segmenter
+                    st.session_state.sam3_checkpoint = checkpoint_path
+                    # st.success("SAM3 initialized successfully!") # Done in load_model
+
+    # Run segmentation if model is loaded and image is available
+    if 'sam3_segmenter' in st.session_state and 'image_data' in st.session_state and st.session_state.image_data is not None:
+        if st.button("Run SAM3 Detection"):
+            run_sam3_detection(text_prompt, confidence_threshold, (min_size, max_size))
+
+def run_sam3_detection(prompt: str, confidence_threshold: float, size_filter: Tuple[int, int]):
+    """Run SAM3 detection on loaded images."""
+    try:
+        # Get the first loaded image
+        image = st.session_state.image_data[0] if isinstance(st.session_state.image_data, list) else st.session_state.image_data
+
+        with st.spinner(f"Running SAM3 detection for '{prompt}'..."):
+            detections = st.session_state.sam3_segmenter.detect_particles(
+                image, prompt, confidence_threshold, size_filter
+            )
+
+        if not detections.empty:
+            st.success(f"Detected {len(detections)} particles with SAM3")
+            st.session_state.sam3_detections = detections
+
+            # Save detections as a structured format for tracking
+            frame = 0  # First frame
+            particle_detections = {}
+            particle_detections[frame] = []
+
+            for _, row in detections.iterrows():
+                particle = {
+                    'x': float(row['x']),
+                    'y': float(row['y']),
+                    'intensity': float(row.get('confidence', 1.0)),
+                    'size': float(np.sqrt(row['area'] / np.pi)),
+                    'id': int(row.name) if isinstance(row.name, (int, np.integer)) else 0
+                }
+                particle_detections[frame].append(particle)
+
+            # Store for use in tracking
+            st.session_state.particle_detections = particle_detections
+
+            # Display results
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Detection Results")
+                st.dataframe(detections.head(10))
+
+            with col2:
+                st.subheader("Detection Statistics")
+                st.metric("Total Particles", len(detections))
+                st.metric("Mean Area", f"{detections['area'].mean():.1f} px²")
+                st.metric("Mean Confidence", f"{detections['confidence'].mean():.3f}")
+
+            # Visualize detections on the image
+            vis_image = st.session_state.sam3_segmenter.visualize_detections(image, detections)
+            st.subheader("Visualization")
+            st.image(vis_image, caption="Detected Particles (SAM3)", use_container_width=True)
+
+            # Allow using these detections for tracking
+            st.info("These detections can now be used for tracking in the Tracking tab.")
+        else:
+            st.warning("No particles detected with current parameters. Try adjusting the confidence threshold or prompt.")
+
+    except Exception as e:
+        st.error(f"SAM3 detection failed: {str(e)}")
 
 
 def create_cellsam_interface():
@@ -808,6 +1210,7 @@ def get_available_segmenters():
         Dictionary of available segmentation methods and their status
     """
     available = {
+        'SAM3': SAM3_AVAILABLE,
         'CellSAM': CELLSAM_AVAILABLE,
         'Cellpose': CELLPOSE_AVAILABLE
     }
@@ -830,6 +1233,11 @@ def integrate_advanced_segmentation_with_app():
             st.markdown("""
             ### Required packages:
             
+            For SAM3:
+            ```
+            See installation instructions for facebookresearch/sam3
+            ```
+
             For CellSAM:
             ```
             pip install torch segment-anything
