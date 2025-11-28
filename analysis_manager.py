@@ -12,7 +12,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 try:
-    from analysis_optimized import calculate_msd, analyze_diffusion, analyze_motion, analyze_boundary_crossing
+    from msd_calculation import calculate_msd
+    from analysis import analyze_diffusion, analyze_motion, analyze_boundary_crossing
     ANALYSIS_AVAILABLE = True
 except ImportError:
     calculate_msd = None

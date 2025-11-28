@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from typing import Tuple, Dict, Optional
 
 try:
     from hmmlearn import hmm
@@ -64,3 +65,68 @@ def fit_hmm(tracks_df: pd.DataFrame, n_states: int = 3, n_iter: int = 100):
         predictions[track_id] = states
 
     return model, predictions
+
+
+def optimize_hmm_states(tracks_df: pd.DataFrame, max_states: int = 5, n_iter: int = 100) -> Tuple[int, Dict[int, float]]:
+    """
+    Determine optimal number of HMM states using BIC.
+    
+    Args:
+        tracks_df: DataFrame of tracks
+        max_states: Maximum number of states to test
+        n_iter: Number of iterations for HMM fitting
+        
+    Returns:
+        Tuple of (optimal_n_states, bic_scores)
+    """
+    ensure_hmmlearn()
+    
+    # Prepare data (same as fit_hmm)
+    all_displacements = []
+    track_lengths = []
+    
+    for track_id, track in tracks_df.groupby('track_id'):
+        displacements = np.diff(track[['x', 'y']].values, axis=0)
+        if len(displacements) > 0:
+            all_displacements.append(displacements)
+            track_lengths.append(len(displacements))
+            
+    if not all_displacements:
+        return 1, {}
+        
+    X = np.concatenate(all_displacements)
+    
+    bic_scores = {}
+    best_bic = float('inf')
+    best_n = 1
+    
+    for n in range(1, max_states + 1):
+        try:
+            model = hmm.GaussianHMM(n_components=n, covariance_type="full", n_iter=n_iter)
+            model.fit(X, lengths=track_lengths)
+            
+            # Calculate BIC
+            # BIC = -2 * log_likelihood + k * log(N)
+            log_likelihood = model.score(X, lengths=track_lengths)
+            n_features = X.shape[1]
+            
+            # Number of parameters:
+            # Transition matrix: n * (n - 1)
+            # Means: n * n_features
+            # Covariances (full): n * n_features * (n_features + 1) / 2
+            n_params = n * (n - 1) + n * n_features + n * n_features * (n_features + 1) / 2
+            n_samples = len(X)
+            
+            bic = -2 * log_likelihood + n_params * np.log(n_samples)
+            bic_scores[n] = bic
+            
+            if bic < best_bic:
+                best_bic = bic
+                best_n = n
+                
+        except Exception as e:
+            # Log error but continue trying other states
+            print(f"Failed to fit HMM with {n} states: {e}")
+            continue
+            
+    return best_n, bic_scores

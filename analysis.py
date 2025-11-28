@@ -23,115 +23,18 @@ from sklearn.cluster import DBSCAN, KMeans, OPTICS
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import KDTree, NearestNeighbors
 from scipy.cluster.hierarchy import fcluster, linkage
-
+from msd_calculation import calculate_msd
+from constants import (
+    DEFAULT_SHORT_LAG_CUTOFF,
+    MIN_POINTS_ANOMALOUS,
+    MIN_POINTS_CONFINEMENT,
+    ALPHA_SUBDIFFUSIVE_THRESHOLD,
+    ALPHA_SUPERDIFFUSIVE_THRESHOLD
+)
 
 # --- Diffusion Analysis ---
 
-def calculate_msd(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
-                 frame_interval: float = 1.0, min_track_length: int = 5) -> pd.DataFrame:
-    """
-    Calculate mean squared displacement (MSD) for all tracks.
-    
-    Parameters
-    ----------
-    tracks_df : pd.DataFrame
-        Track data in standard format with track_id, frame, x, y columns
-    max_lag : int
-        Maximum lag time (in frames) for MSD calculation
-    pixel_size : float
-        Pixel size in micrometers
-    frame_interval : float
-        Time between frames in seconds
-    min_track_length : int
-        Minimum track length to include in analysis
-        
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with MSD values for each track at different lag times (columns: track_id, lag_time, msd, n_points)
-    """
-    try:
-        # Input validation
-        if tracks_df.empty:
-            raise ValueError("Empty tracks DataFrame provided")
-        
-        required_cols = ['track_id', 'frame', 'x', 'y']
-        missing_cols = [col for col in required_cols if col not in tracks_df.columns]
-        if missing_cols:
-            raise ValueError(f"Missing required columns: {missing_cols}")
-        
-        # Check for NaN or Inf in critical columns
-        for col in ['x', 'y', 'frame']:
-            if tracks_df[col].isna().any():
-                raise ValueError(f"Column '{col}' contains NaN values. Use clean_tracks() first.")
-            if np.isinf(tracks_df[col]).any():
-                raise ValueError(f"Column '{col}' contains Inf values. Use clean_tracks() first.")
-        
-        # Group by track_id
-        grouped = tracks_df.groupby('track_id')
-        
-        # Initialize results dictionary
-        msd_results = {'track_id': [], 'lag_time': [], 'msd': [], 'n_points': []}
-        
-        for track_id, track_data in grouped:
-            # Skip short tracks
-            if len(track_data) < min_track_length:
-                continue
-                
-            # Sort by frame
-            track_data = track_data.sort_values('frame')
-            
-            # Extract positions
-            x = track_data['x'].values * pixel_size
-            y = track_data['y'].values * pixel_size
-            frames = track_data['frame'].values
-            
-            # Validate numeric data
-            if not (np.isfinite(x).all() and np.isfinite(y).all()):
-                continue  # Skip tracks with invalid positions
-            
-            # Calculate MSD for each lag time
-            for lag in range(1, min(max_lag + 1, len(track_data))):
-                # Calculate squared displacements
-                sd_list = []
-                lag_time_list = []
-                
-                for i in range(len(track_data) - lag):
-                    dx = x[i + lag] - x[i]
-                    dy = y[i + lag] - y[i]
-                    sd = dx**2 + dy**2
-                    dt = (frames[i + lag] - frames[i]) * frame_interval
-                    
-                    # Validate displacement is finite
-                    if np.isfinite(sd) and np.isfinite(dt):
-                        sd_list.append(sd)
-                        lag_time_list.append(dt)
-                
-                if sd_list:
-                    # Store results
-                    msd_results['track_id'].append(track_id)
-                    # Use actual time difference in seconds
-                    mean_lag_time = np.mean(lag_time_list)
-                    msd_results['lag_time'].append(mean_lag_time)
-                    msd_results['msd'].append(np.mean(sd_list))
-                    msd_results['n_points'].append(len(sd_list))
-        
-        # Convert to DataFrame
-        msd_df = pd.DataFrame(msd_results)
-        
-        return msd_df
-    
-    except ValueError as e:
-        # Return empty DataFrame with error logged
-        import logging
-        logging.error(f"calculate_msd failed: {str(e)}")
-        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
-    
-    except Exception as e:
-        # Catch unexpected errors
-        import logging
-        logging.error(f"Unexpected error in calculate_msd: {str(e)}")
-        return pd.DataFrame(columns=['track_id', 'lag_time', 'msd', 'n_points'])
+
 
 def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
                      frame_interval: float = 1.0, min_track_length: int = 5, 
@@ -230,7 +133,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                 
                 # Standard diffusion coefficient (short time)
                 # Use only the first few points for initial diffusion coefficient
-                short_lag_cutoff = min(4, len(lag_times))
+                short_lag_cutoff = min(DEFAULT_SHORT_LAG_CUTOFF, len(lag_times))
                 
                 # Linear fit: MSD = 4*D*t (2D) or MSD = 6*D*t (3D)
                 # Here we use 2D (4*D*t)
@@ -258,9 +161,10 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                         def linear_func_with_offset(t, D, offset):
                             return 4 * D * t + offset
                         try:
-                            # Weights inversely proportional to lag time (variance ~ t)
-                            # So, sigma ~ sqrt(t) for curve_fit
-                            sigma_vals = np.sqrt(lag_times[:short_lag_cutoff])
+                            # Weights inversely proportional to variance
+                            # Variance of MSD is proportional to lag_time^2
+                            # So sigma should be proportional to lag_time
+                            sigma_vals = lag_times[:short_lag_cutoff]
                             # Ensure sigma_vals are not zero
                             sigma_vals[sigma_vals == 0] = 1e-9
                             
@@ -310,7 +214,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                 track_result['diffusion_coefficient_error'] = D_err
                 
                 # Analyze anomalous diffusion
-                if analyze_anomalous and len(lag_times) >= 5:
+                if analyze_anomalous and len(lag_times) >= MIN_POINTS_ANOMALOUS:
                     try:
                         # Fit MSD = c * t^alpha using log-log
                         # Ensure lag_times and msd_values are positive for log
@@ -327,9 +231,9 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                             
                             # Categorize diffusion type
                             diffusion_type = 'normal'
-                            if alpha < 0.9:
+                            if alpha < ALPHA_SUBDIFFUSIVE_THRESHOLD:
                                 diffusion_type = 'subdiffusive'
-                            elif alpha > 1.1:
+                            elif alpha > ALPHA_SUPERDIFFUSIVE_THRESHOLD:
                                 diffusion_type = 'superdiffusive'
                                 
                             track_result['alpha'] = alpha
@@ -351,7 +255,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                     track_result['diffusion_type'] = 'unknown'
                 
                 # Check for confined diffusion
-                if check_confinement and len(lag_times) >= 8:
+                if check_confinement and len(lag_times) >= MIN_POINTS_CONFINEMENT:
                     try:
                         # Look for plateau in MSD curve
                         # Simple approach: check if MSD stops increasing with lag time
