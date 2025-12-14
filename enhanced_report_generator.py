@@ -2905,18 +2905,24 @@ class EnhancedSPTReportGenerator:
                 subplot_titles=[f"Channel {ch.upper()}" for ch in channel_stats.keys()]
             )
             
-            # Plot distribution for each channel
+            # Plot distribution for each channel with safe color indexing
+            # Use a color palette that supports any number of channels
+            color_palette = px.colors.qualitative.Plotly  # 10 distinct colors
+            
             for idx, (ch_name, stats) in enumerate(channel_stats.items(), 1):
                 # Create bar chart of statistics
                 metrics = ['mean', 'median', 'std']
                 values = [stats.get(m, 0) for m in metrics]
+                
+                # Safe color selection using modulo to handle any number of channels
+                color_idx = (idx - 1) % len(color_palette)
                 
                 fig.add_trace(
                     go.Bar(
                         x=metrics,
                         y=values,
                         name=ch_name,
-                        marker_color=['steelblue', 'coral', 'lightgreen'][idx-1],
+                        marker_color=color_palette[color_idx],
                         showlegend=False
                     ),
                     row=1, col=idx

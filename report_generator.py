@@ -3,15 +3,44 @@ Report generator for single particle tracking analysis.
 """
 
 import pandas as pd
-from analysis import (
-    analyze_track_statistics, analyze_msd, analyze_diffusion, 
-    analyze_directional_motion, analyze_displacements
-)
-from biophysical_models import analyze_motion_models
-from visualization import (
-    plot_track_statistics, plot_msd_curves, plot_diffusion_coefficients, 
-    plot_directional_analysis, plot_displacement_analysis, plot_motion_analysis
-)
+import numpy as np
+import warnings
+
+# Import analysis functions with graceful fallback
+try:
+    from analysis import analyze_diffusion, analyze_motion, calculate_msd
+    ANALYSIS_AVAILABLE = True
+except ImportError:
+    ANALYSIS_AVAILABLE = False
+    warnings.warn("analysis module not fully available")
+
+# Import biophysical models with graceful fallback  
+try:
+    from biophysical_models import analyze_motion_models
+    BIOPHYSICAL_AVAILABLE = True
+except ImportError:
+    BIOPHYSICAL_AVAILABLE = False
+    analyze_motion_models = None
+
+# Import visualization functions with graceful fallback
+try:
+    from visualization import (
+        plot_msd_curves, plot_diffusion_coefficients, plot_motion_analysis
+    )
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
+
+# Import intensity analysis with graceful fallback
+try:
+    from intensity_analysis import (
+        correlate_intensity_movement, 
+        analyze_intensity_profiles,
+        extract_intensity_channels
+    )
+    INTENSITY_ANALYSIS_AVAILABLE = True
+except ImportError:
+    INTENSITY_ANALYSIS_AVAILABLE = False
 
 class SPTReportGenerator:
     """Generates analysis reports for single particle tracking data."""
@@ -94,47 +123,84 @@ class SPTReportGenerator:
         
         # Perform requested analyses
         try:
-            # Basic statistics
+            # Basic statistics (compute locally since function may not exist)
             if 'basic_statistics' in analyses:
-                stats_result = analyze_track_statistics(tracks, pixel_size, frame_interval)
+                stats_result = self._compute_basic_statistics(tracks, pixel_size, frame_interval)
                 report['analysis_results']['basic_statistics'] = stats_result
-                report['figures']['track_statistics'] = plot_track_statistics(stats_result)
                 report['summary']['track_statistics'] = stats_result.get('summary', {})
             
             # MSD analysis
-            if 'msd_analysis' in analyses:
-                msd_result = analyze_msd(tracks, pixel_size, frame_interval)
-                report['analysis_results']['msd_analysis'] = msd_result
-                report['figures']['msd_curves'] = plot_msd_curves(msd_result)
-                report['summary']['msd_analysis'] = msd_result.get('summary', {})
+            if 'msd_analysis' in analyses and ANALYSIS_AVAILABLE:
+                try:
+                    msd_result = calculate_msd(tracks, pixel_size=pixel_size, frame_interval=frame_interval)
+                    report['analysis_results']['msd_analysis'] = msd_result
+                    if VISUALIZATION_AVAILABLE:
+                        report['figures']['msd_curves'] = plot_msd_curves(msd_result)
+                    report['summary']['msd_analysis'] = msd_result.get('summary', {})
+                except Exception as e:
+                    report['analysis_results']['msd_analysis'] = {'error': str(e)}
             
             # Diffusion analysis
-            if 'diffusion_analysis' in analyses:
-                diff_result = analyze_diffusion(tracks, pixel_size, frame_interval)
-                report['analysis_results']['diffusion_analysis'] = diff_result
-                report['figures']['diffusion_coefficients'] = plot_diffusion_coefficients(diff_result)
-                report['summary']['diffusion_analysis'] = diff_result.get('summary', {})
+            if 'diffusion_analysis' in analyses and ANALYSIS_AVAILABLE:
+                try:
+                    diff_result = analyze_diffusion(tracks, pixel_size=pixel_size, frame_interval=frame_interval)
+                    report['analysis_results']['diffusion_analysis'] = diff_result
+                    if VISUALIZATION_AVAILABLE:
+                        report['figures']['diffusion_coefficients'] = plot_diffusion_coefficients(diff_result)
+                    report['summary']['diffusion_analysis'] = diff_result.get('summary', {})
+                except Exception as e:
+                    report['analysis_results']['diffusion_analysis'] = {'error': str(e)}
             
-            # Directional analysis
-            if 'directional_analysis' in analyses:
-                dir_result = analyze_directional_motion(tracks, pixel_size, frame_interval)
-                report['analysis_results']['directional_analysis'] = dir_result
-                report['figures']['directional_analysis'] = plot_directional_analysis(dir_result)
-                report['summary']['directional_analysis'] = dir_result.get('summary', {})
+            # Motion analysis
+            if 'motion_analysis' in analyses and ANALYSIS_AVAILABLE:
+                try:
+                    motion_result = analyze_motion(tracks, pixel_size=pixel_size, frame_interval=frame_interval)
+                    report['analysis_results']['motion_analysis'] = motion_result
+                    if VISUALIZATION_AVAILABLE:
+                        report['figures']['motion_analysis'] = plot_motion_analysis(motion_result)
+                    report['summary']['motion_analysis'] = motion_result.get('summary', {})
+                except Exception as e:
+                    report['analysis_results']['motion_analysis'] = {'error': str(e)}
             
-            # Displacement analysis
-            if 'displacement_analysis' in analyses:
-                disp_result = analyze_displacements(tracks, pixel_size, frame_interval)
-                report['analysis_results']['displacement_analysis'] = disp_result
-                report['figures']['displacement_analysis'] = plot_displacement_analysis(disp_result)
-                report['summary']['displacement_analysis'] = disp_result.get('summary', {})
+            # Motion classification (biophysical models)
+            if 'motion_classification' in analyses and BIOPHYSICAL_AVAILABLE and analyze_motion_models:
+                try:
+                    motion_result = analyze_motion_models(tracks, min_track_length=10)
+                    report['analysis_results']['motion_classification'] = motion_result
+                    if VISUALIZATION_AVAILABLE:
+                        report['figures']['motion_classification'] = plot_motion_analysis(motion_result)
+                    report['summary']['motion_classification'] = motion_result.get('summary', {})
+                except Exception as e:
+                    report['analysis_results']['motion_classification'] = {'error': str(e)}
             
-            # Motion classification
-            if 'motion_classification' in analyses:
-                motion_result = analyze_motion_models(tracks, min_track_length=10)
-                report['analysis_results']['motion_classification'] = motion_result
-                report['figures']['motion_classification'] = plot_motion_analysis(motion_result)
-                report['summary']['motion_classification'] = motion_result.get('summary', {})
+            # Intensity analysis
+            if 'intensity_analysis' in analyses and INTENSITY_ANALYSIS_AVAILABLE:
+                try:
+                    # Check for intensity columns
+                    intensity_channels = extract_intensity_channels(tracks)
+                    if intensity_channels:
+                        # Use first available intensity column
+                        first_channel = list(intensity_channels.keys())[0]
+                        first_col = intensity_channels[first_channel][0] if intensity_channels[first_channel] else None
+                        
+                        if first_col:
+                            intensity_result = analyze_intensity_profiles(tracks, intensity_column=first_col)
+                            report['analysis_results']['intensity_analysis'] = intensity_result
+                            report['summary']['intensity_analysis'] = intensity_result.get('intensity_statistics', {})
+                            
+                            # Also run correlation analysis
+                            correlation_result = correlate_intensity_movement(tracks, intensity_column=first_col)
+                            report['analysis_results']['intensity_correlation'] = correlation_result
+                    else:
+                        report['analysis_results']['intensity_analysis'] = {
+                            'error': 'No intensity columns found in data',
+                            'success': False
+                        }
+                except Exception as e:
+                    report['analysis_results']['intensity_analysis'] = {
+                        'error': str(e),
+                        'success': False
+                    }
                 
         except Exception as e:
             import traceback
@@ -143,3 +209,48 @@ class SPTReportGenerator:
             report['traceback'] = traceback.format_exc()
             
         return report
+    
+    def _compute_basic_statistics(self, tracks_df, pixel_size, frame_interval):
+        """
+        Compute basic track statistics locally.
+        
+        Parameters
+        ----------
+        tracks_df : pd.DataFrame
+            Track data
+        pixel_size : float
+            Pixel size in micrometers
+        frame_interval : float
+            Frame interval in seconds
+            
+        Returns
+        -------
+        dict
+            Basic statistics dictionary
+        """
+        stats = {
+            'success': True,
+            'summary': {},
+            'track_lengths': [],
+            'track_durations': []
+        }
+        
+        try:
+            for track_id in tracks_df['track_id'].unique():
+                track = tracks_df[tracks_df['track_id'] == track_id]
+                stats['track_lengths'].append(len(track))
+                duration = (track['frame'].max() - track['frame'].min()) * frame_interval
+                stats['track_durations'].append(duration)
+            
+            stats['summary'] = {
+                'num_tracks': len(stats['track_lengths']),
+                'mean_track_length': np.mean(stats['track_lengths']) if stats['track_lengths'] else 0,
+                'median_track_length': np.median(stats['track_lengths']) if stats['track_lengths'] else 0,
+                'mean_duration_s': np.mean(stats['track_durations']) if stats['track_durations'] else 0,
+                'total_localizations': len(tracks_df)
+            }
+        except Exception as e:
+            stats['success'] = False
+            stats['error'] = str(e)
+        
+        return stats

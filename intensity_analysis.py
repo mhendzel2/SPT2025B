@@ -132,7 +132,7 @@ def extract_intensity_channels(df: pd.DataFrame) -> Dict[str, List[str]]:
     channels = {}
     
     # Check for different channel naming conventions
-    for i in range(1, 4):  # Support up to 3 channels
+    for i in range(1, 11):  # Support up to 10 channels
         ch_name = f"ch{i}"
         ch_columns = []
         
@@ -538,9 +538,19 @@ def analyze_intensity_profiles(tracks_df: pd.DataFrame,
         if np.any(np.isnan(intensities)):
             continue
         
-        # Smooth intensity profile
-        if len(intensities) >= smoothing_window:
-            smoothed_intensities = savgol_filter(intensities, smoothing_window, 2)
+        # Smooth intensity profile with dynamic window size
+        # Window must be odd and <= data length, polyorder must be < window
+        actual_window = smoothing_window
+        if len(intensities) < smoothing_window:
+            # Adjust window to be largest odd number <= data length
+            actual_window = len(intensities) if len(intensities) % 2 == 1 else len(intensities) - 1
+        
+        # Ensure window is at least 3 (minimum for savgol_filter with polyorder=2)
+        if actual_window >= 3:
+            try:
+                smoothed_intensities = savgol_filter(intensities, actual_window, min(2, actual_window - 1))
+            except ValueError:
+                smoothed_intensities = intensities  # Fallback to raw if filter fails
         else:
             smoothed_intensities = intensities
         
@@ -551,8 +561,10 @@ def analyze_intensity_profiles(tracks_df: pd.DataFrame,
         
         # Detect blinking events (sudden intensity drops and recoveries)
         intensity_diff = np.diff(smoothed_intensities)
-        if len(intensity_diff) > 1 and np.std(intensity_diff) > 0:
-            z_scores = np.abs(zscore(intensity_diff))
+        std_diff = np.std(intensity_diff)
+        if len(intensity_diff) > 1 and std_diff > 1e-10:  # Check for non-zero std to avoid div by zero
+            # Safe z-score calculation
+            z_scores = np.abs((intensity_diff - np.mean(intensity_diff)) / std_diff)
             blinking_events = find_peaks(z_scores, height=2.0, distance=2)[0]
             
             if len(blinking_events) > 0:
@@ -636,10 +648,13 @@ def classify_intensity_behavior(tracks_df: pd.DataFrame,
             elif np.std(intensities) / np.mean(intensities) > 0.3:
                 enhanced_tracks.loc[mask, 'intensity_behavior'] = 'variable'
             
-            # Count blinking events
+            # Count blinking events with safe z-score calculation
             intensity_diff = np.diff(intensities)
-            z_scores = np.abs(zscore(intensity_diff))
-            blinking_count = len(find_peaks(z_scores, height=2.0, distance=2)[0])
+            std_diff = np.std(intensity_diff)
+            blinking_count = 0
+            if len(intensity_diff) > 1 and std_diff > 1e-10:  # Avoid division by zero
+                z_scores = np.abs((intensity_diff - np.mean(intensity_diff)) / std_diff)
+                blinking_count = len(find_peaks(z_scores, height=2.0, distance=2)[0])
             enhanced_tracks.loc[mask, 'blinking_frequency'] = blinking_count / len(track_data)
             
             if blinking_count > 2:
