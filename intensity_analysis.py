@@ -82,6 +82,39 @@ def _safe_numeric_convert(df: pd.DataFrame, column: str) -> pd.Series:
     return converted
 
 
+def _safe_intensity_to_numeric(df: pd.DataFrame, intensity_column: str) -> Optional[pd.DataFrame]:
+    """
+    Safely convert intensity column to numeric, returning None if conversion fails.
+    
+    This is a wrapper around _safe_numeric_convert that returns a modified DataFrame
+    or None if the column is missing or conversion yields no valid values.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing the intensity column
+    intensity_column : str
+        Name of the intensity column to convert
+        
+    Returns
+    -------
+    pd.DataFrame or None
+        DataFrame with converted intensity column, or None if conversion failed
+    """
+    if intensity_column not in df.columns:
+        return None
+    
+    result_df = df.copy()
+    result_df[intensity_column] = _safe_numeric_convert(df, intensity_column)
+    
+    # Check if we have any valid values after conversion
+    valid_count = result_df[intensity_column].notna().sum()
+    if valid_count == 0:
+        return None
+    
+    return result_df
+
+
 def extract_intensity_channels(df: pd.DataFrame) -> Dict[str, List[str]]:
     """
     Extract available intensity channels from the dataframe.
