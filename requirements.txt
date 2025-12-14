@@ -23,7 +23,7 @@ networkx>=3.1
 # Dependencies for scikit-image
 lazy-loader>=0.3
 imageio>=2.31.0
-tifffile>=2023.7.10
+tifffile>=2025.1.0                # Updated: Full OME-TIFF, BigTIFF, Zarr support
 PyWavelets>=1.4.1
 
 # File I/O
@@ -32,6 +32,11 @@ xmltodict>=0.13.0
 lxml>=4.9.0
 openpyxl>=3.1.0
 Pillow>=10.0.0
+
+# NEW: Large dataset handling (optional - uncomment if processing massive datasets)
+# zarr>=3.0.0                     # Chunked N-dimensional arrays for out-of-core processing
+# xarray>=2024.0.0                # Labeled N-D arrays with metadata
+# dask>=2024.0.0                  # Parallel computing for millions of tracks
 
 # Image processing and tracking
 opencv-python>=4.8.0
@@ -49,10 +54,16 @@ fbm>=0.3.0
 
 # NEW: Enhanced Bayesian and MCMC analysis
 emcee>=3.1.0                      # NEW: Affine-invariant MCMC sampler for parameter estimation
+arviz>=0.22.0                     # NEW: Bayesian model diagnostics, trace plots, posterior analysis
 # pymc>=5.0.0                     # Optional: Full Bayesian modeling (heavy dependency)
 
 # NEW: Performance acceleration
 numba>=0.60.0                     # NEW: JIT compilation for MSD calculations (10-100x speedup)
+
+# NEW: Enhanced curve fitting and uncertainty
+lmfit>=1.3.0                      # NEW: Advanced curve fitting with bounds, constraints, confidence intervals
+uncertainties>=3.2.0              # NEW: Automatic error propagation for D, alpha values
+powerlaw>=1.5                     # NEW: Test jump distributions for power laws (Lévy flights)
 
 # Dependencies for pingouin
 pandas-flavor>=0.6.0
