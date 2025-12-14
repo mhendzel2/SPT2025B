@@ -18,6 +18,70 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+
+def _safe_numeric_convert(df: pd.DataFrame, column: str) -> pd.Series:
+    """
+    Safely convert a column to numeric, handling malformed string data.
+    
+    This handles cases where data may be concatenated strings like '29.027.031.048...'
+    which can occur from CSV parsing errors or data corruption.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing the column
+    column : str
+        Name of the column to convert
+        
+    Returns
+    -------
+    pd.Series
+        Numeric series with invalid values as NaN
+    """
+    if column not in df.columns:
+        return pd.Series(dtype=float)
+    
+    col_data = df[column].copy()
+    
+    # If already numeric, return as-is
+    if pd.api.types.is_numeric_dtype(col_data):
+        return col_data
+    
+    # Try direct numeric conversion first
+    converted = pd.to_numeric(col_data, errors='coerce')
+    
+    # Check for high NaN rate indicating parsing issues
+    nan_rate = converted.isna().sum() / len(converted) if len(converted) > 0 else 0
+    
+    if nan_rate > 0.5:
+        # Many values couldn't be converted - likely malformed data
+        # Try to extract first valid number from each value
+        def extract_first_number(val):
+            if pd.isna(val):
+                return np.nan
+            if isinstance(val, (int, float)):
+                return float(val)
+            try:
+                # Convert to string and try to extract first number
+                s = str(val)
+                # Check for multiple decimal points (malformed like '29.027.031')
+                if s.count('.') > 1:
+                    # Extract first number before second decimal
+                    parts = s.split('.')
+                    if len(parts) >= 2:
+                        try:
+                            return float(f"{parts[0]}.{parts[1]}")
+                        except ValueError:
+                            return np.nan
+                return float(s)
+            except (ValueError, TypeError):
+                return np.nan
+        
+        converted = col_data.apply(extract_first_number)
+    
+    return converted
+
+
 def extract_intensity_channels(df: pd.DataFrame) -> Dict[str, List[str]]:
     """
     Extract available intensity channels from the dataframe.
@@ -182,14 +246,20 @@ def calculate_movement_metrics(tracks_df: pd.DataFrame,
     if not intensity_columns:
         return {'error': 'No intensity columns found'}
     
+    # Safe conversion of intensity columns to numeric
+    working_df = tracks_df.copy()
+    for int_col in intensity_columns:
+        if int_col in working_df.columns:
+            working_df[int_col] = pd.to_numeric(working_df[int_col], errors='coerce')
+    
     results = {
         'track_metrics': {},
         'correlation_matrix': {},
         'movement_intensity_correlation': {}
     }
     
-    for track_id in tracks_df['track_id'].unique():
-        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+    for track_id in working_df['track_id'].unique():
+        track_data = working_df[working_df['track_id'] == track_id].sort_values('frame')
         
         if len(track_data) < 3:
             continue
@@ -242,10 +312,25 @@ def correlate_intensity_movement(tracks_df: pd.DataFrame,
     if tracks_df.empty or intensity_column not in tracks_df.columns:
         return {'error': f'No {intensity_column} data available'}
     
+    # Safely convert intensity column to numeric
+    intensity_values = _safe_numeric_convert(tracks_df, intensity_column)
+    
+    # Check if conversion succeeded
+    if intensity_values.isna().all():
+        return {'error': f'Could not convert {intensity_column} to numeric values. Data may be malformed.'}
+    
+    # Create working copy with converted values
+    working_df = tracks_df.copy()
+    working_df[intensity_column] = intensity_values
+    working_df = working_df.dropna(subset=[intensity_column, 'x', 'y', 'track_id', 'frame'])
+    
+    if working_df.empty:
+        return {'error': f'No valid data after converting {intensity_column} to numeric'}
+    
     correlations = []
     
-    for track_id in tracks_df['track_id'].unique():
-        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+    for track_id in working_df['track_id'].unique():
+        track_data = working_df[working_df['track_id'] == track_id].sort_values('frame')
         
         if len(track_data) < 3:
             continue
@@ -385,6 +470,21 @@ def analyze_intensity_profiles(tracks_df: pd.DataFrame,
     if tracks_df.empty or intensity_column not in tracks_df.columns:
         return {'error': f'No {intensity_column} data available'}
     
+    # Safely convert intensity column to numeric
+    intensity_values = _safe_numeric_convert(tracks_df, intensity_column)
+    
+    # Check if conversion succeeded
+    if intensity_values.isna().all():
+        return {'error': f'Could not convert {intensity_column} to numeric values. Data may be malformed.'}
+    
+    # Create working copy with converted values
+    working_df = tracks_df.copy()
+    working_df[intensity_column] = intensity_values
+    working_df = working_df.dropna(subset=[intensity_column, 'track_id', 'frame'])
+    
+    if working_df.empty:
+        return {'error': f'No valid data after converting {intensity_column} to numeric'}
+    
     results = {
         'track_profiles': {},
         'photobleaching_detected': [],
@@ -392,14 +492,18 @@ def analyze_intensity_profiles(tracks_df: pd.DataFrame,
         'intensity_statistics': {}
     }
     
-    for track_id in tracks_df['track_id'].unique():
-        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+    for track_id in working_df['track_id'].unique():
+        track_data = working_df[working_df['track_id'] == track_id].sort_values('frame')
         
         if len(track_data) < 3:
             continue
             
-        intensities = track_data[intensity_column].values
+        intensities = track_data[intensity_column].values.astype(float)
         frames = track_data['frame'].values
+        
+        # Skip if any NaN values remain
+        if np.any(np.isnan(intensities)):
+            continue
         
         # Smooth intensity profile
         if len(intensities) >= smoothing_window:
@@ -409,26 +513,27 @@ def analyze_intensity_profiles(tracks_df: pd.DataFrame,
         
         # Detect photobleaching (monotonic decrease)
         photobleaching_score = np.corrcoef(frames, smoothed_intensities)[0, 1]
-        if photobleaching_score < -0.7:  # Strong negative correlation
+        if not np.isnan(photobleaching_score) and photobleaching_score < -0.7:  # Strong negative correlation
             results['photobleaching_detected'].append(track_id)
         
         # Detect blinking events (sudden intensity drops and recoveries)
         intensity_diff = np.diff(smoothed_intensities)
-        z_scores = np.abs(zscore(intensity_diff))
-        blinking_events = find_peaks(z_scores, height=2.0, distance=2)[0]
-        
-        if len(blinking_events) > 0:
-            results['blinking_events'][track_id] = {
-                'event_frames': frames[blinking_events + 1].tolist(),
-                'event_count': len(blinking_events)
-            }
+        if len(intensity_diff) > 1 and np.std(intensity_diff) > 0:
+            z_scores = np.abs(zscore(intensity_diff))
+            blinking_events = find_peaks(z_scores, height=2.0, distance=2)[0]
+            
+            if len(blinking_events) > 0:
+                results['blinking_events'][track_id] = {
+                    'event_frames': frames[blinking_events + 1].tolist(),
+                    'event_count': len(blinking_events)
+                }
         
         # Store profile data
         results['track_profiles'][track_id] = {
             'frames': frames.tolist(),
             'raw_intensities': intensities.tolist(),
             'smoothed_intensities': smoothed_intensities.tolist(),
-            'photobleaching_score': photobleaching_score
+            'photobleaching_score': float(photobleaching_score) if not np.isnan(photobleaching_score) else 0.0
         }
     
     # Overall statistics
@@ -469,8 +574,13 @@ def classify_intensity_behavior(tracks_df: pd.DataFrame,
     if intensity_column not in tracks_df.columns:
         return enhanced_tracks
     
-    for track_id in tracks_df['track_id'].unique():
-        track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+    # Safe conversion of intensity column to numeric
+    working_df = _safe_intensity_to_numeric(tracks_df, intensity_column)
+    if working_df is None:
+        return enhanced_tracks  # Return with defaults if conversion fails
+    
+    for track_id in working_df['track_id'].unique():
+        track_data = working_df[working_df['track_id'] == track_id].sort_values('frame')
         
         if len(track_data) < 3:
             continue
@@ -615,18 +725,23 @@ def analyze_intensity_hotspots(tracks_df: pd.DataFrame,
     if tracks_df.empty or intensity_column not in tracks_df.columns:
         return {'error': f'No {intensity_column} data available'}
     
+    # Safe conversion of intensity column to numeric
+    working_df = _safe_intensity_to_numeric(tracks_df, intensity_column)
+    if working_df is None:
+        return {'error': f'Could not convert {intensity_column} to numeric values'}
+    
     # Calculate intensity threshold
-    intensity_threshold = np.percentile(tracks_df[intensity_column].dropna(), intensity_threshold_percentile)
+    intensity_threshold = np.percentile(working_df[intensity_column].dropna(), intensity_threshold_percentile)
     
     # Filter high intensity particles
-    high_intensity_tracks = tracks_df[tracks_df[intensity_column] >= intensity_threshold]
+    high_intensity_tracks = working_df[working_df[intensity_column] >= intensity_threshold]
     
     if high_intensity_tracks.empty:
         return {'error': 'No high intensity particles found'}
     
     # Create spatial bins
-    x_min, x_max = tracks_df['x'].min(), tracks_df['x'].max()
-    y_min, y_max = tracks_df['y'].min(), tracks_df['y'].max()
+    x_min, x_max = working_df['x'].min(), working_df['x'].max()
+    y_min, y_max = working_df['y'].min(), working_df['y'].max()
     
     x_bins = np.arange(x_min, x_max + spatial_bin_size, spatial_bin_size)
     y_bins = np.arange(y_min, y_max + spatial_bin_size, spatial_bin_size)
