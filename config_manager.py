@@ -74,7 +74,7 @@ class ConfigManager:
             },
             'performance': {
                 'max_workers': 4,
-                'memory_limit_gb': 8,
+                'memory_limit_gb': 10,
                 'enable_gpu': False,
                 'batch_size': 1000
             },

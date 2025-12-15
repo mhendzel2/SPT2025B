@@ -11,12 +11,20 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import MSD utilities directly for optimized calculation
 try:
-    from msd_calculation import calculate_msd
+    from msd_calculation import calculate_msd, fit_msd_linear
+    MSD_CALC_AVAILABLE = True
+except ImportError:
+    calculate_msd = None
+    fit_msd_linear = None
+    MSD_CALC_AVAILABLE = False
+
+try:
     from analysis import analyze_diffusion, analyze_motion, analyze_boundary_crossing
     ANALYSIS_AVAILABLE = True
 except ImportError:
-    calculate_msd = None
+    # Fallbacks if analysis module is missing but msd_calculation is present
     analyze_diffusion = None
     analyze_motion = None
     analyze_boundary_crossing = None
@@ -1125,24 +1133,39 @@ class AnalysisManager:
             return {'success': False, 'error': str(e)}
 
     def _analyze_diffusion(self, tracks_df: pd.DataFrame, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze diffusion coefficients."""
+        """Analyze diffusion coefficients using optimized MSD calculation."""
         try:
-            from analysis import calculate_diffusion_coefficient
-
             pixel_size = parameters.get('pixel_size', 0.1)
             frame_interval = parameters.get('frame_interval', 0.1)
+            max_lag = parameters.get('max_lag', 20)
+            min_points = 10  # Minimum points for reliable diffusion calculation
+
+            if not MSD_CALC_AVAILABLE:
+                return {'success': False, 'error': 'MSD calculation module not available'}
+
+            # Optimized: Calculate MSD for ALL tracks at once
+            # This prevents calling calculate_msd repeatedly for every single track
+            msd_df = calculate_msd(
+                tracks_df,
+                max_lag=max_lag,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval
+            )
+
+            if msd_df.empty:
+                return {'success': False, 'error': 'MSD calculation returned no data'}
 
             diffusion_results = []
-            for track_id in tracks_df['track_id'].unique():
-                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
-
-                if len(track_data) >= 10:  # Minimum points for reliable diffusion calculation
-                    diff_coeff = calculate_diffusion_coefficient(
-                        track_data, pixel_size, frame_interval
-                    )
+            
+            # Iterate through the pre-calculated MSD results grouped by track
+            for track_id, track_msd in msd_df.groupby('track_id'):
+                # Ensure we have enough points for a fit
+                if len(track_msd) >= 3:
+                    fit = fit_msd_linear(track_msd)
                     diffusion_results.append({
                         'track_id': track_id,
-                        'diffusion_coefficient': diff_coeff
+                        'diffusion_coefficient': fit['D'],
+                        'r_squared': fit.get('r_squared', 0)
                     })
 
             if diffusion_results:

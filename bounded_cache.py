@@ -28,12 +28,12 @@ class BoundedResultsCache:
     Parameters
     ----------
     max_items : int
-        Maximum number of cached items (default: 50)
+        Maximum number of cached items (default: 1000)
     max_memory_mb : float
-        Maximum memory usage in MB (default: 500 MB)
+        Maximum memory usage in MB (default: 10000 MB / 10 GB)
     """
     
-    def __init__(self, max_items: int = 50, max_memory_mb: float = 500.0):
+    def __init__(self, max_items: int = 1000, max_memory_mb: float = 10000.0):
         """Initialize bounded cache."""
         self.max_items = max_items
         self.max_memory_bytes = int(max_memory_mb * 1024 * 1024)
@@ -302,16 +302,16 @@ class BoundedResultsCache:
 _global_cache: Optional[BoundedResultsCache] = None
 
 
-def get_results_cache(max_items: int = 50, max_memory_mb: float = 500.0) -> BoundedResultsCache:
+def get_results_cache(max_items: int = 1000, max_memory_mb: float = 10000.0) -> BoundedResultsCache:
     """
     Get or create global results cache instance.
     
     Parameters
     ----------
     max_items : int
-        Maximum cached items (only used on first call)
+        Maximum cached items (default: 1000)
     max_memory_mb : float
-        Maximum memory in MB (only used on first call)
+        Maximum memory in MB (default: 10000.0 / 10GB)
     
     Returns
     -------
