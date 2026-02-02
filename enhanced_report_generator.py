@@ -4164,27 +4164,53 @@ class EnhancedSPTReportGenerator:
             if not EQUILIBRIUM_VALIDATOR_AVAILABLE:
                 return {'success': False, 'error': 'EquilibriumValidator module not available'}
             
+            # Import full VACF calculation
+            try:
+                from advanced_metrics import calculate_full_vacf
+            except ImportError:
+                return {'success': False, 'error': 'calculate_full_vacf not available in advanced_metrics'}
+
             validator = EquilibriumValidator()
             
-            # For now, provide a simplified validity check
-            # TODO: Implement full VACF calculation when advanced_metrics supports it
+            # Calculate full VACF (including negative lags)
+            vacf_df = calculate_full_vacf(
+                tracks_df,
+                pixel_size=pixel_size,
+                frame_interval=frame_interval
+            )
             
-            report = {
+            if vacf_df.empty:
+                return {'success': False, 'error': 'Failed to calculate VACF (not enough data?)'}
+
+            # Run validation
+            report = validator.generate_validity_report(vacf_df=vacf_df)
+
+            # Restructure result for visualization
+            # The visualizer expects result.get('vacf_symmetry', {}) to contain 'lags', 'vacf_values', 'is_valid'
+
+            vacf_symmetry_result = report.get('test_results', {}).get('vacf_symmetry', {})
+
+            # Add data to the result
+            vacf_symmetry_result['lags'] = vacf_df['lag_time'].tolist()
+            vacf_symmetry_result['vacf_values'] = vacf_df['vacf'].tolist()
+            vacf_symmetry_result['is_valid'] = vacf_symmetry_result.get('valid', False)
+
+            # Construct final report dictionary
+            final_report = {
                 'success': True,
-                'overall_validity': True,
-                'validity_score': 0.8,
-                'warnings': ['Full VACF-based validation not yet implemented'],
-                'recommendations': [
-                    'Results assume thermal equilibrium',
-                    'Consider AFM/OT validation for critical applications'
-                ],
-                'message': 'Basic equilibrium checks passed. Full validation requires VACF implementation.'
+                'overall_valid': report.get('overall_valid', False),
+                'vacf_symmetry': vacf_symmetry_result,
+                'recommendations': report.get('recommendations', []),
+                'test_results': report.get('test_results', {}),
+                'badge': report.get('badge', ''),
+                'badge_html': report.get('badge_html', '')
             }
             
-            return report
+            return final_report
             
         except Exception as e:
-            return {'success': False, 'error': f'Equilibrium validation failed: {str(e)}'}
+            import traceback
+            return {'success': False, 'error': f'Equilibrium validation failed: {str(e)}\n{traceback.format_exc()}'}
     
     def _plot_equilibrium_validity(self, result: Dict[str, Any]) -> go.Figure:
         """Visualize equilibrium validation results."""

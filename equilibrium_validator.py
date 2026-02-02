@@ -88,6 +88,9 @@ class EquilibriumValidator:
         # Make negative lags positive for comparison
         negative_lags['lag_time'] = -negative_lags['lag_time']
         
+        # Sort by lag_time because interp requires increasing x
+        negative_lags = negative_lags.sort_values('lag_time')
+
         # Interpolate to common lag times
         common_lags = np.linspace(
             max(positive_lags['lag_time'].min(), negative_lags['lag_time'].min()),
