@@ -56,7 +56,7 @@ def calculate_full_vacf(tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_
         DataFrame with columns 'lag_time' and 'vacf'.
         Includes negative lags (symmetric to positive lags).
     """
-    all_vacfs = {} # lag_index -> list of vacf values
+    lag_to_vacf_values = {} # lag_index -> list of vacf values
 
     # Check if we have necessary columns
     if tracks_df.empty or not all(c in tracks_df.columns for c in ['track_id', 'frame', 'x', 'y']):
@@ -104,19 +104,19 @@ def calculate_full_vacf(tracks_df: pd.DataFrame, pixel_size: float = 1.0, frame_
                 else:
                     continue
 
-            if lag not in all_vacfs:
-                all_vacfs[lag] = []
-            all_vacfs[lag].append(val)
+            if lag not in lag_to_vacf_values:
+                lag_to_vacf_values[lag] = []
+            lag_to_vacf_values[lag].append(val)
 
     # Ensemble average
     lags = []
     vacf_values = []
 
-    sorted_lags = sorted(all_vacfs.keys())
+    sorted_lags = sorted(lag_to_vacf_values.keys())
     for lag in sorted_lags:
-        if all_vacfs[lag]:
+        if lag_to_vacf_values[lag]:
             lags.append(lag * frame_interval)
-            vacf_values.append(np.mean(all_vacfs[lag]))
+            vacf_values.append(np.mean(lag_to_vacf_values[lag]))
 
     if not lags:
         return pd.DataFrame(columns=['lag_time', 'vacf'])
