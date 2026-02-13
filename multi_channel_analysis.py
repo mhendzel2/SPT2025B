@@ -17,6 +17,35 @@ try:
 except ImportError:
     ENHANCED_SEGMENTATION_AVAILABLE = False
 
+class MultiChannelAnalyzer:
+    """
+    Class for analyzing multiple particle tracking channels.
+    Wraps the functional API for stateful usage.
+    """
+    def __init__(self):
+        self.channels = {}
+        self.results = {}
+
+    def add_channel(self, data: pd.DataFrame, channel_name: str):
+        """Add a channel of tracking data."""
+        if data is None or data.empty:
+            raise ValueError(f"Data for channel {channel_name} is empty or None")
+        self.channels[channel_name] = data
+
+    def calculate_colocalization_statistics(self, primary_channel: str, secondary_channel: str,
+                                          distance_threshold: float = 2.0) -> Dict[str, Any]:
+        """Calculate colocalization statistics between two channels."""
+        if primary_channel not in self.channels:
+            raise ValueError(f"Primary channel {primary_channel} not found")
+        if secondary_channel not in self.channels:
+            raise ValueError(f"Secondary channel {secondary_channel} not found")
+
+        return analyze_channel_colocalization(
+            self.channels[primary_channel],
+            self.channels[secondary_channel],
+            distance_threshold=distance_threshold
+        )
+
 
 def analyze_channel_colocalization(channel1_tracks: pd.DataFrame, channel2_tracks: pd.DataFrame,
                                  distance_threshold: float = 1.0, frame_tolerance: int = 1) -> Dict[str, Any]:
@@ -41,6 +70,7 @@ def analyze_channel_colocalization(channel1_tracks: pd.DataFrame, channel2_track
     """
     results = {
         'colocalized_pairs': [],
+        'n_colocalization_events': 0,  # Added for compatibility
         'channel1_colocalized_fraction': 0,
         'channel2_colocalized_fraction': 0,
         'mean_colocalization_distance': 0,
@@ -84,24 +114,25 @@ def analyze_channel_colocalization(channel1_tracks: pd.DataFrame, channel2_track
         frame_distances = []
         
         # Use Hungarian algorithm-like approach for optimal pairing
-        min_distances = np.min(distances, axis=1)
-        for i, min_dist in enumerate(min_distances):
-            if min_dist <= distance_threshold:
-                j = np.argmin(distances[i, :])
-                
-                # Check if this is the best match for particle j in channel 2
-                if i == np.argmin(distances[:, j]):
-                    frame_pairs.append({
-                        'frame': frame,
-                        'channel1_particle_id': frame1_particles.iloc[i]['track_id'],
-                        'channel2_particle_id': frame2_particles.iloc[j]['track_id'],
-                        'distance': min_dist,
-                        'channel1_x': frame1_particles.iloc[i]['x'],
-                        'channel1_y': frame1_particles.iloc[i]['y'],
-                        'channel2_x': frame2_particles.iloc[j]['x'],
-                        'channel2_y': frame2_particles.iloc[j]['y']
-                    })
-                    frame_distances.append(min_dist)
+        if distances.size > 0:
+            min_distances = np.min(distances, axis=1)
+            for i, min_dist in enumerate(min_distances):
+                if min_dist <= distance_threshold:
+                    j = np.argmin(distances[i, :])
+
+                    # Check if this is the best match for particle j in channel 2
+                    if i == np.argmin(distances[:, j]):
+                        frame_pairs.append({
+                            'frame': frame,
+                            'channel1_particle_id': frame1_particles.iloc[i]['track_id'],
+                            'channel2_particle_id': frame2_particles.iloc[j]['track_id'],
+                            'distance': min_dist,
+                            'channel1_x': frame1_particles.iloc[i]['x'],
+                            'channel1_y': frame1_particles.iloc[i]['y'],
+                            'channel2_x': frame2_particles.iloc[j]['x'],
+                            'channel2_y': frame2_particles.iloc[j]['y']
+                        })
+                        frame_distances.append(min_dist)
         
         colocalized_pairs.extend(frame_pairs)
         
@@ -126,6 +157,7 @@ def analyze_channel_colocalization(channel1_tracks: pd.DataFrame, channel2_track
         results['mean_colocalization_distance'] = np.mean([pair['distance'] for pair in colocalized_pairs])
     
     results['colocalized_pairs'] = colocalized_pairs
+    results['n_colocalization_events'] = len(colocalized_pairs)
     results['frame_by_frame_stats'] = frame_stats
     
     return results
