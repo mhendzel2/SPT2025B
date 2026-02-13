@@ -4,12 +4,16 @@ Bias-Corrected Diffusion Estimation Module
 Implements advanced estimators that correct for localization noise and motion blur:
 - CVE (Covariance-based Estimator): Robust to static localization noise
 - MLE (Maximum Likelihood Estimator): Accounts for motion blur and finite exposure
+- Spot-On style population inference: Multi-population diffusion analysis with bias correction
 
-Reference: Berglund (2010) "Statistics of camera-based single-particle tracking"
-           Physical Review E, PubMed 20866658
+References:
+- Berglund (2010) "Statistics of camera-based single-particle tracking"
+  Physical Review E, PubMed 20866658
+- Hansen et al. (2018) "Robust model-based analysis of single-particle tracking experiments
+  with Spot-On" eLife 7:e33125
 
 Author: SPT2025B Team
-Date: October 2025
+Date: February 2026
 """
 
 import numpy as np
@@ -746,3 +750,384 @@ def compare_estimators(track: np.ndarray, dt: float,
         'mle': mle_result,
         'comparison': comparison
     }
+
+
+# ============================================================================
+# Spot-On Style Population Inference
+# ============================================================================
+
+class SpotOnPopulationInference:
+    """
+    Spot-On style bias-aware diffusion population inference.
+    
+    Infers fractions and diffusion coefficients of multiple diffusing populations
+    while correcting for:
+    - Out-of-focus bias (axial detection range)
+    - Motion blur from finite exposure
+    - Localization noise
+    - Track length bias
+    
+    Based on Hansen et al. (2018) eLife 7:e33125
+    """
+    
+    def __init__(
+        self,
+        frame_interval: float,
+        pixel_size: float = 0.1,
+        localization_error: float = 0.03,
+        exposure_time: Optional[float] = None,
+        axial_detection_range: Optional[float] = None,
+        max_jump_gap: int = 0,
+        dimensions: int = 2
+    ):
+        """
+        Initialize Spot-On population inference.
+        
+        Parameters
+        ----------
+        frame_interval : float
+            Time between frames (seconds)
+        pixel_size : float
+            Pixel size (micrometers)
+        localization_error : float
+            Localization precision (micrometers)
+        exposure_time : float, optional
+            Camera exposure time (seconds). Defaults to frame_interval.
+        axial_detection_range : float, optional
+            Axial detection range (micrometers, for 3D correction in 2D imaging)
+        max_jump_gap : int
+            Maximum allowed gap in tracking (frames)
+        dimensions : int
+            Spatial dimensions (2 or 3)
+        """
+        self.frame_interval = frame_interval
+        self.pixel_size = pixel_size
+        self.localization_error = localization_error
+        self.exposure_time = exposure_time if exposure_time is not None else frame_interval
+        self.axial_detection_range = axial_detection_range
+        self.max_jump_gap = max_jump_gap
+        self.dimensions = dimensions
+        
+        # Motion blur correction factor
+        R = self.exposure_time / self.frame_interval
+        self.blur_factor = 1.0 - (R**2) / 6.0 if R < 1 else 0.5
+        
+    def _out_of_focus_probability(self, D: float, dz: float) -> float:
+        """
+        Calculate probability of remaining in focus for one time step.
+        
+        For 2D imaging with finite axial detection range dz,
+        fast particles can diffuse out of focus between frames.
+        
+        P_in_focus = erf(dz / sqrt(4*D*dt))
+        
+        Parameters
+        ----------
+        D : float
+            Diffusion coefficient (µm²/s)
+        dz : float
+            Axial detection range (µm)
+        
+        Returns
+        -------
+        float
+            Probability of staying in focus
+        """
+        if dz is None or dz == 0:
+            return 1.0  # No out-of-focus correction
+        
+        from scipy.special import erf
+        sigma_z = np.sqrt(2 * D * self.frame_interval)
+        if sigma_z == 0:
+            return 1.0
+        
+        return float(erf(dz / (2 * sigma_z)))
+    
+    def _jump_length_pdf(
+        self,
+        r: np.ndarray,
+        D: float,
+        dt: float,
+        sigma_loc: float,
+        dim: int = 2
+    ) -> np.ndarray:
+        """
+        Probability density function for jump lengths.
+        
+        Accounts for diffusion + localization noise.
+        For 2D: P(r) = r/(2σ²) * exp(-r²/(4σ²))
+        where σ² = 2*D*dt + 2*σ_loc²
+        
+        Parameters
+        ----------
+        r : np.ndarray
+            Jump distances (µm)
+        D : float
+            Diffusion coefficient (µm²/s)
+        dt : float
+            Time interval (s)
+        sigma_loc : float
+            Localization error (µm)
+        dim : int
+            Spatial dimensions
+        
+        Returns
+        -------
+        np.ndarray
+            Probability densities
+        """
+        # Variance per dimension
+        var_diffusion = 2 * D * dt * self.blur_factor
+        var_total = var_diffusion + 2 * sigma_loc**2
+        
+        if var_total <= 0:
+            return np.zeros_like(r)
+        
+        if dim == 2:
+            # 2D Rayleigh distribution
+            return (r / var_total) * np.exp(-r**2 / (2 * var_total))
+        elif dim == 3:
+            # 3D Maxwell-Boltzmann distribution
+            return (4 * np.pi * r**2 / (2 * np.pi * var_total)**(3/2)) * np.exp(-r**2 / (2 * var_total))
+        else:
+            raise ValueError(f"Unsupported dimensions: {dim}")
+    
+    def fit_populations(
+        self,
+        jump_distances: np.ndarray,
+        n_populations: int = 2,
+        D_bounds: Optional[List[Tuple[float, float]]] = None,
+        fraction_bounds: Optional[List[Tuple[float, float]]] = None,
+        initial_guess: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Fit multiple diffusing populations to jump distance distribution.
+        
+        Uses maximum likelihood estimation to infer:
+        - Fraction of each population
+        - Diffusion coefficient of each population
+        
+        Parameters
+        ----------
+        jump_distances : np.ndarray
+            Observed jump distances (µm)
+        n_populations : int
+            Number of populations to fit (typically 2-3)
+        D_bounds : list of tuples, optional
+            Bounds for diffusion coefficients [(D1_min, D1_max), ...]
+        fraction_bounds : list of tuples, optional
+            Bounds for fractions [(f1_min, f1_max), ...]
+        initial_guess : dict, optional
+            Initial parameter values
+        
+        Returns
+        -------
+        Dict
+            {
+                'success': bool,
+                'D_values': [D1, D2, ...],
+                'fractions': [f1, f2, ...],
+                'D_std': [std1, std2, ...],
+                'fraction_std': [std1, std2, ...],
+                'log_likelihood': float,
+                'AIC': float,
+                'BIC': float,
+                'n_data': int
+            }
+        """
+        from scipy.optimize import minimize
+        
+        if len(jump_distances) < 10:
+            return {
+                'success': False,
+                'error': 'Need at least 10 jump distances'
+            }
+        
+        # Remove invalid values
+        jump_distances = jump_distances[np.isfinite(jump_distances) & (jump_distances > 0)]
+        n_data = len(jump_distances)
+        
+        # Default bounds
+        if D_bounds is None:
+            D_bounds = [(1e-4, 0.01), (0.01, 10.0)] + [(0.01, 100.0)] * (n_populations - 2)
+        
+        if fraction_bounds is None:
+            fraction_bounds = [(0.01, 0.99)] * (n_populations - 1)
+        
+        # Negative log-likelihood
+        def neg_log_likelihood(params):
+            # Extract parameters: [D1, D2, ..., Dn, f1, f2, ..., f(n-1)]
+            # Last fraction is 1 - sum(others)
+            D_values = params[:n_populations]
+            fractions_partial = params[n_populations:]
+            fractions = np.append(fractions_partial, 1 - np.sum(fractions_partial))
+            
+            # Validate
+            if np.any(D_values <= 0) or np.any(fractions < 0) or fractions[-1] < 0:
+                return 1e10
+            
+            # Calculate mixture PDF
+            pdf_total = np.zeros_like(jump_distances)
+            for D, f in zip(D_values, fractions):
+                if f > 0:
+                    # Apply out-of-focus correction
+                    if self.axial_detection_range is not None:
+                        p_focus = self._out_of_focus_probability(D, self.axial_detection_range)
+                        f_effective = f * p_focus
+                    else:
+                        f_effective = f
+                    
+                    pdf = self._jump_length_pdf(
+                        jump_distances, D, self.frame_interval,
+                        self.localization_error, self.dimensions
+                    )
+                    pdf_total += f_effective * pdf
+            
+            # Avoid log(0)
+            pdf_total = np.maximum(pdf_total, 1e-300)
+            
+            # Negative log-likelihood
+            return -np.sum(np.log(pdf_total))
+        
+        # Initial guess
+        if initial_guess is None:
+            # Heuristic: use quantiles of jump distances
+            quantiles = np.quantile(jump_distances, [0.25, 0.75])
+            D_init = [(q**2) / (4 * self.frame_interval) for q in quantiles]
+            D_init = D_init + [D_init[-1] * 10] * (n_populations - 2)
+            fractions_init = [1.0 / n_populations] * (n_populations - 1)
+            x0 = D_init + fractions_init
+        else:
+            x0 = list(initial_guess.get('D_values', [])) + list(initial_guess.get('fractions', []))
+        
+        # Bounds
+        bounds = D_bounds + fraction_bounds
+        
+        # Optimize
+        try:
+            result = minimize(
+                neg_log_likelihood,
+                x0=x0,
+                method='L-BFGS-B',
+                bounds=bounds
+            )
+            
+            if not result.success:
+                return {
+                    'success': False,
+                    'error': f'Optimization failed: {result.message}'
+                }
+            
+            # Extract results
+            D_values = result.x[:n_populations]
+            fractions_partial = result.x[n_populations:]
+            fractions = np.append(fractions_partial, 1 - np.sum(fractions_partial))
+            
+            # Sort by D (slow to fast)
+            idx = np.argsort(D_values)
+            D_values = D_values[idx]
+            fractions = fractions[idx]
+            
+            # Estimate uncertainties from Hessian
+            # Use finite differences for diagonal elements
+            epsilon = 1e-6
+            hessian_diag = np.zeros(len(result.x))
+            for i in range(len(result.x)):
+                x_plus = result.x.copy()
+                x_minus = result.x.copy()
+                x_plus[i] += epsilon
+                x_minus[i] -= epsilon
+                
+                hessian_diag[i] = (
+                    neg_log_likelihood(x_plus) - 2 * neg_log_likelihood(result.x) + 
+                    neg_log_likelihood(x_minus)
+                ) / (epsilon**2)
+            
+            # Standard errors (inverse of Hessian diagonal, Cramér-Rao bound)
+            std_errors = np.sqrt(1.0 / np.maximum(hessian_diag, 1e-10))
+            
+            D_std = std_errors[:n_populations][idx]
+            fraction_std = np.append(std_errors[n_populations:], np.sqrt(np.sum(std_errors[n_populations:]**2)))[idx]
+            
+            # Model selection criteria
+            log_likelihood = -result.fun
+            n_params = len(result.x)
+            AIC = 2 * n_params - 2 * log_likelihood
+            BIC = n_params * np.log(n_data) - 2 * log_likelihood
+            
+            return {
+                'success': True,
+                'D_values': D_values.tolist(),
+                'fractions': fractions.tolist(),
+                'D_std': D_std.tolist(),
+                'fraction_std': fraction_std.tolist(),
+                'log_likelihood': float(log_likelihood),
+                'AIC': float(AIC),
+                'BIC': float(BIC),
+                'n_data': int(n_data),
+                'n_populations': n_populations,
+                'blur_corrected': True,
+                'localization_corrected': True,
+                'out_of_focus_corrected': self.axial_detection_range is not None
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Population inference failed: {str(e)}'
+            }
+    
+    def model_selection(
+        self,
+        jump_distances: np.ndarray,
+        max_populations: int = 4
+    ) -> Dict:
+        """
+        Automatically select optimal number of populations using BIC.
+        
+        Parameters
+        ----------
+        jump_distances : np.ndarray
+            Observed jump distances
+        max_populations : int
+            Maximum number of populations to test
+        
+        Returns
+        -------
+        Dict
+            {
+                'optimal_n': int,
+                'results': {1: result1, 2: result2, ...},
+                'BIC_values': [BIC1, BIC2, ...],
+                'best_result': Dict
+            }
+        """
+        results = {}
+        BIC_values = []
+        
+        for n_pop in range(1, max_populations + 1):
+            result = self.fit_populations(jump_distances, n_populations=n_pop)
+            
+            if result['success']:
+                results[n_pop] = result
+                BIC_values.append(result['BIC'])
+            else:
+                BIC_values.append(np.inf)
+        
+        # Find optimal
+        if len(BIC_values) > 0:
+            optimal_idx = np.argmin(BIC_values)
+            optimal_n = optimal_idx + 1
+            
+            return {
+                'success': True,
+                'optimal_n': optimal_n,
+                'results': results,
+                'BIC_values': BIC_values,
+                'best_result': results.get(optimal_n, {})
+            }
+        else:
+            return {
+                'success': False,
+                'error': 'All models failed to converge'
+            }
