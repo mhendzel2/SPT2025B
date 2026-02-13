@@ -273,17 +273,29 @@ class SyntheticTrajectoryGenerator:
         # Use fbm package if available, otherwise approximate
         try:
             from fbm import FBM
-            f = FBM(n=n_steps, hurst=alpha/2, length=n_steps*self.dt, method='daviesharte')
+            
+            # Common FBM parameters
+            fbm_params = {
+                'n': n_steps,
+                'hurst': alpha/2,
+                'length': n_steps * self.dt,
+                'method': 'daviesharte'
+            }
             
             if self.dimensions == 2:
-                x = f.fbm()
-                y = FBM(n=n_steps, hurst=alpha/2, length=n_steps*self.dt, method='daviesharte').fbm()
+                f_x = FBM(**fbm_params)
+                f_y = FBM(**fbm_params)
+                x = f_x.fbm()
+                y = f_y.fbm()
                 track = np.column_stack([x, y]) * np.sqrt(D)
             else:
                 # 3D
-                x = f.fbm()
-                y = FBM(n=n_steps, hurst=alpha/2, length=n_steps*self.dt, method='daviesharte').fbm()
-                z = FBM(n=n_steps, hurst=alpha/2, length=n_steps*self.dt, method='daviesharte').fbm()
+                f_x = FBM(**fbm_params)
+                f_y = FBM(**fbm_params)
+                f_z = FBM(**fbm_params)
+                x = f_x.fbm()
+                y = f_y.fbm()
+                z = f_z.fbm()
                 track = np.column_stack([x, y, z]) * np.sqrt(D)
         
         except ImportError:
