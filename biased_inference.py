@@ -18,7 +18,7 @@ Date: February 2026
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 from scipy.optimize import minimize
 from scipy.special import gamma as gamma_func
 
