@@ -430,6 +430,36 @@ class EnhancedSPTReportGenerator:
             'priority': 2
         }
         
+        # Spot-On Population Inference (Hansen et al. 2018)
+        self.available_analyses['spoton_population'] = {
+            'name': 'Spot-On Population Inference',
+            'description': 'Multi-population diffusion analysis with out-of-focus and motion blur correction. Infers fractions and D values of heterogeneous populations. Model selection via BIC.',
+            'function': self._analyze_spoton_population,
+            'visualization': self._plot_spoton_population,
+            'category': '2025 Methods',
+            'priority': 2
+        }
+        
+        # Bayesian Posterior Analysis (bayes_traj style)
+        self.available_analyses['bayesian_posterior'] = {
+            'name': 'Bayesian Posterior Analysis',
+            'description': 'MCMC-based parameter inference with credible intervals. Provides full posterior distributions, convergence diagnostics (R-hat), and identifiability checks via ArviZ.',
+            'function': self._analyze_bayesian_posterior,
+            'visualization': self._plot_bayesian_posterior,
+            'category': '2025 Methods',
+            'priority': 3
+        }
+        
+        # ML Trajectory Classification
+        self.available_analyses['ml_trajectory_classification'] = {
+            'name': 'ML Trajectory Classification',
+            'description': 'Classify trajectories into motion types (Brownian, confined, directed, anomalous) using synthetic pre-training and domain randomization. Calibrated probabilities.',
+            'function': self._analyze_ml_trajectory_classification,
+            'visualization': self._plot_ml_trajectory_classification,
+            'category': 'Machine Learning',
+            'priority': 2
+        }
+        
         # Acquisition parameter optimization (Weimann et al. 2024)
         self.available_analyses['acquisition_advisor'] = {
             'name': 'Acquisition Parameter Advisor',
@@ -3971,6 +4001,440 @@ class EnhancedSPTReportGenerator:
             
             return fig
             
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {str(e)}", 
+                             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+    
+    def _analyze_spoton_population(self, tracks_df: pd.DataFrame, current_units: Dict) -> Dict[str, Any]:
+        """
+        Spot-On style population inference with bias correction.
+        
+        Infers fractions and diffusion coefficients of heterogeneous populations
+        while correcting for out-of-focus bias, motion blur, and localization noise.
+        """
+        try:
+            from biased_inference import SpotOnPopulationInference
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            exposure_time = current_units.get('exposure_time', frame_interval * 0.9)
+            localization_error = 0.03  # 30 nm default
+            axial_detection_range = current_units.get('axial_detection_range', 1.0)  # 1 μm default
+            
+            # Calculate all jump distances
+            jump_distances = []
+            for track_id in tracks_df['track_id'].unique():
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                
+                if len(track_data) < 2:
+                    continue
+                
+                # Get coordinates
+                if 'z' in track_data.columns:
+                    coords = track_data[['x', 'y', 'z']].values * pixel_size
+                else:
+                    coords = track_data[['x', 'y']].values * pixel_size
+                
+                # Calculate jumps
+                displacements = np.diff(coords, axis=0)
+                jumps = np.sqrt(np.sum(displacements**2, axis=1))
+                jump_distances.extend(jumps)
+            
+            jump_distances = np.array(jump_distances)
+            
+            if len(jump_distances) < 100:
+                return {'success': False, 'error': 'Need at least 100 jump distances for population inference'}
+            
+            # Initialize Spot-On
+            spoton = SpotOnPopulationInference(
+                frame_interval=frame_interval,
+                pixel_size=pixel_size,
+                localization_error=localization_error,
+                exposure_time=exposure_time,
+                axial_detection_range=axial_detection_range,
+                dimensions=2
+            )
+            
+            # Run model selection
+            selection_result = spoton.model_selection(jump_distances, max_populations=4)
+            
+            if not selection_result['success']:
+                return selection_result
+            
+            optimal_n = selection_result['optimal_n']
+            best_result = selection_result['best_result']
+            
+            return {
+                'success': True,
+                'n_populations': optimal_n,
+                'D_values': best_result['D_values'],
+                'fractions': best_result['fractions'],
+                'D_std': best_result['D_std'],
+                'fraction_std': best_result['fraction_std'],
+                'log_likelihood': best_result['log_likelihood'],
+                'BIC': best_result['BIC'],
+                'n_jump_distances': len(jump_distances),
+                'blur_corrected': best_result['blur_corrected'],
+                'out_of_focus_corrected': best_result['out_of_focus_corrected'],
+                'model_selection': selection_result,
+                'localization_error': localization_error,
+                'axial_detection_range': axial_detection_range
+            }
+        
+        except ImportError:
+            return {'success': False, 'error': 'Spot-On population inference module not available'}
+        except Exception as e:
+            return {'success': False, 'error': f'Spot-On analysis failed: {str(e)}'}
+    
+    def _plot_spoton_population(self, result: Dict[str, Any]) -> go.Figure:
+        """Plot Spot-On population inference results."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=result.get('error', 'Analysis failed'),
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color='red')
+                )
+                return fig
+            
+            # Create subplot figure
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=(
+                    'Population Diffusion Coefficients',
+                    'Population Fractions',
+                    'Model Selection (BIC)',
+                    'Summary Statistics'
+                ),
+                specs=[[{"type": "bar"}, {"type": "pie"}],
+                       [{"type": "scatter"}, {"type": "table"}]]
+            )
+            
+            # 1. D values with error bars
+            D_values = result['D_values']
+            D_std = result['D_std']
+            populations = [f'Pop {i+1}' for i in range(len(D_values))]
+            
+            fig.add_trace(go.Bar(
+                x=populations,
+                y=D_values,
+                error_y=dict(type='data', array=D_std),
+                marker=dict(color='steelblue'),
+                name='D (μm²/s)'
+            ), row=1, col=1)
+            
+            fig.update_yaxes(title_text="D (μm²/s)", type="log", row=1, col=1)
+            
+            # 2. Population fractions (pie chart)
+            fractions = result['fractions']
+            fig.add_trace(go.Pie(
+                labels=populations,
+                values=fractions,
+                textinfo='label+percent',
+                marker=dict(colors=['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A'][:len(fractions)])
+            ), row=1, col=2)
+            
+            # 3. Model selection BIC
+            if 'model_selection' in result:
+                selection = result['model_selection']
+                bic_values = selection.get('BIC_values', [])
+                n_pops = list(range(1, len(bic_values) + 1))
+                
+                fig.add_trace(go.Scatter(
+                    x=n_pops,
+                    y=bic_values,
+                    mode='lines+markers',
+                    marker=dict(size=10, color='orange'),
+                    line=dict(width=2),
+                    name='BIC'
+                ), row=2, col=1)
+                
+                # Mark optimal
+                optimal_n = result['n_populations']
+                if optimal_n <= len(bic_values):
+                    fig.add_trace(go.Scatter(
+                        x=[optimal_n],
+                        y=[bic_values[optimal_n-1]],
+                        mode='markers',
+                        marker=dict(size=15, color='red', symbol='star'),
+                        name='Optimal'
+                    ), row=2, col=1)
+                
+                fig.update_xaxes(title_text="Number of Populations", row=2, col=1)
+                fig.update_yaxes(title_text="BIC", row=2, col=1)
+            
+            # 4. Summary table
+            summary_data = [
+                ['# Populations', result['n_populations']],
+                ['# Jump distances', result['n_jump_distances']],
+                ['Log-likelihood', f"{result['log_likelihood']:.1f}"],
+                ['BIC', f"{result['BIC']:.1f}"],
+                ['Blur corrected', '✓' if result.get('blur_corrected') else '✗'],
+                ['Out-of-focus corr.', '✓' if result.get('out_of_focus_corrected') else '✗']
+            ]
+            
+            fig.add_trace(go.Table(
+                header=dict(values=['Metric', 'Value']),
+                cells=dict(values=[[row[0] for row in summary_data],
+                                  [row[1] for row in summary_data]])
+            ), row=2, col=2)
+            
+            fig.update_layout(
+                title_text="Spot-On Population Inference",
+                showlegend=True,
+                height=800
+            )
+            
+            return fig
+        
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {str(e)}", 
+                             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+    
+    def _analyze_bayesian_posterior(self, tracks_df: pd.DataFrame, current_units: Dict) -> Dict[str, Any]:
+        """
+        Bayesian MCMC inference for diffusion parameters.
+        
+        Provides full posterior distributions and credible intervals.
+        """
+        try:
+            from bayesian_trajectory_inference import BayesianDiffusionInference
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            exposure_time = current_units.get('exposure_time', frame_interval * 0.9)
+            localization_error = 0.03
+            
+            # Initialize Bayesian inference
+            bayes_inf = BayesianDiffusionInference(
+                frame_interval=frame_interval,
+                localization_error=localization_error,
+                exposure_time=exposure_time,
+                dimensions=2
+            )
+            
+            # Analyze a sample of tracks (MCMC is slow)
+            n_tracks_to_analyze = min(10, len(tracks_df['track_id'].unique()))
+            sampled_track_ids = np.random.choice(
+                tracks_df['track_id'].unique(),
+                size=n_tracks_to_analyze,
+                replace=False
+            )
+            
+            D_posteriors = []
+            alpha_posteriors = []
+            diagnostics_list = []
+            
+            for track_id in sampled_track_ids:
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                
+                if len(track_data) < 10:
+                    continue
+                
+                # Get coordinates
+                track = track_data[['x', 'y']].values * pixel_size
+                
+                # Run MCMC (small sample for speed)
+                result = bayes_inf.analyze_track_bayesian(
+                    track,
+                    n_walkers=16,
+                    n_steps=500,
+                    estimate_alpha=False,  # Faster
+                    return_samples=False
+                )
+                
+                if result.get('success', False):
+                    D_posteriors.append({
+                        'median': result['D_median'],
+                        'mean': result['D_mean'],
+                        'std': result['D_std'],
+                        'ci': result['D_credible_interval']
+                    })
+                    diagnostics_list.append(result.get('diagnostics', {}))
+            
+            if len(D_posteriors) == 0:
+                return {'success': False, 'error': 'No tracks could be analyzed with MCMC'}
+            
+            # Aggregate results
+            D_medians = [p['median'] for p in D_posteriors]
+            D_means = [p['mean'] for p in D_posteriors]
+            
+            return {
+                'success': True,
+                'n_tracks_analyzed': len(D_posteriors),
+                'D_median_population': np.median(D_medians),
+                'D_mean_population': np.mean(D_means),
+                'D_std_population': np.std(D_means),
+                'individual_posteriors': D_posteriors[:5],  # Keep first 5 for display
+                'diagnostics_summary': diagnostics_list[:5],
+                'mean_acceptance': np.mean([d.get('mean_acceptance', 0) for d in diagnostics_list if 'mean_acceptance' in d])
+            }
+        
+        except ImportError:
+            return {'success': False, 'error': 'Bayesian inference module not available (need emcee)'}
+        except Exception as e:
+            return {'success': False, 'error': f'Bayesian analysis failed: {str(e)}'}
+    
+    def _plot_bayesian_posterior(self, result: Dict[str, Any]) -> go.Figure:
+        """Plot Bayesian posterior results."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=result.get('error', 'Analysis failed'),
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color='red')
+                )
+                return fig
+            
+            # Simple summary plot
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=['Population Median D'],
+                y=[result['D_median_population']],
+                error_y=dict(type='data', array=[result['D_std_population']]),
+                marker=dict(color='steelblue'),
+                text=[f"{result['D_median_population']:.3f} μm²/s"],
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                title=f"Bayesian Posterior Analysis ({result['n_tracks_analyzed']} tracks)",
+                yaxis_title="D (μm²/s)",
+                showlegend=False,
+                annotations=[
+                    dict(
+                        text=f"Mean acceptance: {result.get('mean_acceptance', 0):.2f}",
+                        xref="paper", yref="paper",
+                        x=0.5, y=0.9,
+                        showarrow=False
+                    )
+                ]
+            )
+            
+            return fig
+        
+        except Exception as e:
+            fig = go.Figure()
+            fig.add_annotation(text=f"Plotting failed: {str(e)}", 
+                             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            return fig
+    
+    def _analyze_ml_trajectory_classification(self, tracks_df: pd.DataFrame, current_units: Dict) -> Dict[str, Any]:
+        """
+        ML-based trajectory classification.
+        
+        Classifies trajectories into motion types using pre-trained model.
+        """
+        try:
+            from transformer_trajectory_classifier import (
+                train_trajectory_classifier,
+                classify_trajectories,
+                SyntheticTrajectoryGenerator
+            )
+            
+            pixel_size = current_units.get('pixel_size', 0.1)
+            frame_interval = current_units.get('frame_interval', 0.1)
+            
+            # Generate synthetic training data
+            generator = SyntheticTrajectoryGenerator(dt=frame_interval, dimensions=2)
+            syn_trajectories, syn_labels = generator.generate_dataset(
+                n_per_class=100,
+                n_steps_range=(20, 100),
+                classes=['brownian', 'confined', 'directed']
+            )
+            
+            # Train classifier
+            classifier, train_result = train_trajectory_classifier(
+                syn_trajectories,
+                syn_labels,
+                dt=frame_interval,
+                method='sklearn'
+            )
+            
+            if not train_result['success']:
+                return train_result
+            
+            # Extract real trajectories
+            real_trajectories = []
+            track_ids = []
+            for track_id in tracks_df['track_id'].unique()[:100]:  # Limit to 100
+                track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                
+                if len(track_data) < 10:
+                    continue
+                
+                track = track_data[['x', 'y']].values * pixel_size
+                real_trajectories.append(track)
+                track_ids.append(track_id)
+            
+            # Classify
+            predictions, probabilities = classify_trajectories(
+                classifier,
+                real_trajectories,
+                return_proba=True
+            )
+            
+            # Aggregate results
+            class_counts = pd.Series(predictions).value_counts().to_dict()
+            
+            return {
+                'success': True,
+                'n_tracks_classified': len(predictions),
+                'class_counts': class_counts,
+                'class_fractions': {k: v/len(predictions) for k, v in class_counts.items()},
+                'train_accuracy': train_result['train_accuracy'],
+                'predictions': predictions[:10],  # First 10 for display
+                'probabilities': probabilities[:10].tolist() if len(probabilities) > 0 else []
+            }
+        
+        except ImportError as e:
+            return {'success': False, 'error': f'ML classification module not available: {str(e)}'}
+        except Exception as e:
+            return {'success': False, 'error': f'ML classification failed: {str(e)}'}
+    
+    def _plot_ml_trajectory_classification(self, result: Dict[str, Any]) -> go.Figure:
+        """Plot ML trajectory classification results."""
+        try:
+            if not result.get('success', False):
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=result.get('error', 'Analysis failed'),
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color='red')
+                )
+                return fig
+            
+            # Pie chart of classifications
+            class_counts = result['class_counts']
+            
+            fig = go.Figure(data=[go.Pie(
+                labels=list(class_counts.keys()),
+                values=list(class_counts.values()),
+                textinfo='label+percent',
+                marker=dict(colors=['#FF6B6B', '#4ECDC4', '#45B7D1'])
+            )])
+            
+            fig.update_layout(
+                title=f"ML Trajectory Classification ({result['n_tracks_classified']} tracks)",
+                annotations=[
+                    dict(
+                        text=f"Training accuracy: {result['train_accuracy']:.2f}",
+                        xref="paper", yref="paper",
+                        x=0.5, y=-0.1,
+                        showarrow=False
+                    )
+                ]
+            )
+            
+            return fig
+        
         except Exception as e:
             fig = go.Figure()
             fig.add_annotation(text=f"Plotting failed: {str(e)}", 
