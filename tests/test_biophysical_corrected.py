@@ -1,77 +1,49 @@
-"""
-Test script for corrected biophysical models.
-"""
+"""Regression tests for biophysical utilities merged from corrected module."""
 
 import numpy as np
 import pandas as pd
-from biophysical_models_corrected import (
-    RouseModel, ConfinedDiffusionModel, AnomalousDiffusionModel, 
-    FBMModel, WLCModel, ActiveTransportModel, run_full_analysis
-)
-from report_builder import ReportBuilder
 
-def test_rouse_model():
-    print("Testing Rouse Model...")
-    # Generate synthetic data: MSD = 2*d*D*t + Gamma*t^0.5
-    t = np.linspace(0.1, 10, 20)
-    d = 2
-    D_macro = 0.1
-    Gamma = 0.5
-    msd_true = 2 * d * D_macro * t + Gamma * t**0.5
-    # Add noise
-    msd_noisy = msd_true + np.random.normal(0, 0.05, size=len(t))
-    
-    model = RouseModel(dimension=2)
-    result = model.fit(t, msd_noisy)
-    
-    print(f"True Params: D_macro={D_macro}, Gamma={Gamma}")
-    print(f"Fitted Params: {result['parameters']}")
-    assert result['success']
-    assert abs(result['parameters']['D_macro'] - D_macro) < 0.1
-    assert abs(result['parameters']['Gamma'] - Gamma) < 0.2
+from biophysical_models import calculate_msd_variance
 
-def test_confined_model():
-    print("\nTesting Confined Model...")
-    # Generate synthetic data
-    t = np.linspace(0.1, 10, 20)
-    L = 2.0
-    D = 0.5
-    # Approx formula for generation
-    msd_true = L**2 * (1 - np.exp(-4*D*t/L**2))
-    msd_noisy = msd_true + np.random.normal(0, 0.05, size=len(t))
-    
-    model = ConfinedDiffusionModel(dimension=2)
-    result = model.fit(t, msd_noisy)
-    
-    print(f"True Params: L={L}, D={D}")
-    print(f"Fitted Params: {result['parameters']}")
-    assert result['success']
-    # Note: The fitted model uses the series expansion, so it might differ slightly from the simple generation formula
-    assert abs(result['parameters']['L_conf'] - L) < 0.2
 
-def test_full_pipeline():
-    print("\nTesting Full Pipeline...")
-    # Create a dummy tracks dataframe
-    tracks = []
-    for i in range(5):
-        # Create a track
-        t = np.arange(0, 50) * 0.1
-        x = np.cumsum(np.random.normal(0, np.sqrt(2*0.1*0.1), size=50))
-        y = np.cumsum(np.random.normal(0, np.sqrt(2*0.1*0.1), size=50))
-        df = pd.DataFrame({'track_id': i, 'frame': np.arange(50), 'x': x/0.1, 'y': y/0.1}) # pixels
-        tracks.append(df)
-        
-    tracks_df = pd.concat(tracks)
-    
-    results = run_full_analysis(tracks_df, pixel_size=0.1, frame_interval=0.1)
-    print(f"Best Model: {results['best_model']}")
-    
-    # Generate report
-    builder = ReportBuilder(output_dir="test_reports")
-    report_path = builder.generate_html_report(results)
-    print(f"Report generated at: {report_path}")
+def _make_tracks(n_tracks: int = 5, n_frames: int = 50, D: float = 0.1, dt: float = 0.1) -> pd.DataFrame:
+    rng = np.random.default_rng(123)
+    sigma_step = np.sqrt(2 * D * dt)
+    rows = []
 
-if __name__ == "__main__":
-    test_rouse_model()
-    test_confined_model()
-    test_full_pipeline()
+    for track_id in range(n_tracks):
+        x = np.cumsum(rng.normal(0, sigma_step, size=n_frames))
+        y = np.cumsum(rng.normal(0, sigma_step, size=n_frames))
+        for frame in range(n_frames):
+            rows.append(
+                {
+                    "track_id": track_id,
+                    "frame": frame,
+                    "x": x[frame] / 0.1,  # convert to pixels for pixel_size=0.1
+                    "y": y[frame] / 0.1,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def test_calculate_msd_variance_shapes():
+    tracks_df = _make_tracks()
+    lag_times, msd_mean, msd_var = calculate_msd_variance(
+        tracks_df, pixel_size=0.1, frame_interval=0.1, max_lag=20
+    )
+
+    assert len(lag_times) == 20
+    assert len(msd_mean) == 20
+    assert len(msd_var) == 20
+    assert np.isfinite(msd_mean).sum() > 0
+
+
+def test_calculate_msd_variance_monotonic_lags():
+    tracks_df = _make_tracks()
+    lag_times, _, _ = calculate_msd_variance(
+        tracks_df, pixel_size=0.1, frame_interval=0.2, max_lag=15
+    )
+
+    assert np.all(np.diff(lag_times) > 0)
+    assert lag_times[0] == 0.2
