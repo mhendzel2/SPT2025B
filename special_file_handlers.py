@@ -10,6 +10,9 @@ import h5py
 from typing import Dict, Any, Optional, Tuple, List, Union
 import re
 
+IMARIS_AVAILABLE = True
+MS2_AVAILABLE = True
+
 def load_trackmate_file(file_stream, sep=",") -> pd.DataFrame:
     """
     Load a TrackMate-style CSV file with multiple header rows.
@@ -352,6 +355,11 @@ def load_ms2_spots_file(file_stream, sep=",") -> pd.DataFrame:
     file_stream.seek(0)
     return load_trackmate_file(file_stream, sep)
 
+
+def load_ms2_spots(file_stream, sep=",") -> pd.DataFrame:
+    """Backward-compatible alias for MS2 spots loader."""
+    return load_ms2_spots_file(file_stream, sep)
+
 def load_imaris_file(file_path: str) -> Dict[str, Any]:
     """
     Load a Bitplane Imaris IMS file and extract relevant data.
@@ -429,6 +437,11 @@ def load_imaris_file(file_path: str) -> Dict[str, Any]:
     
     except Exception as e:
         raise ValueError(f"Error processing Imaris file: {str(e)}")
+
+
+def load_imaris_spots(file_path: str) -> Dict[str, Any]:
+    """Backward-compatible alias for Imaris loader."""
+    return load_imaris_file(file_path)
 
 def extract_imaris_metadata(ims_file: h5py.File) -> Dict[str, Any]:
     """
