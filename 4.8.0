@@ -1,2 +1,0 @@
-Requirement already satisfied: opencv-python in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (4.12.0.88)
-Requirement already satisfied: numpy<2.3.0,>=2 in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from opencv-python) (2.2.6)

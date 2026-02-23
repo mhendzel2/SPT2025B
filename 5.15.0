@@ -1,3 +1,0 @@
-Requirement already satisfied: plotly in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (6.3.1)
-Requirement already satisfied: narwhals>=1.15.1 in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from plotly) (2.7.0)
-Requirement already satisfied: packaging in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from plotly) (25.0)

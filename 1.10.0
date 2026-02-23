@@ -1,2 +1,0 @@
-Requirement already satisfied: scipy in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (1.16.2)
-Requirement already satisfied: numpy<2.6,>=1.25.2 in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from scipy) (2.2.6)

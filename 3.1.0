@@ -1,2 +1,0 @@
-Requirement already satisfied: openpyxl in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (3.1.5)
-Requirement already satisfied: et-xmlfile in c:\users\mjhen\github\spt2025b\spt_env\lib\site-packages (from openpyxl) (2.0.0)
