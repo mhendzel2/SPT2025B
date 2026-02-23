@@ -207,3 +207,7 @@ spt_env/
 
 spt_projects/
 .spt_settings.json
+
+test_output.txt
+test_results.txt
+test_summary.json
