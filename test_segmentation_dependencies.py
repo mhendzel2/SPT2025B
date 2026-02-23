@@ -7,6 +7,15 @@ def test_segmentation_imports():
     results = {}
     
     try:
+        import sam3
+        from sam3.model_builder import build_sam3_image_model
+        results['sam3'] = True
+        print('✓ SAM3 dependencies available')
+    except ImportError as e:
+        results['sam3'] = False
+        print(f'✗ SAM3 import failed: {e}')
+
+    try:
         from segment_anything import sam_model_registry, SamPredictor
         results['segment_anything'] = True
         print('✓ SAM dependencies available')
