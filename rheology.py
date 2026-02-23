@@ -597,7 +597,8 @@ class MicrorheologyAnalyzer:
         Calculate relaxation modulus G(t) from MSD data.
         
         Relaxation modulus describes stress decay under constant strain.
-        Approximation: G(t) ≈ kB*T / (π*a*<Δr²(t)>)
+        Approximation (prefactor-consistent with GSER/creep):
+        G(t) ≈ 2*kB*T / (3*π*a*<Δr²_2D(t)>)
         
         More accurate methods would use inverse Fourier transform of G*(ω),
         but require data at multiple frequencies.
@@ -630,8 +631,8 @@ class MicrorheologyAnalyzer:
                 msd_vals = np.interp(times, msd_df['lag_time_s'], msd_df['msd_m2'])
             
             if use_approximation:
-                # Simplified approximation: G(t) ≈ kB*T / (π*a*<Δr²(t)>)
-                prefactor = (self.kB * self.temperature_K) / (np.pi * self.particle_radius_m)
+                # Simplified approximation consistent with 2D projected MSD.
+                prefactor = (2.0 * self.kB * self.temperature_K) / (3.0 * np.pi * self.particle_radius_m)
                 relaxation_modulus = prefactor / msd_vals
                 
             else:
