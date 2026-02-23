@@ -401,6 +401,40 @@ class PolymerPhysicsModel:
                 return {'success': False, 'error': 'Insufficient scale range for fractal dimension calculation'}
             
             # Fit log(N) = -Df * log(ε) + c
+            log_scales = np.log(valid_scales)
+            log_counts = np.log(counts)
+            
+            # Linear regression: log(N) = -Df * log(ε) + c
+            slope, intercept = np.polyfit(log_scales, log_counts, 1)
+            Df = -slope  # Fractal dimension is negative of slope
+            
+            # Calculate R² for quality assessment
+            predicted = slope * log_scales + intercept
+            ss_res = np.sum((log_counts - predicted) ** 2)
+            ss_tot = np.sum((log_counts - np.mean(log_counts)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+            
+            # Generate interpretation
+            if Df < 1.2:
+                interpretation = f"Df = {Df:.3f}: Nearly ballistic/directed motion (space-exploring)"
+            elif Df < 1.6:
+                interpretation = f"Df = {Df:.3f}: Anomalous subdiffusion (constrained exploration)"
+            elif Df < 1.9:
+                interpretation = f"Df = {Df:.3f}: Near-Brownian diffusion"
+            else:
+                interpretation = f"Df = {Df:.3f}: Space-filling trajectory (confined or Brownian)"
+            
+            return {
+                'success': True,
+                'fractal_dimension': Df,
+                'r_squared': r_squared,
+                'n_scales': len(valid_scales),
+                'interpretation': interpretation,
+                'log_scales': log_scales.tolist(),
+                'log_counts': log_counts.tolist(),
+                'slope': slope,
+                'intercept': intercept
+            }
             
         except Exception as e:
             return {'success': False, 'error': f'Fractal dimension calculation failed: {str(e)}'}

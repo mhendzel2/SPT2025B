@@ -16,6 +16,8 @@ The primary implementation uses vectorized NumPy operations for optimal performa
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
+from scipy import stats
+from scipy.optimize import curve_fit
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -94,9 +96,15 @@ def calculate_msd(tracks_df: pd.DataFrame,
 
         # Calculate MSD for different lag times using vectorized operations (OPTIMIZED)
         for lag in range(1, min(max_lag + 1, len(track))):
-            # Vectorized calculation of squared displacements
-            dx = x[lag:] - x[:-lag]
-            dy = y[lag:] - y[:-lag]
+            # Gap-aware vectorized calculation:
+            # only keep displacement pairs separated by exactly `lag` frames.
+            frame_diffs = frames[lag:] - frames[:-lag]
+            valid = frame_diffs == lag
+            if not np.any(valid):
+                continue
+
+            dx = (x[lag:] - x[:-lag])[valid]
+            dy = (y[lag:] - y[:-lag])[valid]
             squared_displacements = dx**2 + dy**2
             
             if len(squared_displacements) > 0:
@@ -202,53 +210,147 @@ def calculate_msd_ensemble(tracks_df: pd.DataFrame,
     return ensemble_msd
 
 
-def fit_msd_linear(msd_df: pd.DataFrame, 
-                   max_points: Optional[int] = None) -> Dict[str, float]:
+def fit_msd_linear(
+    msd_df: pd.DataFrame,
+    max_points: Optional[int] = None,
+    track_length: Optional[int] = None,
+    weighted: bool = True,
+    min_points: int = 3,
+) -> Dict[str, float]:
     """
-    Fit MSD curve with linear model: MSD = 4Dt
+    Fit MSD with localization offset model: MSD = 4*D*t + 4*sigma_loc^2.
     
-    Extracts diffusion coefficient from MSD vs time plot.
+    This model follows Michalet (2010) and accounts for static localization
+    uncertainty through the intercept term.
     
     Parameters
     ----------
     msd_df : pd.DataFrame
         MSD data from calculate_msd
     max_points : int, optional
-        Maximum number of points to use in fit (uses first N points)
+        Maximum number of points to use in fit.
+    track_length : int, optional
+        Original track length (frames). If provided and max_points is None,
+        the default fit length is floor(track_length/3).
+    weighted : bool, default=True
+        If True and `n_points` exists, weight points by displacement-count.
+    min_points : int, default=3
+        Minimum number of points required for fitting.
     
     Returns
     -------
     dict
         Fit results with keys:
         - 'D': Diffusion coefficient (μm²/s)
-        - 'slope': Slope of fit
-        - 'intercept': Intercept of fit
+        - 'D_err': Standard error on D
+        - 'sigma_loc': Localization precision (μm)
+        - 'sigma_loc_err': Standard error on localization precision (μm)
+        - 'slope': Effective slope (= 4D)
+        - 'intercept': Effective intercept (= 4sigma_loc²)
         - 'r_squared': R² value of fit
+        - 'n_fit_points': Number of points used in fit
     """
+    default_result = {
+        'D': np.nan,
+        'D_err': np.nan,
+        'sigma_loc': np.nan,
+        'sigma_loc_err': np.nan,
+        'sigma2_loc': np.nan,
+        'sigma2_loc_err': np.nan,
+        'slope': np.nan,
+        'intercept': np.nan,
+        'r_squared': np.nan,
+        'p_value': np.nan,
+        'std_err': np.nan,
+        'n_fit_points': 0,
+    }
     if msd_df.empty:
-        return {'D': np.nan, 'slope': np.nan, 'intercept': np.nan, 'r_squared': np.nan}
-    
-    # Use first max_points if specified
+        return default_result
+
+    fit_df = msd_df.copy()
+    if 'lag_time' not in fit_df.columns or 'msd' not in fit_df.columns:
+        return default_result
+
+    fit_df = fit_df.sort_values('lag_time')
+    fit_df = fit_df[np.isfinite(fit_df['lag_time']) & np.isfinite(fit_df['msd'])]
+    fit_df = fit_df[fit_df['lag_time'] > 0]
+    if fit_df.empty:
+        return default_result
+
     if max_points is not None:
-        msd_df = msd_df.head(max_points)
-    
-    lag_times = msd_df['lag_time'].values
-    msd_values = msd_df['msd'].values
-    
-    # Linear fit: MSD = slope * t + intercept
-    from scipy import stats
-    slope, intercept, r_value, p_value, std_err = stats.linregress(lag_times, msd_values)
-    
-    # Diffusion coefficient D = slope / 4 (for 2D)
-    D = slope / 4.0
-    
+        n_fit = min(len(fit_df), int(max_points))
+    elif track_length is not None:
+        n_fit = min(len(fit_df), max(min_points, int(track_length) // 3))
+    else:
+        n_fit = min(len(fit_df), max(min_points, len(fit_df) // 3))
+
+    if n_fit < min_points:
+        return default_result
+
+    fit_df = fit_df.head(n_fit)
+    lag_times = fit_df['lag_time'].to_numpy(dtype=float)
+    msd_values = fit_df['msd'].to_numpy(dtype=float)
+
+    # Initial values from ordinary linear regression.
+    slope_ols, intercept_ols, _, p_value, std_err = stats.linregress(lag_times, msd_values)
+    initial_D = max(slope_ols / 4.0, 1e-12)
+    initial_sigma2 = max(intercept_ols / 4.0, 0.0)
+
+    def msd_model(t: np.ndarray, D: float, sigma2_loc: float) -> np.ndarray:
+        return 4.0 * D * t + 4.0 * sigma2_loc
+
+    sigma_for_fit = None
+    if weighted and 'n_points' in fit_df.columns:
+        n_points = fit_df['n_points'].to_numpy(dtype=float)
+        n_points = np.where(n_points > 0, n_points, 1.0)
+        sigma_for_fit = 1.0 / np.sqrt(n_points)
+
+    try:
+        popt, pcov = curve_fit(
+            msd_model,
+            lag_times,
+            msd_values,
+            p0=[initial_D, initial_sigma2],
+            bounds=([0.0, 0.0], [np.inf, np.inf]),
+            sigma=sigma_for_fit,
+            absolute_sigma=False,
+            maxfev=20000,
+        )
+        D = float(popt[0])
+        sigma2_loc = float(popt[1])
+        perr = np.sqrt(np.diag(pcov)) if pcov is not None else np.array([np.nan, np.nan])
+        D_err = float(perr[0]) if len(perr) > 0 else np.nan
+        sigma2_loc_err = float(perr[1]) if len(perr) > 1 else np.nan
+    except Exception:
+        # Fallback for robustness if nonlinear fit fails.
+        D = float(max(slope_ols / 4.0, 0.0))
+        sigma2_loc = float(max(intercept_ols / 4.0, 0.0))
+        D_err = float(std_err / 4.0) if np.isfinite(std_err) else np.nan
+        sigma2_loc_err = np.nan
+
+    sigma_loc = float(np.sqrt(max(sigma2_loc, 0.0)))
+    sigma_loc_err = np.nan
+    if np.isfinite(sigma2_loc_err) and sigma_loc > 0:
+        sigma_loc_err = float(0.5 * sigma2_loc_err / sigma_loc)
+
+    pred = msd_model(lag_times, D, sigma2_loc)
+    ss_res = float(np.sum((msd_values - pred) ** 2))
+    ss_tot = float(np.sum((msd_values - np.mean(msd_values)) ** 2))
+    r_squared = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+
     return {
         'D': D,
-        'slope': slope,
-        'intercept': intercept,
-        'r_squared': r_value**2,
+        'D_err': D_err,
+        'sigma_loc': sigma_loc,
+        'sigma_loc_err': sigma_loc_err,
+        'sigma2_loc': sigma2_loc,
+        'sigma2_loc_err': sigma2_loc_err,
+        'slope': 4.0 * D,
+        'intercept': 4.0 * sigma2_loc,
+        'r_squared': r_squared,
         'p_value': p_value,
-        'std_err': std_err
+        'std_err': std_err,
+        'n_fit_points': int(n_fit),
     }
 
 

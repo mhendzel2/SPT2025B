@@ -16,14 +16,14 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Optional, Tuple, Union
 import scipy.optimize as optimize
-from scipy.stats import norm, linregress, pearsonr
+from scipy.stats import norm, linregress, pearsonr, ttest_1samp, t as student_t
 from scipy import spatial
 from scipy.spatial import distance
 from sklearn.cluster import DBSCAN, KMeans, OPTICS
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import KDTree, NearestNeighbors
 from scipy.cluster.hierarchy import fcluster, linkage
-from msd_calculation import calculate_msd
+from msd_calculation import calculate_msd, fit_msd_linear
 from constants import (
     DEFAULT_SHORT_LAG_CUTOFF,
     MIN_POINTS_ANOMALOUS,
@@ -35,11 +35,140 @@ from constants import (
 # --- Diffusion Analysis ---
 
 
+def weighted_linregress(x: np.ndarray, y: np.ndarray, weights: np.ndarray) -> Tuple[float, float, float, float, float]:
+    """
+    Weighted linear regression for y = slope*x + intercept.
+
+    Returns
+    -------
+    tuple
+        (slope, intercept, r_value, p_value, slope_std_err)
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    w = np.asarray(weights, dtype=float)
+
+    valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0)
+    x = x[valid]
+    y = y[valid]
+    w = w[valid]
+    if len(x) < 3:
+        return np.nan, np.nan, np.nan, np.nan, np.nan
+
+    w_sum = np.sum(w)
+    if w_sum <= 0:
+        return np.nan, np.nan, np.nan, np.nan, np.nan
+    w_norm = w / w_sum
+
+    x_bar = np.sum(w_norm * x)
+    y_bar = np.sum(w_norm * y)
+    sxx = np.sum(w_norm * (x - x_bar) ** 2)
+    sxy = np.sum(w_norm * (x - x_bar) * (y - y_bar))
+    if sxx <= 0:
+        return np.nan, np.nan, np.nan, np.nan, np.nan
+
+    slope = sxy / sxx
+    intercept = y_bar - slope * x_bar
+
+    y_pred = slope * x + intercept
+    residuals = y - y_pred
+    dof = max(len(x) - 2, 1)
+    rss_w = np.sum(w * residuals**2)
+    mse_w = rss_w / dof
+    slope_std_err = np.sqrt(max(mse_w / np.sum(w * (x - x_bar) ** 2), 0.0))
+
+    ss_tot_w = np.sum(w * (y - y_bar) ** 2)
+    r_value = np.nan
+    if ss_tot_w > 0 and np.isfinite(rss_w):
+        r_squared = max(0.0, 1.0 - (rss_w / ss_tot_w))
+        r_value = np.sign(slope) * np.sqrt(r_squared)
+
+    p_value = np.nan
+    if np.isfinite(slope_std_err) and slope_std_err > 0:
+        t_stat = slope / slope_std_err
+        p_value = 2.0 * (1.0 - student_t.cdf(np.abs(t_stat), df=dof))
+
+    return slope, intercept, r_value, p_value, slope_std_err
+
+
+def fit_alpha(
+    lag_times: np.ndarray,
+    msd_values: np.ndarray,
+    n_points_array: np.ndarray,
+) -> Tuple[float, float, Tuple[float, float]]:
+    """
+    Fit anomalous exponent α from log-log MSD, weighted by n_points.
+
+    Returns
+    -------
+    tuple
+        (alpha, alpha_std_err, (alpha_ci95_low, alpha_ci95_high))
+    """
+    lag_times = np.asarray(lag_times, dtype=float)
+    msd_values = np.asarray(msd_values, dtype=float)
+    n_points_array = np.asarray(n_points_array, dtype=float)
+
+    valid = (
+        np.isfinite(lag_times)
+        & np.isfinite(msd_values)
+        & np.isfinite(n_points_array)
+        & (lag_times > 0)
+        & (msd_values > 0)
+        & (n_points_array > 0)
+    )
+    if np.sum(valid) < 3:
+        return np.nan, np.nan, (np.nan, np.nan)
+
+    log_t = np.log(lag_times[valid])
+    log_msd = np.log(msd_values[valid])
+    weights = np.sqrt(n_points_array[valid])
+
+    slope, _, _, _, se = weighted_linregress(log_t, log_msd, weights)
+    if not np.isfinite(slope) or not np.isfinite(se):
+        return np.nan, np.nan, (np.nan, np.nan)
+
+    alpha = slope
+    alpha_ci95 = (alpha - 1.96 * se, alpha + 1.96 * se)
+    return float(alpha), float(se), (float(alpha_ci95[0]), float(alpha_ci95[1]))
+
+
+def classify_motion(
+    alpha: float,
+    alpha_se: float,
+    alpha_thresholds: Tuple[float, float] = (0.85, 1.15),
+) -> Tuple[str, str]:
+    """
+    Classify diffusion type using alpha confidence intervals.
+
+    Returns
+    -------
+    tuple
+        (classification, confidence)
+    """
+    if not np.isfinite(alpha) or not np.isfinite(alpha_se):
+        return "unknown", "indeterminate"
+
+    sub_thresh, super_thresh = alpha_thresholds
+    ci_low = alpha - 1.96 * alpha_se
+    ci_high = alpha + 1.96 * alpha_se
+
+    if ci_high < sub_thresh:
+        return "subdiffusive", "high"
+    if ci_low > super_thresh:
+        return "superdiffusive", "high"
+    if ci_high < 1.0:
+        return "likely_subdiffusive", "low"
+    if ci_low > 1.0:
+        return "likely_superdiffusive", "low"
+    return "normal_diffusion", "indeterminate"
+
+
 
 def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: float = 1.0, 
                      frame_interval: float = 1.0, min_track_length: int = 5, 
                      fit_method: str = 'linear', analyze_anomalous: bool = True, 
-                     check_confinement: bool = True) -> Dict[str, Any]:
+                     check_confinement: bool = True,
+                     short_lag_fit_points: Optional[int] = None) -> Dict[str, Any]:
     """
     Perform comprehensive diffusion analysis on track data.
     
@@ -114,6 +243,7 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
         
         # Analyze each track individually
         track_results = []
+        track_lengths = tracks_df.groupby('track_id').size().to_dict()
         
         for track_id, track_msd in msd_df.groupby('track_id'):
             try:
@@ -131,128 +261,76 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                 # Initialize track result dict
                 track_result = {'track_id': track_id}
                 
-                # Standard diffusion coefficient (short time)
-                # Use only the first few points for initial diffusion coefficient
-                short_lag_cutoff = min(DEFAULT_SHORT_LAG_CUTOFF, len(lag_times))
-                
-                # Linear fit: MSD = 4*D*t (2D) or MSD = 6*D*t (3D)
-                # Here we use 2D (4*D*t)
-                if fit_method == 'linear':
-                    # Linear fit
-                    if short_lag_cutoff >= 2:
-                        try:
-                            slope, intercept, r_value, p_value, std_err = linregress(
-                                lag_times[:short_lag_cutoff], 
-                                msd_values[:short_lag_cutoff]
-                            )
-                            D_short = slope / 4  # µm²/s
-                            D_err = std_err / 4
-                        except (ValueError, np.linalg.LinAlgError) as e:
-                            import logging
-                            logging.warning(f"Linear fit failed for track {track_id}: {str(e)}")
-                            D_short = np.nan
-                            D_err = np.nan
-                    else:
-                        D_short = np.nan
-                        D_err = np.nan
+                # Statistically motivated default fit length: floor(N/3), where
+                # N is the original track length (Michalet 2010).
+                track_len = int(track_lengths.get(track_id, len(track_msd)))
+                default_short_lag = max(3, track_len // 3)
+                if short_lag_fit_points is None:
+                    short_lag_cutoff = min(default_short_lag, len(lag_times))
+                else:
+                    short_lag_cutoff = min(max(3, int(short_lag_fit_points)), len(lag_times))
+
+                use_weighted_fit = fit_method in ('weighted', 'nonlinear')
+                fit_result = fit_msd_linear(
+                    track_msd[['lag_time', 'msd', 'n_points']],
+                    max_points=short_lag_cutoff,
+                    track_length=track_len,
+                    weighted=use_weighted_fit,
+                )
+
+                D_short = fit_result.get('D', np.nan)
+                D_err = fit_result.get('D_err', np.nan)
+                sigma_loc = fit_result.get('sigma_loc', np.nan)
+                sigma_loc_err = fit_result.get('sigma_loc_err', np.nan)
                         
-                elif fit_method == 'weighted':
-                    if short_lag_cutoff >= 2:
-                        def linear_func_with_offset(t, D, offset):
-                            return 4 * D * t + offset
-                        try:
-                            # Weights inversely proportional to variance
-                            # Variance of MSD is proportional to lag_time^2
-                            # So sigma should be proportional to lag_time
-                            sigma_vals = lag_times[:short_lag_cutoff]
-                            # Ensure sigma_vals are not zero
-                            sigma_vals[sigma_vals == 0] = 1e-9
-                            
-                            popt, pcov = optimize.curve_fit(
-                                linear_func_with_offset, 
-                                lag_times[:short_lag_cutoff], 
-                                msd_values[:short_lag_cutoff],
-                                sigma=sigma_vals,
-                                absolute_sigma=True
-                            )
-                            D_short = popt[0]  # µm²/s
-                            D_err = np.sqrt(pcov[0, 0])
-                        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
-                            import logging
-                            logging.warning(f"Weighted fit failed for track {track_id}: {str(e)}")
-                            D_short = np.nan
-                            D_err = np.nan
-                    else:
-                        D_short = np.nan
-                        D_err = np.nan
-                        
-                elif fit_method == 'nonlinear':
-                    # Nonlinear fit for MSD = 4*D*t + offset
-                    if short_lag_cutoff >= 3:
-                        def msd_func(t, D, offset):
-                            return 4 * D * t + offset
-                        
-                        try:
-                            popt, pcov = optimize.curve_fit(
-                                msd_func, 
-                                lag_times[:short_lag_cutoff], 
-                                msd_values[:short_lag_cutoff]
-                            )
-                            D_short = popt[0]  # µm²/s
-                            D_err = np.sqrt(pcov[0, 0])
-                        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
-                            import logging
-                            logging.warning(f"Nonlinear fit failed for track {track_id}: {str(e)}")
-                            D_short = np.nan
-                            D_err = np.nan
-                    else:
-                        D_short = np.nan
-                        D_err = np.nan
-                
                 # Store diffusion coefficient results
                 track_result['diffusion_coefficient'] = D_short
                 track_result['diffusion_coefficient_error'] = D_err
+                track_result['localization_sigma'] = sigma_loc
+                track_result['localization_sigma_error'] = sigma_loc_err
+                track_result['short_lag_fit_points_default'] = default_short_lag
+                track_result['short_lag_fit_points_used'] = short_lag_cutoff
                 
                 # Analyze anomalous diffusion
                 if analyze_anomalous and len(lag_times) >= MIN_POINTS_ANOMALOUS:
                     try:
-                        # Fit MSD = c * t^alpha using log-log
-                        # Ensure lag_times and msd_values are positive for log
-                        valid_indices = (lag_times > 0) & (msd_values > 0)
-                        log_lag_valid = np.log(lag_times[valid_indices])
-                        log_msd_valid = np.log(msd_values[valid_indices])
-                        
-                        if len(log_lag_valid) >= 2:  # Need at least 2 points for linregress
-                            slope, intercept, r_value, p_value, std_err_slope = linregress(log_lag_valid, log_msd_valid)
-                            
-                            # Alpha is the slope in log-log space
-                            alpha = slope
-                            alpha_err = std_err_slope
-                            
-                            # Categorize diffusion type
-                            diffusion_type = 'normal'
-                            if alpha < ALPHA_SUBDIFFUSIVE_THRESHOLD:
-                                diffusion_type = 'subdiffusive'
-                            elif alpha > ALPHA_SUPERDIFFUSIVE_THRESHOLD:
-                                diffusion_type = 'superdiffusive'
-                                
-                            track_result['alpha'] = alpha
-                            track_result['alpha_error'] = alpha_err
-                            track_result['diffusion_type'] = diffusion_type
-                        else:
-                            track_result['alpha'] = np.nan
-                            track_result['alpha_error'] = np.nan
-                            track_result['diffusion_type'] = 'unknown'
+                        alpha, alpha_err, alpha_ci95 = fit_alpha(
+                            lag_times=lag_times,
+                            msd_values=msd_values,
+                            n_points_array=track_msd['n_points'].values,
+                        )
+
+                        diffusion_type, diffusion_confidence = classify_motion(
+                            alpha=alpha,
+                            alpha_se=alpha_err,
+                            alpha_thresholds=(
+                                ALPHA_SUBDIFFUSIVE_THRESHOLD,
+                                ALPHA_SUPERDIFFUSIVE_THRESHOLD,
+                            ),
+                        )
+
+                        track_result['alpha'] = alpha
+                        track_result['alpha_error'] = alpha_err
+                        track_result['alpha_ci_lower'] = alpha_ci95[0]
+                        track_result['alpha_ci_upper'] = alpha_ci95[1]
+                        track_result['diffusion_type'] = diffusion_type
+                        track_result['diffusion_confidence'] = diffusion_confidence
                     except (ValueError, np.linalg.LinAlgError) as e:
                         import logging
                         logging.warning(f"Anomalous diffusion fit failed for track {track_id}: {str(e)}")
                         track_result['alpha'] = np.nan
                         track_result['alpha_error'] = np.nan
+                        track_result['alpha_ci_lower'] = np.nan
+                        track_result['alpha_ci_upper'] = np.nan
                         track_result['diffusion_type'] = 'unknown'
+                        track_result['diffusion_confidence'] = 'indeterminate'
                 else:
                     track_result['alpha'] = np.nan
                     track_result['alpha_error'] = np.nan
+                    track_result['alpha_ci_lower'] = np.nan
+                    track_result['alpha_ci_upper'] = np.nan
                     track_result['diffusion_type'] = 'unknown'
+                    track_result['diffusion_confidence'] = 'indeterminate'
                 
                 # Check for confined diffusion
                 if check_confinement and len(lag_times) >= MIN_POINTS_CONFINEMENT:
@@ -277,9 +355,10 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                         # Check for significant decrease in slope
                         if late_slope < 0.3 * early_slope:
                             confined = True
-                            # Estimate confinement radius
+                            # Saxton (1993): MSD_plateau = L^2 / 3 for 2D reflecting square.
+                            # Confinement radius R = L/2 = sqrt(3*MSD_plateau)/2.
                             plateau_value = np.mean(msd_values[early_region:late_region])
-                            confinement_radius = np.sqrt(plateau_value / 4)  # Radius = sqrt(MSD/4) for 2D
+                            confinement_radius = np.sqrt(3.0 * plateau_value) / 2.0
                         else:
                             confined = False
                             confinement_radius = np.nan
@@ -317,10 +396,25 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                 results['ensemble_results']['mean_alpha'] = results['track_results']['alpha'].mean()
                 results['ensemble_results']['median_alpha'] = results['track_results']['alpha'].median()
                 results['ensemble_results']['std_alpha'] = results['track_results']['alpha'].std()
+                alpha_values = results['track_results']['alpha'].dropna()
+
+                if len(alpha_values) >= 2:
+                    t_stat, p_val = ttest_1samp(alpha_values.values, popmean=1.0, nan_policy='omit')
+                else:
+                    t_stat, p_val = np.nan, np.nan
+                results['ensemble_results']['alpha_t_stat'] = t_stat
+                results['ensemble_results']['alpha_t_p_value'] = p_val
                 
                 # Count diffusion types
                 type_counts = results['track_results']['diffusion_type'].value_counts()
-                for diff_type in ['normal', 'subdiffusive', 'superdiffusive']:
+                for diff_type in [
+                    'normal_diffusion',
+                    'subdiffusive',
+                    'superdiffusive',
+                    'likely_subdiffusive',
+                    'likely_superdiffusive',
+                    'unknown',
+                ]:
                     if diff_type in type_counts:
                         results['ensemble_results'][f'{diff_type}_count'] = type_counts[diff_type]
                         results['ensemble_results'][f'{diff_type}_fraction'] = type_counts[diff_type] / type_counts.sum()
@@ -1446,10 +1540,9 @@ def analyze_gel_structure(tracks_df: pd.DataFrame,
         confined_tracks = track_results[track_results['confined'] == True]
         
         if not confined_tracks.empty:
-            # Pore diameter is approx 2 * confinement radius
-            # But we should be careful about the interpretation
-            # Confinement radius is std dev of position, so pore size ~ 4 * radius (95% confidence)
-            estimated_sizes = confined_tracks['confinement_radius'] * 4
+            # Preserve physically meaningful confinement size estimate directly
+            # from the Saxton radius without arbitrary scaling factors.
+            estimated_sizes = confined_tracks['confinement_radius']
             
             # Filter outliers
             valid_sizes = estimated_sizes[estimated_sizes <= max_pore_size]

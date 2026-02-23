@@ -48,8 +48,11 @@ class MicrorheologyAnalyzer:
         """
         Calculate complex modulus G*(ω) using the GSER (Generalized Stokes-Einstein Relation) approach.
         
-        The GSER relates the complex modulus to the Fourier transform of the MSD:
-        G*(ω) = (kB*T) / (3*π*a*s*Γ(1+α)) * (iω)^α
+        The GSER relates the complex modulus to the MSD:
+        |G*(ω)| = (kB*T) / (3*π*a*<Δr²(1/ω)>*Γ(1+α))
+        
+        This implementation converts 2D projected MSD to 1D MSD before applying
+        the Mason-Weitz prefactor (equivalent to dividing by 2).
         
         Where α is the local logarithmic slope of MSD at time τ = 1/ω
         
@@ -94,23 +97,23 @@ class MicrorheologyAnalyzer:
         # Ensure alpha is physically reasonable (0 < α < 2)
         alpha = np.clip(alpha, 0.01, 1.99)
         
-        # Interpolate MSD at tau
-        msd_at_tau = np.interp(tau, msd_df['lag_time_s'], msd_df['msd_m2'])
-        
-        # Calculate the prefactor using corrected GSER formula
-        # G*(ω) = (kB*T) / (3*π*a*<Δr²(τ)>) * Γ(1+α) * (iω*τ)^α
-        prefactor = (self.kB * self.temperature_K) / (3 * np.pi * self.particle_radius_m * msd_at_tau)
-        
-        # Gamma function factor
-        gamma_factor = gamma(1 + alpha)
-        
-        # Complex frequency factor (iω*τ)^α = (ωτ)^α * e^(iα*π/2)
-        omega_tau_alpha = (omega_rad_s * tau) ** alpha
+        # Interpolate 2D projected MSD at tau and convert to 1D MSD.
+        msd_at_tau_2d = np.interp(tau, msd_df['lag_time_s'], msd_df['msd_m2'])
+        msd_at_tau_1d = msd_at_tau_2d / 2.0
+        if msd_at_tau_1d <= 0 or not np.isfinite(msd_at_tau_1d):
+            return np.nan, np.nan
+
+        # GSER magnitude with gamma in denominator.
+        g_star_mag = (
+            (self.kB * self.temperature_K)
+            / (3.0 * np.pi * self.particle_radius_m * msd_at_tau_1d * gamma(1.0 + alpha))
+        )
+
         phase = alpha * np.pi / 2
         
         # Calculate G' and G"
-        g_prime = prefactor * gamma_factor * omega_tau_alpha * np.cos(phase)
-        g_double_prime = prefactor * gamma_factor * omega_tau_alpha * np.sin(phase)
+        g_prime = g_star_mag * np.cos(phase)
+        g_double_prime = g_star_mag * np.sin(phase)
         
         return g_prime, g_double_prime
 
@@ -119,8 +122,9 @@ class MicrorheologyAnalyzer:
         """
         Calculate effective viscosity from MSD slope using Stokes-Einstein relation.
         
-        For 2D projected motion: η = kB*T / (4*π*D*a)
-        Where D is the diffusion coefficient from MSD slope: D = slope/4 (2D)
+        Uses 3D Stokes-Einstein:
+        η = kB*T / (6*π*D*a)
+        with D estimated from projected MSD slope (MSD_2D = 4*D*t).
         
         Parameters
         ----------
@@ -175,11 +179,8 @@ class MicrorheologyAnalyzer:
         # For 2D projected motion: D = slope/4
         D_eff = slope / 4.0
         
-        # Calculate viscosity using Stokes-Einstein relation
-        # For 2D: η = kB*T / (4*π*D*a)
-        # For 3D: η = kB*T / (6*π*D*a)
-        # Use 2D formula since we're analyzing projected motion
-        viscosity_eff = (self.kB * self.temperature_K) / (4 * np.pi * D_eff * self.particle_radius_m)
+        # Calculate viscosity using 3D Stokes-Einstein relation.
+        viscosity_eff = (self.kB * self.temperature_K) / (6.0 * np.pi * D_eff * self.particle_radius_m)
         
         return viscosity_eff
     
@@ -501,7 +502,8 @@ class MicrorheologyAnalyzer:
         Calculate creep compliance J(t) from MSD data.
         
         Creep compliance describes the time-dependent deformation under constant stress.
-        For passive microrheology: J(t) ≈ <Δr²(t)> / (6*kB*T*a)
+        For 2D projected MSD in an isotropic 3D medium:
+        J(t) = 3*π*a*<Δr²(t)> / (2*kB*T)
         
         This is a simplified calculation valid for isotropic materials. More sophisticated
         approaches would use the inverse Laplace transform of 1/(s*G*(s)).
@@ -531,10 +533,8 @@ class MicrorheologyAnalyzer:
                 times = time_points_s
                 msd_vals = np.interp(times, msd_df['lag_time_s'], msd_df['msd_m2'])
             
-            # Calculate creep compliance
-            # J(t) = <Δr²(t)> / (6*kB*T*a) for 3D
-            # J(t) = <Δr²(t)> / (4*kB*T*a) for 2D projected
-            prefactor = 1.0 / (4.0 * self.kB * self.temperature_K * self.particle_radius_m)
+            # Calculate creep compliance using Mason/Weitz-consistent prefactor.
+            prefactor = (3.0 * np.pi * self.particle_radius_m) / (2.0 * self.kB * self.temperature_K)
             creep_compliance = prefactor * msd_vals
             
             # Fit power law: J(t) = J₀ * t^β
