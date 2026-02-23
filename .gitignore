@@ -204,3 +204,6 @@ conda-meta/
 venv312/
 spt_env/
 *.egg-info/
+
+spt_projects/
+.spt_settings.json
