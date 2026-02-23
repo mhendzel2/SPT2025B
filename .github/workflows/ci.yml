@@ -1,0 +1,30 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -e ".[dev]"
+
+      - run: ruff check spt2025b/ tests/
+
+      - run: mypy spt2025b/core/ spt2025b/rheology/
+
+      - run: pytest tests/test_physics_ground_truth.py -v --tb=short
+
+      - run: pytest tests/ -v --cov=spt2025b --cov-report=xml
+
+      - uses: codecov/codecov-action@v4

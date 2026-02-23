@@ -382,3 +382,97 @@ def test_alpha_motion_classification_ci() -> None:
     motion, confidence = classify_motion(alpha=0.88, alpha_se=0.15)
     assert motion == "normal_diffusion"
     assert confidence == "indeterminate"
+
+
+def test_alpha_brownian(brownian_tracks: tuple[pd.DataFrame, float, float, float]) -> None:
+    """Brownian diffusion should yield alpha near 1.0."""
+    tracks_df, _, _, dt = brownian_tracks
+    msd_df = calculate_msd(tracks_df, max_lag=40, frame_interval=dt, min_track_length=5)
+    ens = _ensemble_msd(msd_df)
+
+    alpha, _, _ = fit_alpha(
+        ens["lag_time"].values,
+        ens["msd"].values,
+        ens["n_points"].values,
+    )
+    assert alpha == pytest.approx(1.0, abs=0.10)
+
+
+def test_alpha_subdiffusive() -> None:
+    """FBM with H=0.3 should yield alpha near 0.6."""
+    fbm_mod = pytest.importorskip("fbm")
+    rng = np.random.default_rng(123)
+    H = 0.3
+    alpha_true = 2.0 * H
+    dt = 0.1
+    n_frames = 300
+    n_tracks = 20
+
+    tracks = []
+    for tid in range(n_tracks):
+        seed_x = int(rng.integers(0, 1_000_000))
+        seed_y = int(rng.integers(0, 1_000_000))
+        np.random.seed(seed_x)
+        x = fbm_mod.FBM(n=n_frames - 1, hurst=H, length=(n_frames - 1) * dt, method="daviesharte").fbm()
+        np.random.seed(seed_y)
+        y = fbm_mod.FBM(n=n_frames - 1, hurst=H, length=(n_frames - 1) * dt, method="daviesharte").fbm()
+        tracks.append(
+            pd.DataFrame(
+                {
+                    "track_id": tid,
+                    "frame": np.arange(n_frames),
+                    "x": x,
+                    "y": y,
+                }
+            )
+        )
+
+    tracks_df = pd.concat(tracks, ignore_index=True)
+    msd_df = calculate_msd(tracks_df, max_lag=50, frame_interval=dt, min_track_length=5)
+    ens = _ensemble_msd(msd_df)
+
+    alpha, _, _ = fit_alpha(
+        ens["lag_time"].values,
+        ens["msd"].values,
+        ens["n_points"].values,
+    )
+    assert alpha == pytest.approx(alpha_true, abs=0.15)
+
+
+def test_directed_msd() -> None:
+    """Directed diffusion should follow MSD = v^2*tau^2 + 4*D*tau."""
+    rng = np.random.default_rng(99)
+    D_true = 0.01
+    v_true = 0.5
+    dt = 0.1
+    n_frames = 240
+    n_tracks = 40
+
+    sigma_step = np.sqrt(2.0 * D_true * dt)
+    tracks = []
+    for tid in range(n_tracks):
+        dx_noise = rng.normal(0.0, sigma_step, n_frames)
+        dy_noise = rng.normal(0.0, sigma_step, n_frames)
+        x = np.cumsum(v_true * dt + dx_noise)
+        y = np.cumsum(dy_noise)
+        tracks.append(
+            pd.DataFrame(
+                {
+                    "track_id": tid,
+                    "frame": np.arange(n_frames),
+                    "x": x,
+                    "y": y,
+                }
+            )
+        )
+
+    tracks_df = pd.concat(tracks, ignore_index=True)
+    msd_df = calculate_msd(tracks_df, max_lag=25, frame_interval=dt, min_track_length=5)
+    ens = _ensemble_msd(msd_df)
+
+    tau = ens["lag_time"].values
+    y = ens["msd"].values
+    quad, lin, _ = np.polyfit(tau, y, 2)
+
+    assert quad == pytest.approx(v_true**2, rel=0.15)
+    assert lin == pytest.approx(4.0 * D_true, rel=0.15)
