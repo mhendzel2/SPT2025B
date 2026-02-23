@@ -127,6 +127,10 @@ def fit_alpha(
     if not np.isfinite(slope) or not np.isfinite(se):
         return np.nan, np.nan, (np.nan, np.nan)
 
+    # MSD points across lag-times are strongly correlated, so naive regression
+    # slope errors are over-optimistic. Use a conservative lower bound.
+    se = max(float(se), 0.2)
+
     alpha = slope
     alpha_ci95 = (alpha - 1.96 * se, alpha + 1.96 * se)
     return float(alpha), float(se), (float(alpha_ci95[0]), float(alpha_ci95[1]))

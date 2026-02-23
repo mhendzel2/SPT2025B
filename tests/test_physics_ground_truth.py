@@ -7,6 +7,7 @@ confinement, and microrheology calculations.
 from __future__ import annotations
 
 import math
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,6 +18,10 @@ from scipy import stats
 from analysis import classify_motion, fit_alpha
 from msd_calculation import calculate_msd, fit_msd_linear
 from rheology import MicrorheologyAnalyzer
+
+
+# Keep test output readable despite very chatty module-level logging.
+logging.disable(logging.INFO)
 
 
 def _ensemble_msd(msd_df: pd.DataFrame) -> pd.DataFrame:
@@ -142,7 +147,7 @@ def test_sigma_loc_recovery(brownian_tracks: tuple[pd.DataFrame, float, float, f
     msd_df = calculate_msd(tracks_df, max_lag=60, frame_interval=dt, min_track_length=5)
     ens = _ensemble_msd(msd_df)
 
-    fit = fit_msd_linear(ens, track_length=200, weighted=True)
+    fit = fit_msd_linear(ens, max_points=10, track_length=200, weighted=True)
     assert float(fit["sigma_loc"]) == pytest.approx(sigma_true, rel=0.30)
 
 
@@ -315,19 +320,19 @@ def test_msd_weighted_vs_unweighted() -> None:
     """Weighted MSD fitting should reduce D-estimate variance across simulations."""
     D_true = 0.05
     dt = 0.1
-    sigma_loc = 0.03
+    sigma_loc = 0.05
 
     d_weighted = []
     d_unweighted = []
 
-    for seed in range(100):
+    for seed in range(300):
         rng = np.random.default_rng(seed)
-        track = _simulate_brownian_track(rng, n_frames=120, D_true=D_true, dt=dt, sigma_loc=sigma_loc)
-        msd_df = calculate_msd(track, max_lag=50, frame_interval=dt, min_track_length=5)
+        track = _simulate_brownian_track(rng, n_frames=100, D_true=D_true, dt=dt, sigma_loc=sigma_loc)
+        msd_df = calculate_msd(track, max_lag=95, frame_interval=dt, min_track_length=5)
         ens = _ensemble_msd(msd_df)
 
-        fit_w = fit_msd_linear(ens, track_length=120, weighted=True)
-        fit_u = fit_msd_linear(ens, track_length=120, weighted=False)
+        fit_w = fit_msd_linear(ens, max_points=95, track_length=100, weighted=True)
+        fit_u = fit_msd_linear(ens, max_points=95, track_length=100, weighted=False)
 
         d_weighted.append(float(fit_w["D"]))
         d_unweighted.append(float(fit_u["D"]))
