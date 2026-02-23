@@ -211,3 +211,6 @@ spt_projects/
 test_output.txt
 test_results.txt
 test_summary.json
+
+.github/copilot-instructions.md
+.github/instructions/
