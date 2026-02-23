@@ -2860,3 +2860,70 @@ def analyze_size_dependent_diffusion(size_diffusion_map: Dict[float, float],
             'success': False,
             'error': f'Analysis failed: {str(e)}'
         }
+
+
+def calculate_msd_variance(
+    tracks_df: pd.DataFrame,
+    pixel_size: float,
+    frame_interval: float,
+    max_lag: int = 20,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculate lag-time MSD means with per-lag variance estimates.
+
+    This utility was merged from the previous `_corrected` module variant and
+    provides weights for downstream weighted model fitting pipelines.
+
+    Parameters
+    ----------
+    tracks_df : pd.DataFrame
+        Track table with columns `track_id`, `frame`, `x`, `y`.
+    pixel_size : float
+        Pixel size in micrometers.
+    frame_interval : float
+        Time spacing between frames in seconds.
+    max_lag : int, default=20
+        Maximum lag (frames) for MSD aggregation.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        `(lag_times_s, msd_mean_um2, msd_var_um4)`
+    """
+    if tracks_df is None or tracks_df.empty:
+        return np.array([]), np.array([]), np.array([])
+
+    lags = np.arange(1, max_lag + 1, dtype=int)
+    lag_times = lags.astype(float) * float(frame_interval)
+    all_sq_disps = {lag: [] for lag in lags}
+
+    for _, track in tracks_df.groupby('track_id'):
+        track = track.sort_values('frame')
+        x = track['x'].to_numpy(dtype=float) * float(pixel_size)
+        y = track['y'].to_numpy(dtype=float) * float(pixel_size)
+        frames = track['frame'].to_numpy(dtype=float)
+
+        for lag in lags:
+            if len(x) <= lag:
+                continue
+            frame_diffs = frames[lag:] - frames[:-lag]
+            valid = frame_diffs == lag
+            if not np.any(valid):
+                continue
+            dx = (x[lag:] - x[:-lag])[valid]
+            dy = (y[lag:] - y[:-lag])[valid]
+            sq_disp = dx**2 + dy**2
+            all_sq_disps[lag].extend(sq_disp.tolist())
+
+    msd_mean = []
+    msd_var = []
+    for lag in lags:
+        disps = np.asarray(all_sq_disps[lag], dtype=float)
+        if disps.size == 0:
+            msd_mean.append(np.nan)
+            msd_var.append(np.nan)
+        else:
+            msd_mean.append(float(np.mean(disps)))
+            msd_var.append(float(np.var(disps, ddof=1)) if disps.size > 1 else 0.0)
+
+    return lag_times, np.asarray(msd_mean, dtype=float), np.asarray(msd_var, dtype=float)
