@@ -395,7 +395,11 @@ def _remove_units_rows(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
-def load_tracks_file(file) -> pd.DataFrame:
+def load_tracks_file(
+    file,
+    pixel_size: Optional[float] = None,
+    frame_interval: Optional[float] = None,
+) -> pd.DataFrame:
     """
     Load track data from various file formats with security validation.
     
@@ -410,6 +414,16 @@ def load_tracks_file(file) -> pd.DataFrame:
         DataFrame containing the track data
     """
     try:
+        # Support pathlib/str inputs used in tests and CLI contexts.
+        if isinstance(file, (str, os.PathLike)):
+            file_path = os.fspath(file)
+            with open(file_path, 'rb') as f_in:
+                file_bytes = f_in.read()
+            file_obj = io.BytesIO(file_bytes)
+            file_obj.name = os.path.basename(file_path)
+            file_obj.size = len(file_bytes)
+            file = file_obj
+
         # Validate filename
         safe_filename = SecureFileHandler.validate_filename(file.name)
         logger.info(f"Loading track file: {safe_filename}")
@@ -1053,3 +1067,28 @@ def load_tracks_file(file) -> pd.DataFrame:
     # Unsupported format
     else:
         raise ValueError(f"Unsupported track data format: {file_extension}")
+
+
+def detect_file_format(file_or_path: Union[str, os.PathLike, Any]) -> str:
+    """
+    Backward-compatible file format detector.
+
+    Returns lowercase extension without leading dot (e.g., 'csv', 'xlsx').
+    """
+    if isinstance(file_or_path, (str, os.PathLike)):
+        name = os.path.basename(os.fspath(file_or_path))
+    else:
+        name = getattr(file_or_path, 'name', '')
+    ext = os.path.splitext(name)[1].lower().lstrip('.')
+    return ext
+
+
+def load_tracking_data(
+    file,
+    pixel_size: Optional[float] = None,
+    frame_interval: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Backward-compatible alias for `load_tracks_file`.
+    """
+    return load_tracks_file(file, pixel_size=pixel_size, frame_interval=frame_interval)

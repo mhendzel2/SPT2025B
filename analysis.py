@@ -137,10 +137,10 @@ def fit_alpha(
 
 
 def classify_motion(
-    alpha: float,
-    alpha_se: float,
+    alpha: Union[float, pd.DataFrame],
+    alpha_se: Optional[float] = None,
     alpha_thresholds: Tuple[float, float] = (0.85, 1.15),
-) -> Tuple[str, str]:
+) -> Union[Tuple[str, str], Dict[str, Any]]:
     """
     Classify diffusion type using alpha confidence intervals.
 
@@ -149,7 +149,56 @@ def classify_motion(
     tuple
         (classification, confidence)
     """
-    if not np.isfinite(alpha) or not np.isfinite(alpha_se):
+    # Backward-compatible path: classify directly from trajectory dataframe.
+    if isinstance(alpha, pd.DataFrame):
+        tracks_df = alpha
+        if tracks_df is None or tracks_df.empty:
+            return {'success': False, 'motion_type': 'unknown', 'track_classifications': []}
+        required_cols = {'track_id', 'frame', 'x', 'y'}
+        if not required_cols.issubset(set(tracks_df.columns)):
+            return {'success': False, 'motion_type': 'unknown', 'track_classifications': []}
+
+        per_track = []
+        for track_id, track in tracks_df.groupby('track_id'):
+            track = track.sort_values('frame')
+            if len(track) < 3:
+                continue
+            x = track['x'].to_numpy(dtype=float)
+            y = track['y'].to_numpy(dtype=float)
+            path_len = float(np.sum(np.sqrt(np.diff(x)**2 + np.diff(y)**2)))
+            disp = float(np.sqrt((x[-1] - x[0])**2 + (y[-1] - y[0])**2))
+            straightness = disp / path_len if path_len > 0 else 0.0
+            confinement_ratio = path_len / max(disp, 1e-12) if disp > 0 else np.inf
+
+            if straightness > 0.8:
+                motion_type = 'directed'
+            elif confinement_ratio > 5.0:
+                motion_type = 'confined'
+            else:
+                motion_type = 'diffusive'
+
+            per_track.append(
+                {
+                    'track_id': track_id,
+                    'motion_type': motion_type,
+                    'straightness': straightness,
+                    'confinement_ratio': confinement_ratio,
+                }
+            )
+
+        if not per_track:
+            return {'success': False, 'motion_type': 'unknown', 'track_classifications': []}
+
+        cls_df = pd.DataFrame(per_track)
+        dominant = cls_df['motion_type'].value_counts().idxmax()
+        return {
+            'success': True,
+            'motion_type': dominant,
+            'track_classifications': per_track,
+            'counts': cls_df['motion_type'].value_counts().to_dict(),
+        }
+
+    if alpha_se is None or not np.isfinite(alpha) or not np.isfinite(alpha_se):
         return "unknown", "indeterminate"
 
     sub_thresh, super_thresh = alpha_thresholds
@@ -165,6 +214,92 @@ def classify_motion(
     if ci_low > 1.0:
         return "likely_superdiffusive", "low"
     return "normal_diffusion", "indeterminate"
+
+
+def fit_msd(msd_df: pd.DataFrame, max_points: Optional[int] = None) -> Dict[str, float]:
+    """
+    Backward-compatible MSD fitting wrapper.
+    """
+    if msd_df is None or msd_df.empty:
+        return {'D': np.nan}
+    track_length_est = len(msd_df) + 1
+    return fit_msd_linear(
+        msd_df=msd_df,
+        max_points=max_points,
+        track_length=track_length_est,
+        weighted=True,
+    )
+
+
+def calculate_velocity_autocorrelation(
+    tracks_df: pd.DataFrame,
+    pixel_size: float = 1.0,
+    frame_interval: float = 1.0,
+    max_lag: int = 10,
+) -> Dict[str, Any]:
+    """
+    Compute ensemble velocity autocorrelation for trajectories.
+    """
+    if tracks_df is None or tracks_df.empty:
+        return {'success': False, 'lag_times': [], 'vacf': []}
+
+    vacf_vals = {lag: [] for lag in range(max_lag + 1)}
+    for _, track in tracks_df.groupby('track_id'):
+        track = track.sort_values('frame')
+        x = track['x'].to_numpy(dtype=float) * pixel_size
+        y = track['y'].to_numpy(dtype=float) * pixel_size
+        if len(x) < 3:
+            continue
+        vx = np.diff(x) / frame_interval
+        vy = np.diff(y) / frame_interval
+        for lag in range(max_lag + 1):
+            if len(vx) <= lag:
+                continue
+            dot = vx[: len(vx) - lag] * vx[lag:] + vy[: len(vy) - lag] * vy[lag:]
+            vacf_vals[lag].extend(dot.tolist())
+
+    lag_times = []
+    vacf = []
+    for lag in range(max_lag + 1):
+        lag_times.append(lag * frame_interval)
+        vals = vacf_vals[lag]
+        vacf.append(float(np.mean(vals)) if vals else np.nan)
+
+    return {'success': True, 'lag_times': lag_times, 'vacf': vacf}
+
+
+def calculate_confinement_ratio(
+    tracks_df: pd.DataFrame,
+    pixel_size: float = 1.0,
+) -> Dict[str, Any]:
+    """
+    Calculate per-track confinement ratio (path length / net displacement).
+    """
+    if tracks_df is None or tracks_df.empty:
+        return {'success': False, 'mean_confinement_ratio': np.nan, 'track_ratios': []}
+
+    ratios = []
+    for track_id, track in tracks_df.groupby('track_id'):
+        track = track.sort_values('frame')
+        x = track['x'].to_numpy(dtype=float) * pixel_size
+        y = track['y'].to_numpy(dtype=float) * pixel_size
+        if len(x) < 2:
+            continue
+        path_len = float(np.sum(np.sqrt(np.diff(x)**2 + np.diff(y)**2)))
+        displacement = float(np.sqrt((x[-1] - x[0])**2 + (y[-1] - y[0])**2))
+        ratio = path_len / max(displacement, 1e-12)
+        ratios.append({'track_id': track_id, 'confinement_ratio': ratio})
+
+    if not ratios:
+        return {'success': False, 'mean_confinement_ratio': np.nan, 'track_ratios': []}
+
+    ratio_vals = [r['confinement_ratio'] for r in ratios]
+    return {
+        'success': True,
+        'mean_confinement_ratio': float(np.mean(ratio_vals)),
+        'median_confinement_ratio': float(np.median(ratio_vals)),
+        'track_ratios': ratios,
+    }
 
 
 
