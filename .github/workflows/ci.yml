@@ -27,4 +27,6 @@ jobs:
 
       - run: pytest tests/ -v --cov=spt2025b --cov-report=xml
 
+      - run: python scripts/report_health_check.py
+
       - uses: codecov/codecov-action@v4

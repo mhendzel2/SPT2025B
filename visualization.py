@@ -33,6 +33,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from matplotlib.figure import Figure as MplFigure
 import matplotlib.pyplot as plt
+from report_plot_utils import safe_hover_data
 
 # ------------------------------------------------------------------ #
 #   General helpers
@@ -1881,11 +1882,22 @@ def plot_clustering_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
 
     # For simplicity, we plot the clusters at a single frame (e.g., the first frame with clusters)
     first_frame_with_clusters = cluster_tracks['frame'].min()
-    frame_data = cluster_tracks[cluster_tracks['frame'] == first_frame_with_clusters]
+    frame_data = cluster_tracks[cluster_tracks['frame'] == first_frame_with_clusters].copy()
 
-    fig = px.scatter(frame_data, x="centroid_x", y="centroid_y", color="cluster_track_id",
-                     size="n_points", hover_data=['n_tracks', 'radius'],
-                     title=f"Clusters at Frame {first_frame_with_clusters}")
+    # Keep hover data schema aligned with available columns.
+    if "n_tracks" not in frame_data.columns and "n_points" in frame_data.columns:
+        frame_data["n_tracks"] = frame_data["n_points"]
+    hover_cols = safe_hover_data(frame_data, ["n_tracks", "radius"])
+
+    fig = px.scatter(
+        frame_data,
+        x="centroid_x",
+        y="centroid_y",
+        color="cluster_track_id",
+        size="n_points",
+        hover_data=hover_cols,
+        title=f"Clusters at Frame {first_frame_with_clusters}",
+    )
 
     fig.update_layout(
         xaxis_title="X (µm)",

@@ -42,6 +42,7 @@ try:
 except Exception:
     SKLEARN_AVAILABLE = False
 import warnings
+from report_plot_utils import nonempty_array
 
 # Import all necessary analysis and visualization functions with error handling
 try:
@@ -2123,7 +2124,9 @@ class EnhancedSPTReportGenerator:
                     line_dash="dot",
                     line_color="purple",
                     line_width=2,
-                    row=1, col=1
+                    row=1,
+                    col=1,
+                    exclude_empty_subplots=False
                 )
                 
                 # Add annotation for crossover
@@ -2162,7 +2165,9 @@ class EnhancedSPTReportGenerator:
                 line_color="gray",
                 annotation_text="tan(δ)=1 (Critical Gel)",
                 annotation_position="right",
-                row=1, col=2
+                row=1,
+                col=2,
+                exclude_empty_subplots=False
             )
             
             # Shade regions for material state
@@ -2173,7 +2178,9 @@ class EnhancedSPTReportGenerator:
                     line_width=0,
                     annotation_text="Liquid-like",
                     annotation_position="top left",
-                    row=1, col=2
+                    row=1,
+                    col=2,
+                    exclude_empty_subplots=False
                 )
             if tan_delta.min() < 1.0:
                 fig.add_hrect(
@@ -2182,7 +2189,9 @@ class EnhancedSPTReportGenerator:
                     line_width=0,
                     annotation_text="Solid-like",
                     annotation_position="bottom left",
-                    row=1, col=2
+                    row=1,
+                    col=2,
+                    exclude_empty_subplots=False
                 )
             
             # Panel 3: Complex Viscosity
@@ -3295,8 +3304,14 @@ class EnhancedSPTReportGenerator:
                     return arr
                 return np.asarray(array_data, dtype=float)
             
-            # Get energy map data (try multiple possible key names)
-            energy_map = result.get('energy_map') or result.get('energy_landscape') or result.get('potential')
+            # Get energy map data (try multiple possible key names) without
+            # ambiguous truth checks on numpy arrays.
+            energy_map = None
+            for key in ('energy_map', 'energy_landscape', 'potential'):
+                candidate = result.get(key)
+                if nonempty_array(candidate):
+                    energy_map = candidate
+                    break
             x_coords = result.get('x_coords')
             y_coords = result.get('y_coords')
             x_edges = result.get('x_edges')
@@ -3309,36 +3324,60 @@ class EnhancedSPTReportGenerator:
             
             # Parse arrays from strings
             energy_map = parse_numpy_array(energy_map)
-            
-            # Determine grid resolution
-            resolution = int(np.sqrt(len(energy_map)))
-            energy_map = energy_map.reshape(resolution, resolution)
+
+            if not nonempty_array(energy_map):
+                from visualization import _empty_fig
+                return _empty_fig("Energy landscape data is empty")
+
+            if energy_map.ndim == 1:
+                n_values = int(energy_map.size)
+                resolution = int(np.sqrt(n_values))
+                if resolution * resolution != n_values:
+                    from visualization import _empty_fig
+                    return _empty_fig("Energy landscape grid size is not square")
+                energy_map = energy_map.reshape(resolution, resolution)
+            elif energy_map.ndim != 2:
+                from visualization import _empty_fig
+                return _empty_fig("Energy landscape must be a 1D or 2D array")
+
+            n_rows, n_cols = energy_map.shape
             
             # Parse coordinates
-            if x_coords is not None:
+            if nonempty_array(x_coords):
                 x_coords = parse_numpy_array(x_coords)
-            elif x_edges is not None:
+            elif nonempty_array(x_edges):
                 x_edges = parse_numpy_array(x_edges)
-                x_coords = (x_edges[:-1] + x_edges[1:]) / 2
+                x_coords = (x_edges[:-1] + x_edges[1:]) / 2 if np.size(x_edges) > 1 else np.arange(n_cols)
             else:
-                x_coords = np.arange(resolution)
+                x_coords = np.arange(n_cols)
             
-            if y_coords is not None:
+            if nonempty_array(y_coords):
                 y_coords = parse_numpy_array(y_coords)
-            elif y_edges is not None:
+            elif nonempty_array(y_edges):
                 y_edges = parse_numpy_array(y_edges)
-                y_coords = (y_edges[:-1] + y_edges[1:]) / 2
+                y_coords = (y_edges[:-1] + y_edges[1:]) / 2 if np.size(y_edges) > 1 else np.arange(n_rows)
             else:
-                y_coords = np.arange(resolution)
+                y_coords = np.arange(n_rows)
+
+            if np.size(x_coords) != n_cols:
+                x_coords = np.arange(n_cols)
+            if np.size(y_coords) != n_rows:
+                y_coords = np.arange(n_rows)
             
             # Parse force field data
             fx = None
             fy = None
             if isinstance(force_field, dict):
-                if 'fx' in force_field:
-                    fx = parse_2d_array(force_field['fx'], (resolution, resolution))
-                if 'fy' in force_field:
-                    fy = parse_2d_array(force_field['fy'], (resolution, resolution))
+                if nonempty_array(force_field.get('fx')):
+                    try:
+                        fx = parse_2d_array(force_field['fx'], (n_rows, n_cols))
+                    except Exception:
+                        fx = None
+                if nonempty_array(force_field.get('fy')):
+                    try:
+                        fy = parse_2d_array(force_field['fy'], (n_rows, n_cols))
+                    except Exception:
+                        fy = None
             
             # Create subplots: 3D surface and 2D contour with force field
             fig = make_subplots(
@@ -3379,16 +3418,16 @@ class EnhancedSPTReportGenerator:
             )
             
             # Add force field arrows if available
-            if fx is not None and fy is not None:
+            if nonempty_array(fx) and nonempty_array(fy):
                 # Downsample for visualization (every 3rd point)
-                step = max(1, resolution // 10)
+                step = max(1, max(n_rows, n_cols) // 10)
                 X, Y = np.meshgrid(x_coords, y_coords)
+                x_span = float(np.max(x_coords) - np.min(x_coords)) if np.size(x_coords) > 1 else 1.0
+                scale = 0.05 * (x_span if x_span > 0 else 1.0)
                 
-                for i in range(0, resolution, step):
-                    for j in range(0, resolution, step):
+                for i in range(0, n_rows, step):
+                    for j in range(0, n_cols, step):
                         if abs(fx[i, j]) > 1e-6 or abs(fy[i, j]) > 1e-6:
-                            # Normalize arrow length
-                            scale = 0.05 * (x_coords.max() - x_coords.min())
                             fig.add_annotation(
                                 x=X[i, j],
                                 y=Y[i, j],
@@ -3857,7 +3896,14 @@ class EnhancedSPTReportGenerator:
             ), row=2, col=1)
             
             fig.update_yaxes(title_text="Deviation from Corrected (%)", row=2, col=1)
-            fig.add_hline(y=0, line_dash="dash", line_color="black", row=2, col=1)
+            fig.add_hline(
+                y=0,
+                line_dash="dash",
+                line_color="black",
+                row=2,
+                col=1,
+                exclude_empty_subplots=False,
+            )
             
             # 4. Alpha distribution (if varying per track)
             alpha_mean = result.get('alpha', 1.0)
@@ -3878,11 +3924,13 @@ class EnhancedSPTReportGenerator:
                 
                 # Add mean line
                 fig.add_vline(x=alpha_mean, line_dash="dash", line_color="red", 
-                             row=2, col=2, annotation_text=f'Mean: {alpha_mean:.3f}')
+                             row=2, col=2, annotation_text=f'Mean: {alpha_mean:.3f}',
+                             exclude_empty_subplots=False)
                 
                 # Add normal diffusion reference
                 fig.add_vline(x=1.0, line_dash="dot", line_color="black",
-                             row=2, col=2, annotation_text='Normal (α=1)')
+                             row=2, col=2, annotation_text='Normal (α=1)',
+                             exclude_empty_subplots=False)
             else:
                 # Bar plot if single value
                 fig.add_trace(go.Bar(
@@ -3893,7 +3941,8 @@ class EnhancedSPTReportGenerator:
                 ), row=2, col=2)
                 
                 fig.add_hline(y=1.0, line_dash="dash", line_color="black", row=2, col=2,
-                             annotation_text="Normal diffusion")
+                             annotation_text="Normal diffusion",
+                             exclude_empty_subplots=False)
             
             fig.update_xaxes(title_text="α", row=2, col=2)
             fig.update_yaxes(title_text="Count", row=2, col=2)
@@ -8676,8 +8725,6 @@ def _plot_loop_extrusion(self, result):
         track_results = full_results.get('track_results', None)
         if isinstance(track_results, str):
             # Parse DataFrame string representation
-            import io
-            import pandas as pd
             try:
                 # Try to read as CSV-like format
                 track_results = pd.read_csv(io.StringIO(track_results), sep=r'\s+')
