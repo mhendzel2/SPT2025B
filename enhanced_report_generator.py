@@ -4252,7 +4252,11 @@ class EnhancedSPTReportGenerator:
         Provides full posterior distributions and credible intervals.
         """
         try:
-            from bayesian_trajectory_inference import BayesianDiffusionInference
+            from bayesian_trajectory_inference import (
+                BayesianDiffusionInference,
+                EMCEE_AVAILABLE,
+                NUMPYRO_AVAILABLE,
+            )
             
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
@@ -4268,18 +4272,69 @@ class EnhancedSPTReportGenerator:
             )
             
             # Analyze a sample of tracks (MCMC is slow)
-            n_tracks_to_analyze = min(10, len(tracks_df['track_id'].unique()))
+            max_tracks = int(current_units.get('bayes_tracks', 6))
+            n_tracks_to_analyze = min(max_tracks, len(tracks_df['track_id'].unique()))
             sampled_track_ids = np.random.choice(
                 tracks_df['track_id'].unique(),
                 size=n_tracks_to_analyze,
                 replace=False
             )
+
+            n_walkers = max(8, int(current_units.get('bayes_walkers', 12)))
+            n_steps = max(200, int(current_units.get('bayes_steps', 500)))
+            n_warmup = max(50, int(current_units.get('bayes_warmup', max(100, n_steps // 2))))
+            bayes_backend = str(current_units.get('bayes_backend', 'auto')).strip().lower()
+            bayes_use_gpu = bool(current_units.get('bayes_use_gpu', True))
+            bayes_seed = int(current_units.get('bayes_seed', 42))
+
+            if bayes_backend not in ('auto', 'emcee', 'numpyro'):
+                return {'success': False, 'error': f'Unsupported bayes_backend: {bayes_backend}'}
+
+            can_use_emcee = EMCEE_AVAILABLE and bayes_backend in ('auto', 'emcee')
+            can_use_numpyro = NUMPYRO_AVAILABLE and bayes_backend in ('auto', 'numpyro')
+
+            # Fallback path for environments without MCMC backends.
+            if not (can_use_emcee or can_use_numpyro):
+                D_estimates = []
+                for track_id in sampled_track_ids:
+                    track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
+                    if len(track_data) < 10:
+                        continue
+                    coords = track_data[['x', 'y']].values * pixel_size
+                    displacements = np.diff(coords, axis=0)
+                    if displacements.size == 0:
+                        continue
+                    msd_step = np.mean(np.sum(displacements**2, axis=1))
+                    D_hat = msd_step / (4.0 * frame_interval)
+                    if np.isfinite(D_hat) and D_hat >= 0:
+                        D_estimates.append(float(D_hat))
+
+                if not D_estimates:
+                    return {'success': False, 'error': 'No tracks available for Bayesian fallback estimate'}
+
+                return {
+                    'success': True,
+                    'n_tracks_analyzed': len(D_estimates),
+                    'D_median_population': float(np.median(D_estimates)),
+                    'D_mean_population': float(np.mean(D_estimates)),
+                    'D_std_population': float(np.std(D_estimates)),
+                    'individual_posteriors': [
+                        {'median': d, 'mean': d, 'std': 0.0, 'ci': (d, d)}
+                        for d in D_estimates[:5]
+                    ],
+                    'diagnostics_summary': [],
+                    'mean_acceptance': float('nan'),
+                    'method': 'variance_fallback',
+                    'backend': 'fallback',
+                    'note': 'No emcee/numpyro backend available; using variance-based diffusion estimates',
+                }
             
             D_posteriors = []
-            alpha_posteriors = []
             diagnostics_list = []
+            backend_used = []
+            device_used = []
             
-            for track_id in sampled_track_ids:
+            for idx, track_id in enumerate(sampled_track_ids):
                 track_data = tracks_df[tracks_df['track_id'] == track_id].sort_values('frame')
                 
                 if len(track_data) < 10:
@@ -4291,10 +4346,14 @@ class EnhancedSPTReportGenerator:
                 # Run MCMC (small sample for speed)
                 result = bayes_inf.analyze_track_bayesian(
                     track,
-                    n_walkers=16,
-                    n_steps=500,
+                    n_walkers=n_walkers,
+                    n_steps=n_steps,
                     estimate_alpha=False,  # Faster
-                    return_samples=False
+                    return_samples=False,
+                    backend=bayes_backend,
+                    n_warmup=n_warmup,
+                    rng_seed=bayes_seed + idx,
+                    use_gpu=bayes_use_gpu,
                 )
                 
                 if result.get('success', False):
@@ -4305,6 +4364,8 @@ class EnhancedSPTReportGenerator:
                         'ci': result['D_credible_interval']
                     })
                     diagnostics_list.append(result.get('diagnostics', {}))
+                    backend_used.append(result.get('backend'))
+                    device_used.append(result.get('device'))
             
             if len(D_posteriors) == 0:
                 return {'success': False, 'error': 'No tracks could be analyzed with MCMC'}
@@ -4321,11 +4382,13 @@ class EnhancedSPTReportGenerator:
                 'D_std_population': np.std(D_means),
                 'individual_posteriors': D_posteriors[:5],  # Keep first 5 for display
                 'diagnostics_summary': diagnostics_list[:5],
-                'mean_acceptance': np.mean([d.get('mean_acceptance', 0) for d in diagnostics_list if 'mean_acceptance' in d])
+                'mean_acceptance': np.mean([d.get('mean_acceptance', 0) for d in diagnostics_list if 'mean_acceptance' in d]),
+                'backend': backend_used[0] if backend_used else bayes_backend,
+                'device': device_used[0] if device_used else None,
             }
         
         except ImportError:
-            return {'success': False, 'error': 'Bayesian inference module not available (need emcee)'}
+            return {'success': False, 'error': 'Bayesian inference module not available (need emcee or numpyro+jax)'}
         except Exception as e:
             return {'success': False, 'error': f'Bayesian analysis failed: {str(e)}'}
     
@@ -5517,6 +5580,10 @@ class EnhancedSPTReportGenerator:
             'pixel_size': st.session_state.get('pixel_size', 0.1) if 'st' in globals() else 0.1,
             'frame_interval': st.session_state.get('frame_interval', 0.1) if 'st' in globals() else 0.1
         }
+
+        # Keep active tracks available for visualizers that can use instance state.
+        self.track_df = tracks_df
+        self.tracks = tracks_df
         
         for analysis_key in selected_analyses:
             if analysis_key not in self.available_analyses:
@@ -6212,7 +6279,7 @@ class EnhancedSPTReportGenerator:
         # PDF export (best-effort)
         with col5:
             try:
-                pdf_bytes = self._export_pdf_report(current_units)
+                pdf_bytes = self._export_pdf_report(current_units, config=config)
                 if pdf_bytes:
                     st.download_button(
                         "🧾 Download PDF Report",
@@ -6222,6 +6289,46 @@ class EnhancedSPTReportGenerator:
                     )
             except Exception as e:
                 st.info(f"PDF export unavailable: {e}")
+
+    def _normalize_figures_for_export(self, figures) -> List[Any]:
+        """Normalize report figures to a flat list and drop null entries."""
+        if figures is None:
+            return []
+        if not isinstance(figures, list):
+            figures = [figures]
+        return [fig for fig in figures if fig is not None]
+
+    def _collect_report_sections(self, config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Build a shared section model used by both HTML and PDF exporters."""
+        include_raw = True
+        if isinstance(config, dict):
+            include_raw = config.get('include_raw', True)
+
+        sections = []
+        for key, result in self.report_results.items():
+            title = self.available_analyses.get(key, {}).get('name', key)
+            summary = result.get('summary') if isinstance(result, dict) else None
+            figures = self._normalize_figures_for_export(self.report_figures.get(key))
+            raw_json = None
+
+            if include_raw:
+                try:
+                    raw_json = json.dumps(result, indent=2, default=str)
+                except Exception:
+                    raw_json = None
+
+            sections.append(
+                {
+                    'key': key,
+                    'title': title,
+                    'result': result,
+                    'summary': summary,
+                    'figures': figures,
+                    'raw_json': raw_json,
+                }
+            )
+
+        return sections
 
     def _export_html_report(self, config, current_units) -> bytes:
         """Assemble a standalone HTML report including figures.
@@ -6249,13 +6356,15 @@ class EnhancedSPTReportGenerator:
 
             # Include analysis sections
             import plotly.io as pio
-            for key, result in self.report_results.items():
-                title = self.available_analyses.get(key, {}).get('name', key)
+            for section in self._collect_report_sections(config=config):
+                title = section['title']
+                summary = section['summary']
+                figs = section['figures']
+                raw_json = section['raw_json']
                 parts.append("<div class='section'>")
                 parts.append(f"<h2>{html.escape(title)}</h2>")
 
                 # Summary block
-                summary = result.get('summary')
                 if isinstance(summary, dict):
                     parts.append("<div>")
                     for k, v in summary.items():
@@ -6264,13 +6373,8 @@ class EnhancedSPTReportGenerator:
                 elif isinstance(summary, str):
                     parts.append(f"<p>{html.escape(summary)}</p>")
 
-                # Embed figure(s) if present - handle both single and list of figures
-                figs = self.report_figures.get(key)
-                if figs is not None:
-                    # Normalize to list
-                    if not isinstance(figs, list):
-                        figs = [figs]
-                    
+                # Embed figure(s) if present
+                if figs:
                     # Detect matplotlib
                     try:
                         from matplotlib.figure import Figure as _MplFigure
@@ -6306,13 +6410,10 @@ class EnhancedSPTReportGenerator:
                             parts.append(f"<pre class='code'>Failed to render figure {fig_idx + 1}: {html.escape(str(e))}</pre>")
 
                 # Optional: include raw JSON for the section if requested
-                if config.get('include_raw', True):
-                    try:
-                        parts.append("<details><summary>Raw Results</summary>")
-                        parts.append(f"<pre class='code'>{html.escape(json.dumps(result, indent=2, default=str))}</pre>")
-                        parts.append("</details>")
-                    except Exception:
-                        pass
+                if raw_json is not None:
+                    parts.append("<details><summary>Raw Results</summary>")
+                    parts.append(f"<pre class='code'>{html.escape(raw_json)}</pre>")
+                    parts.append("</details>")
 
                 parts.append("</div>")
 
@@ -6322,160 +6423,159 @@ class EnhancedSPTReportGenerator:
         except Exception as e:
             raise RuntimeError(f"HTML export failed: {e}")
 
-    def _export_pdf_report(self, current_units) -> Optional[bytes]:
-        """Create a simple PDF containing figures and key stats.
-
-        Requires reportlab; falls back to None if unavailable.
-        """
+    def _export_pdf_report(self, current_units, config: Optional[Dict[str, Any]] = None) -> Optional[bytes]:
+        """Create a structured PDF report with the same section data as HTML export."""
         try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib.utils import ImageReader
-            from reportlab.pdfgen import canvas
+            from datetime import datetime as _dt
             import io as _io
-            import numpy as _np
-            
-            # Prepare PDF in memory
-            buf = _io.BytesIO()
-            c = canvas.Canvas(buf, pagesize=A4)
-            width, height = A4
-            margin = 36
-            y = height - margin
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.utils import ImageReader
+            from reportlab.platypus import (
+                Image as RLImage,
+                PageBreak,
+                Paragraph,
+                Preformatted,
+                SimpleDocTemplate,
+                Spacer,
+            )
 
-            # Title page
-            c.setFont('Helvetica-Bold', 20)
-            c.drawString(margin, y, 'SPT Analysis Report')
-            y -= 30
-            c.setFont('Helvetica', 12)
-            c.drawString(margin, y, f"Pixel size: {current_units.get('pixel_size', 0.1)} µm")
-            y -= 20
-            c.drawString(margin, y, f"Frame interval: {current_units.get('frame_interval', 0.1)} s")
-            y -= 30
-            
-            # Summary statistics
-            if 'basic_statistics' in self.report_results:
-                stats = self.report_results['basic_statistics']
-                c.setFont('Helvetica-Bold', 14)
-                c.drawString(margin, y, 'Summary Statistics')
-                y -= 20
-                c.setFont('Helvetica', 10)
-                c.drawString(margin, y, f"Total Tracks: {stats.get('total_tracks', 'N/A')}")
-                y -= 15
-                c.drawString(margin, y, f"Mean Track Length: {stats.get('mean_track_length', 0):.1f} frames")
-                y -= 15
-                c.drawString(margin, y, f"Mean Velocity: {stats.get('mean_velocity', 0):.3f} µm/s")
-                y -= 30
-            
-            # List of analyses in report
-            c.setFont('Helvetica-Bold', 14)
-            c.drawString(margin, y, f'Analyses Included ({len(self.report_figures)} total):')
-            y -= 20
-            c.setFont('Helvetica', 9)
-            for analysis_key in self.report_figures.keys():
-                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
-                c.drawString(margin + 10, y, f'• {analysis_name}')
-                y -= 12
-            
-            # Start new page for figures
-            c.showPage()
-            y = height - margin
-
-            # Detect matplotlib availability
+            # Detect matplotlib type for figure handling.
             try:
                 from matplotlib.figure import Figure as _MplFigure
             except Exception:
                 _MplFigure = None
 
-            # Add figures - handle both single figures and lists of figures
-            figure_count = 0
-            for analysis_key in self.report_figures:
-                analysis_name = self.available_analyses.get(analysis_key, {}).get('name', analysis_key)
-                figs = self.report_figures[analysis_key]
-                
-                # Normalize to list
-                if not isinstance(figs, list):
-                    figs = [figs]
-                
-                # Process each figure
-                for fig_idx, fig in enumerate(figs):
-                    if fig is None:
+            sections = self._collect_report_sections(config=config)
+
+            def _wrap_preformatted(text: str, max_width: int = 140) -> str:
+                """Split long JSON lines so raw data remains readable in PDF."""
+                wrapped_lines = []
+                for line in text.splitlines():
+                    if len(line) <= max_width:
+                        wrapped_lines.append(line)
                         continue
-                    
-                    figure_count += 1
-                    
-                    # Create figure title
-                    if len(figs) > 1:
-                        fig_title = f"{analysis_name} (Figure {fig_idx + 1}/{len(figs)})"
-                    else:
-                        fig_title = analysis_name
-                    
-                    # Rasterize figure to PNG bytes
-                    img_buf = _io.BytesIO()
+                    start = 0
+                    while start < len(line):
+                        wrapped_lines.append(line[start:start + max_width])
+                        start += max_width
+                return "\n".join(wrapped_lines)
+
+            def _figure_to_png_bytes(fig) -> Tuple[Optional[bytes], Optional[str]]:
+                """Render matplotlib/plotly figure to PNG bytes for reportlab."""
+                if fig is None:
+                    return None, "Figure is None"
+                try:
+                    if _MplFigure is not None and isinstance(fig, _MplFigure):
+                        buf = _io.BytesIO()
+                        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                        return buf.getvalue(), None
+
                     try:
-                        if _MplFigure is not None and isinstance(fig, _MplFigure):
-                            # Matplotlib figure
-                            fig.savefig(img_buf, format='png', dpi=150, bbox_inches='tight')
-                        else:
-                            # Plotly figure - use kaleido if available
-                            try:
-                                img_bytes = fig.to_image(format='png', scale=2, width=1200, height=800)
-                                img_buf.write(img_bytes)
-                            except Exception as e:
-                                # Fallback: try without explicit dimensions
-                                try:
-                                    img_bytes = fig.to_image(format='png', scale=2)
-                                    img_buf.write(img_bytes)
-                                except Exception:
-                                    # Skip this figure if conversion fails
-                                    continue
-                    except Exception as e:
-                        # Skip figures that fail to render
-                        continue
-                    
-                    img_buf.seek(0)
-                    
-                    try:
-                        img = ImageReader(img_buf)
+                        return fig.to_image(format='png', scale=2, width=1200, height=800), None
                     except Exception:
+                        return fig.to_image(format='png', scale=2), None
+                except Exception as e:
+                    return None, str(e)
+
+            pdf_buf = _io.BytesIO()
+            doc = SimpleDocTemplate(
+                pdf_buf,
+                pagesize=A4,
+                leftMargin=36,
+                rightMargin=36,
+                topMargin=36,
+                bottomMargin=36,
+                title="SPT Analysis Report",
+                pageCompression=0,  # Keep text searchable for validation/debugging.
+            )
+
+            styles = getSampleStyleSheet()
+            body_style = styles['BodyText']
+            heading_style = styles['Heading2']
+            title_style = styles['Title']
+            raw_style = ParagraphStyle(
+                name='RawCode',
+                parent=styles['Code'],
+                fontName='Courier',
+                fontSize=6.5,
+                leading=7.5,
+                textColor=colors.black,
+                borderColor=colors.HexColor('#dddddd'),
+                borderWidth=0.5,
+                borderPadding=4,
+                backColor=colors.HexColor('#f7f7f7'),
+            )
+
+            story = []
+            story.append(Paragraph("SPT Analysis Report", title_style))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(f"Generated at: {_dt.now().isoformat()}", body_style))
+            story.append(Paragraph(f"Pixel size (&micro;m): {current_units.get('pixel_size', 0.1)}", body_style))
+            story.append(Paragraph(f"Frame interval (s): {current_units.get('frame_interval', 0.1)}", body_style))
+            story.append(Spacer(1, 12))
+            story.append(Paragraph(f"Sections Included ({len(sections)}):", styles['Heading3']))
+            for section in sections:
+                story.append(Paragraph(f"&bull; {section['title']}", body_style))
+
+            for section in sections:
+                story.append(PageBreak())
+                story.append(Paragraph(section['title'], heading_style))
+                story.append(Spacer(1, 6))
+
+                summary = section.get('summary')
+                if isinstance(summary, dict):
+                    for k, v in summary.items():
+                        story.append(Paragraph(f"<b>{str(k).title()}</b>: {str(v)}", body_style))
+                elif isinstance(summary, str):
+                    story.append(Paragraph(summary, body_style))
+                else:
+                    story.append(Paragraph("No summary provided.", body_style))
+
+                story.append(Spacer(1, 8))
+
+                figs = section.get('figures', [])
+                if figs:
+                    story.append(Paragraph("Visualizations", styles['Heading3']))
+                    story.append(Spacer(1, 4))
+
+                for fig_idx, fig in enumerate(figs):
+                    png_bytes, err = _figure_to_png_bytes(fig)
+                    if png_bytes is None:
+                        story.append(
+                            Paragraph(
+                                f"Figure {fig_idx + 1} failed to render: {err}",
+                                body_style,
+                            )
+                        )
                         continue
 
-                    # Compute size to fit page width (leave height flexible)
-                    img_w, img_h = img.getSize()
-                    max_width = width - 2 * margin
-                    max_height = height - 2 * margin - 40  # Reserve space for title
-                    
-                    # Scale to fit both width and height constraints
-                    scale = min(max_width / img_w, max_height / img_h, 1.0)
-                    draw_w = img_w * scale
-                    draw_h = img_h * scale
-                    
-                    # Check if we need a new page
-                    if y - draw_h - 40 < margin:
-                        c.showPage()
-                        y = height - margin
-                    
-                    # Draw title
-                    c.setFont('Helvetica-Bold', 12)
-                    c.drawString(margin, y, fig_title)
-                    y -= 20
-                    
-                    # Draw image
-                    c.drawImage(img, margin, y - draw_h, width=draw_w, height=draw_h, 
-                              preserveAspectRatio=True, anchor='sw')
-                    y -= (draw_h + 30)
-                    
-                    # Add some spacing between figures
-                    if y < margin + 100:
-                        c.showPage()
-                        y = height - margin
+                    img_reader = ImageReader(_io.BytesIO(png_bytes))
+                    img_w, img_h = img_reader.getSize()
+                    avail_w = doc.width
+                    avail_h = doc.height * 0.60
+                    scale = min(avail_w / img_w, avail_h / img_h, 1.0)
+                    img = RLImage(_io.BytesIO(png_bytes))
+                    img.drawWidth = img_w * scale
+                    img.drawHeight = img_h * scale
 
-            # Finalize PDF
-            c.showPage()
-            c.save()
-            buf.seek(0)
-            return buf.read()
-            
+                    if len(figs) > 1:
+                        story.append(Paragraph(f"Figure {fig_idx + 1} of {len(figs)}", styles['Heading4']))
+                    story.append(img)
+                    story.append(Spacer(1, 8))
+
+                raw_json = section.get('raw_json')
+                if raw_json is not None:
+                    story.append(Paragraph("Raw Results", styles['Heading3']))
+                    story.append(Spacer(1, 4))
+                    story.append(Preformatted(_wrap_preformatted(raw_json), raw_style))
+
+            doc.build(story)
+            pdf_buf.seek(0)
+            return pdf_buf.read()
+
         except Exception as e:
-            # reportlab not available or another error; signal to caller
             raise RuntimeError(f"PDF generation failed: {str(e)}")
 
     def _show_interactive_report(self, current_units):
@@ -7068,6 +7168,9 @@ class EnhancedSPTReportGenerator:
         try:
             pixel_size = current_units.get('pixel_size', 0.1)
             frame_interval = current_units.get('frame_interval', 0.1)
+            n_bootstrap = int(current_units.get('md_bootstrap', 40))
+            n_bootstrap = int(np.clip(n_bootstrap, 10, 500))
+            analyze_compartments = bool(current_units.get('md_analyze_compartments', False))
             
             from nuclear_diffusion_simulator import simulate_nuclear_diffusion
             from md_spt_comparison import compare_md_with_spt
@@ -7095,7 +7198,8 @@ class EnhancedSPTReportGenerator:
                 tracks_md, tracks_df,
                 pixel_size=1.0,  # Already converted
                 frame_interval=frame_interval,
-                analyze_compartments=True
+                analyze_compartments=analyze_compartments,
+                n_bootstrap=n_bootstrap,
             )
             
             # Add simulation summary
@@ -9417,12 +9521,32 @@ def _plot_anomalous_exponent(self, result):
         return None
     
     try:
-        from visualization import plot_anomalous_exponent_map
-        from data_access_utils import get_track_data
-        
-        tracks_df, has_data = get_track_data()
-        if not has_data:
-            return None
+        from visualization import _empty_fig, plot_anomalous_exponent_map
+
+        tracks_df = None
+
+        # First preference: shared session/state data if available.
+        if DATA_UTILS_AVAILABLE:
+            try:
+                tracks_from_state, has_data = get_track_data()
+                if has_data and isinstance(tracks_from_state, pd.DataFrame) and not tracks_from_state.empty:
+                    tracks_df = tracks_from_state
+            except Exception:
+                tracks_df = None
+
+        # Fallback for batch/non-Streamlit execution paths.
+        if tracks_df is None:
+            local_tracks = getattr(self, "track_df", None)
+            if isinstance(local_tracks, pd.DataFrame) and not local_tracks.empty:
+                tracks_df = local_tracks
+
+        if tracks_df is None:
+            legacy_tracks = getattr(self, "tracks", None)
+            if isinstance(legacy_tracks, pd.DataFrame) and not legacy_tracks.empty:
+                tracks_df = legacy_tracks
+
+        if tracks_df is None:
+            return _empty_fig("No track data available for anomalous exponent map")
         
         pixel_size = result.get('pixel_size', 0.1)
         frame_interval = result.get('frame_interval', 0.1)

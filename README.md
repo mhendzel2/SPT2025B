@@ -49,8 +49,11 @@ python -m venv spt_env
 # Linux/Mac:
 source spt_env/bin/activate
 
-# Install dependencies
+# Install dependencies (includes Bayesian stack)
 pip install -r requirements.txt
+
+# Optional: install directly from pyproject extras
+pip install -e ".[dev,bayes]"
 
 # Run the application
 streamlit run app.py --server.port 5000
@@ -235,10 +238,22 @@ trackpy>=0.7.0             # Particle tracking
 ```
 emcee>=3.1.0               # MCMC parameter estimation
 arviz>=0.22.0              # Bayesian diagnostics
+corner>=2.2.2              # Posterior/corner plots
+numpyro>=0.20.0            # Optional: JAX-based MCMC backend
+jax>=0.9.0                 # Optional: enables NumPyro backend (GPU/CPU)
 hmmlearn>=0.3.3            # Hidden Markov Models
 lmfit>=1.3.0               # Curve fitting
 numba>=0.60.0              # JIT compilation
 ```
+
+### Bayesian Backend Selection
+- `bayes_backend`: `auto` (default), `emcee`, or `numpyro`
+- `bayes_use_gpu`: `True`/`False` (used with `numpyro`)
+- `bayes_warmup`, `bayes_steps`, `bayes_walkers`: sampler controls
+
+### GPU Note (NumPyro/JAX)
+- `pip install -r requirements.txt` installs CPU JAX by default.
+- For NVIDIA GPU acceleration, install a CUDA-enabled `jaxlib` wheel matching your CUDA version.
 
 ---
 

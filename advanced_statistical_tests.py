@@ -23,6 +23,20 @@ except ImportError:
     SCIPY_AVAILABLE = False
     warnings.warn("scipy not available. Some statistical tests will be limited.")
 
+try:
+    from sklearn.preprocessing import StandardScaler
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    warnings.warn("scikit-learn not available. Standardized multivariate tests will be limited.")
+
+try:
+    import ot
+    POT_AVAILABLE = True
+except ImportError:
+    POT_AVAILABLE = False
+    warnings.warn("POT not available. Wasserstein population statistics will be disabled.")
+
 
 # ==================== GOODNESS-OF-FIT TESTS ====================
 
@@ -673,6 +687,109 @@ def permutation_test(sample1: np.ndarray,
         'significant': p_value < 0.05,
         'permutation_distribution': perm_stats,
         'conclusion': 'Significant difference' if p_value < 0.05 else 'No significant difference'
+    }
+
+
+def compare_populations_wasserstein(
+    features_A: pd.DataFrame,
+    features_B: pd.DataFrame,
+    feature_cols: List[str]
+) -> Dict[str, Any]:
+    """
+    Compare two trajectory populations using multivariate Wasserstein distance.
+
+    The function standardizes requested feature columns, computes the Earth
+    Mover's Distance (EMD) between populations using ``ot.emd2``, and estimates
+    significance with a label-permutation test (500 permutations).
+
+    Parameters
+    ----------
+    features_A : pd.DataFrame
+        Feature table for population A.
+    features_B : pd.DataFrame
+        Feature table for population B.
+    feature_cols : list of str
+        Columns to include in the multivariate population comparison.
+
+    Returns
+    -------
+    dict
+        Dictionary containing observed Wasserstein distance, permutation
+        distribution summary, and empirical p-value.
+    """
+    if not POT_AVAILABLE:
+        return {'success': False, 'error': 'POT (ot) not available'}
+    if not SKLEARN_AVAILABLE:
+        return {'success': False, 'error': 'scikit-learn not available'}
+    if not feature_cols:
+        return {'success': False, 'error': 'feature_cols cannot be empty'}
+
+    missing_A = [col for col in feature_cols if col not in features_A.columns]
+    missing_B = [col for col in feature_cols if col not in features_B.columns]
+    if missing_A or missing_B:
+        return {
+            'success': False,
+            'error': 'Missing feature columns',
+            'missing_in_A': missing_A,
+            'missing_in_B': missing_B
+        }
+
+    A_raw = features_A[feature_cols].copy()
+    B_raw = features_B[feature_cols].copy()
+
+    A_raw = A_raw.replace([np.inf, -np.inf], np.nan).dropna(axis=0, how='any')
+    B_raw = B_raw.replace([np.inf, -np.inf], np.nan).dropna(axis=0, how='any')
+
+    if len(A_raw) < 2 or len(B_raw) < 2:
+        return {
+            'success': False,
+            'error': 'Insufficient valid rows after filtering NaN/inf',
+            'n_A': int(len(A_raw)),
+            'n_B': int(len(B_raw))
+        }
+
+    combined = pd.concat([A_raw, B_raw], axis=0, ignore_index=True)
+    scaler = StandardScaler()
+    combined_scaled = scaler.fit_transform(combined.to_numpy(dtype=float))
+
+    n_A = len(A_raw)
+    n_B = len(B_raw)
+    A_scaled = combined_scaled[:n_A]
+    B_scaled = combined_scaled[n_A:]
+
+    def _emd2_multivariate(X: np.ndarray, Y: np.ndarray) -> float:
+        a = np.full(X.shape[0], 1.0 / X.shape[0], dtype=float)
+        b = np.full(Y.shape[0], 1.0 / Y.shape[0], dtype=float)
+        M = ot.dist(X, Y, metric='euclidean')
+        return float(ot.emd2(a, b, M))
+
+    observed_emd = _emd2_multivariate(A_scaled, B_scaled)
+
+    rng = np.random.default_rng(42)
+    permutation_dist = np.empty(500, dtype=float)
+    all_scaled = np.vstack([A_scaled, B_scaled])
+
+    for i in range(500):
+        perm_idx = rng.permutation(all_scaled.shape[0])
+        perm_A = all_scaled[perm_idx[:n_A]]
+        perm_B = all_scaled[perm_idx[n_A:]]
+        permutation_dist[i] = _emd2_multivariate(perm_A, perm_B)
+
+    empirical_p_value = float((1.0 + np.sum(permutation_dist >= observed_emd)) / (len(permutation_dist) + 1.0))
+
+    return {
+        'success': True,
+        'test': 'wasserstein_emd2_multivariate',
+        'feature_cols': feature_cols,
+        'n_A': int(n_A),
+        'n_B': int(n_B),
+        'wasserstein_distance': observed_emd,
+        'p_value': empirical_p_value,
+        'n_permutations': int(len(permutation_dist)),
+        'significant': empirical_p_value < 0.05,
+        'permutation_mean': float(np.mean(permutation_dist)),
+        'permutation_std': float(np.std(permutation_dist)),
+        'permutation_distribution': permutation_dist
     }
 
 

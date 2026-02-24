@@ -28,6 +28,27 @@ except ImportError:
     warnings.warn("emcee not available. MCMC sampling will be disabled.")
 
 try:
+    import jax
+    import jax.numpy as jnp
+    JAX_AVAILABLE = True
+    try:
+        JAX_GPU_AVAILABLE = any(dev.platform == "gpu" for dev in jax.devices())
+    except Exception:
+        JAX_GPU_AVAILABLE = False
+except ImportError:
+    JAX_AVAILABLE = False
+    JAX_GPU_AVAILABLE = False
+
+try:
+    import numpyro
+    import numpyro.distributions as npdist
+    from numpyro.distributions import transforms as nptransforms
+    from numpyro.infer import MCMC, NUTS
+    NUMPYRO_AVAILABLE = True
+except ImportError:
+    NUMPYRO_AVAILABLE = False
+
+try:
     import arviz as az
     ARVIZ_AVAILABLE = True
 except ImportError:
@@ -225,7 +246,11 @@ class BayesianDiffusionInference:
         n_burn: int = 500,
         estimate_alpha: bool = True,
         prior_config: Optional[Dict] = None,
-        progress: bool = False
+        progress: bool = False,
+        backend: str = "auto",
+        n_warmup: int = 500,
+        rng_seed: int = 42,
+        use_gpu: bool = True,
     ) -> Dict:
         """
         Run MCMC sampling to obtain posterior samples.
@@ -263,20 +288,82 @@ class BayesianDiffusionInference:
                 'chain': emcee.EnsembleSampler (if available)
             }
         """
+        backend_name = str(backend).strip().lower()
+        if backend_name not in {"auto", "emcee", "numpyro"}:
+            return {'success': False, 'error': f'Unknown backend: {backend}'}
+
+        if prior_config is None:
+            prior_config = {
+                'D_log_mean': -2.0,
+                'D_log_std': 2.0,
+                'alpha_a': 2.0,
+                'alpha_b': 2.0,
+                'alpha_min': 0.5,
+                'alpha_max': 2.0,
+            }
+
+        if backend_name == "auto":
+            if NUMPYRO_AVAILABLE and JAX_AVAILABLE:
+                backend_name = "numpyro"
+            elif EMCEE_AVAILABLE:
+                backend_name = "emcee"
+            else:
+                return {
+                    'success': False,
+                    'error': 'No Bayesian backend available (install emcee or numpyro+jax).'
+                }
+
+        if backend_name == "numpyro":
+            if not (NUMPYRO_AVAILABLE and JAX_AVAILABLE):
+                return {
+                    'success': False,
+                    'error': 'numpyro backend requested but numpyro/jax is unavailable.'
+                }
+            return self._run_numpyro(
+                displacements=displacements,
+                n_steps=n_steps,
+                n_warmup=n_warmup,
+                estimate_alpha=estimate_alpha,
+                prior_config=prior_config,
+                progress=progress,
+                rng_seed=rng_seed,
+                use_gpu=use_gpu,
+            )
+
         if not EMCEE_AVAILABLE:
             return {
                 'success': False,
-                'error': 'emcee not available. Install with: pip install emcee'
+                'error': 'emcee backend requested but emcee is unavailable.'
             }
-        
+        return self._run_emcee(
+            displacements=displacements,
+            n_walkers=n_walkers,
+            n_steps=n_steps,
+            n_burn=n_burn,
+            estimate_alpha=estimate_alpha,
+            prior_config=prior_config,
+            progress=progress,
+        )
+
+    def _run_emcee(
+        self,
+        displacements: np.ndarray,
+        n_walkers: int,
+        n_steps: int,
+        n_burn: int,
+        estimate_alpha: bool,
+        prior_config: Dict,
+        progress: bool,
+    ) -> Dict:
+        """CPU `emcee` implementation."""
         # Initial guess from MLE
         squared_disp = np.sum(displacements**2, axis=1)
         msd_simple = np.mean(squared_disp)
         D_init = msd_simple / (2 * self.dimensions * self.frame_interval)
-        
+
         # Initialize walkers
         n_dim = 2 if estimate_alpha else 1
-        
+
         if estimate_alpha:
             # Small perturbations around initial guess
             pos = np.zeros((n_walkers, n_dim))
@@ -287,7 +374,7 @@ class BayesianDiffusionInference:
         else:
             pos = D_init * (1 + 0.1 * np.random.randn(n_walkers, 1))
             pos = np.abs(pos)
-        
+
         # Set up sampler
         sampler = emcee.EnsembleSampler(
             n_walkers,
@@ -295,20 +382,31 @@ class BayesianDiffusionInference:
             self.log_probability,
             args=(displacements, prior_config)
         )
-        
+
         # Run MCMC
         try:
-            state = sampler.run_mcmc(pos, n_steps, progress=progress)
-            
+            sampler.run_mcmc(pos, n_steps, progress=progress)
+
+            # Ensure burn-in does not discard all samples.
+            effective_n_burn = min(max(int(n_burn), 0), max(int(n_steps) - 1, 0))
+
             # Get samples (discard burn-in)
-            samples = sampler.get_chain(discard=n_burn, flat=True)
-            
+            samples = sampler.get_chain(discard=effective_n_burn, flat=True)
+            if samples.size == 0:
+                return {
+                    'success': False,
+                    'error': (
+                        f'No posterior samples after burn-in '
+                        f'(n_steps={n_steps}, n_burn={effective_n_burn})'
+                    ),
+                }
+
             # Extract posteriors
             D_samples = samples[:, 0]
             D_median = np.median(D_samples)
             D_std = np.std(D_samples)
             D_ci = np.percentile(D_samples, [2.5, 97.5])  # 95% credible interval
-            
+
             result = {
                 'success': True,
                 'samples': samples,
@@ -319,33 +417,171 @@ class BayesianDiffusionInference:
                 'n_samples': len(samples),
                 'n_walkers': n_walkers,
                 'n_steps': n_steps,
-                'n_burn': n_burn
+                'n_burn': effective_n_burn,
+                'backend': 'emcee',
+                'device': 'cpu',
             }
-            
+
             if estimate_alpha:
                 alpha_samples = samples[:, 1]
                 alpha_median = np.median(alpha_samples)
                 alpha_std = np.std(alpha_samples)
                 alpha_ci = np.percentile(alpha_samples, [2.5, 97.5])
-                
+
                 result.update({
                     'alpha_median': float(alpha_median),
                     'alpha_std': float(alpha_std),
                     'alpha_credible_interval': tuple(alpha_ci.tolist()),
                     'alpha_mean': float(np.mean(alpha_samples))
                 })
-            
+
             # Diagnostics
-            result['diagnostics'] = self._compute_diagnostics(sampler, n_burn)
+            result['diagnostics'] = self._compute_diagnostics(sampler, effective_n_burn)
             result['sampler'] = sampler  # Keep for additional analysis
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 'success': False,
                 'error': f'MCMC sampling failed: {str(e)}'
             }
+
+    def _run_numpyro(
+        self,
+        displacements: np.ndarray,
+        n_steps: int,
+        n_warmup: int,
+        estimate_alpha: bool,
+        prior_config: Dict,
+        progress: bool,
+        rng_seed: int,
+        use_gpu: bool,
+    ) -> Dict:
+        """JAX/NumPyro implementation; can run on GPU when available."""
+        try:
+            if not use_gpu:
+                numpyro.set_platform("cpu")
+            elif JAX_GPU_AVAILABLE:
+                numpyro.set_platform("gpu")
+
+            disp_obs = jnp.asarray(displacements, dtype=jnp.float32)
+
+            D_log_mean = float(prior_config.get('D_log_mean', -2.0))
+            D_log_std = float(prior_config.get('D_log_std', 2.0))
+            alpha_a = float(prior_config.get('alpha_a', 2.0))
+            alpha_b = float(prior_config.get('alpha_b', 2.0))
+            alpha_min = float(prior_config.get('alpha_min', 0.5))
+            alpha_max = float(prior_config.get('alpha_max', 2.0))
+
+            frame_interval = float(self.frame_interval)
+            blur_factor = float(self.blur_factor)
+            localization_error = float(self.localization_error)
+
+            def model(obs):
+                D = numpyro.sample("D", npdist.LogNormal(D_log_mean, D_log_std))
+                if estimate_alpha:
+                    alpha = numpyro.sample(
+                        "alpha",
+                        npdist.TransformedDistribution(
+                            npdist.Beta(alpha_a, alpha_b),
+                            nptransforms.AffineTransform(
+                                loc=alpha_min,
+                                scale=alpha_max - alpha_min,
+                            ),
+                        ),
+                    )
+                else:
+                    alpha = 1.0
+
+                var_expected = (
+                    2.0 * D * (frame_interval ** alpha) * blur_factor +
+                    2.0 * (localization_error ** 2)
+                )
+                sigma = jnp.sqrt(jnp.maximum(var_expected, 1e-12))
+                numpyro.sample("disp", npdist.Normal(0.0, sigma), obs=obs)
+
+            num_samples = max(1, int(n_steps))
+            num_warmup = min(max(int(n_warmup), 0), max(num_samples - 1, 0))
+
+            kernel = NUTS(model, target_accept_prob=0.8)
+            mcmc = MCMC(
+                kernel,
+                num_warmup=num_warmup,
+                num_samples=num_samples,
+                num_chains=1,
+                progress_bar=bool(progress),
+            )
+            key = jax.random.PRNGKey(int(rng_seed))
+            mcmc.run(key, disp_obs)
+            sample_dict = mcmc.get_samples(group_by_chain=False)
+
+            D_samples = np.asarray(sample_dict.get("D", []), dtype=float)
+            if D_samples.size == 0:
+                return {'success': False, 'error': 'NumPyro produced no D samples'}
+
+            if estimate_alpha:
+                alpha_samples = np.asarray(sample_dict.get("alpha", []), dtype=float)
+                if alpha_samples.size == 0:
+                    return {'success': False, 'error': 'NumPyro produced no alpha samples'}
+                samples = np.column_stack([D_samples, alpha_samples])
+            else:
+                samples = D_samples.reshape(-1, 1)
+
+            D_median = np.median(D_samples)
+            D_std = np.std(D_samples)
+            D_ci = np.percentile(D_samples, [2.5, 97.5])
+
+            result = {
+                'success': True,
+                'samples': samples,
+                'D_median': float(D_median),
+                'D_std': float(D_std),
+                'D_credible_interval': tuple(D_ci.tolist()),
+                'D_mean': float(np.mean(D_samples)),
+                'n_samples': int(samples.shape[0]),
+                'n_steps': num_samples,
+                'n_burn': num_warmup,
+                'backend': 'numpyro',
+                'device': 'gpu' if (use_gpu and JAX_GPU_AVAILABLE) else 'cpu',
+                'diagnostics': self._compute_numpyro_diagnostics(mcmc),
+                'sampler': mcmc,
+            }
+
+            if estimate_alpha:
+                alpha_samples = samples[:, 1]
+                alpha_median = np.median(alpha_samples)
+                alpha_std = np.std(alpha_samples)
+                alpha_ci = np.percentile(alpha_samples, [2.5, 97.5])
+                result.update({
+                    'alpha_median': float(alpha_median),
+                    'alpha_std': float(alpha_std),
+                    'alpha_credible_interval': tuple(alpha_ci.tolist()),
+                    'alpha_mean': float(np.mean(alpha_samples)),
+                })
+
+            return result
+        except Exception as e:
+            return {'success': False, 'error': f'NumPyro sampling failed: {str(e)}'}
+
+    def _compute_numpyro_diagnostics(self, mcmc: Any) -> Dict[str, Any]:
+        """Best-effort diagnostics for NumPyro runs."""
+        diagnostics: Dict[str, Any] = {}
+        try:
+            extra = mcmc.get_extra_fields()
+            accept_prob = extra.get('accept_prob')
+            if accept_prob is not None:
+                diagnostics['mean_acceptance'] = float(np.mean(np.asarray(accept_prob)))
+            else:
+                diagnostics['mean_acceptance'] = float('nan')
+
+            diverging = extra.get('diverging')
+            diagnostics['n_divergent'] = int(np.sum(np.asarray(diverging))) if diverging is not None else 0
+            diagnostics['converged'] = diagnostics['n_divergent'] == 0
+            diagnostics['n_effective'] = int(mcmc.num_samples)
+        except Exception as e:
+            diagnostics['error'] = str(e)
+        return diagnostics
     
     def _compute_diagnostics(self, sampler: Any, n_burn: int) -> Dict:
         """
@@ -408,7 +644,11 @@ class BayesianDiffusionInference:
         n_walkers: int = 32,
         n_steps: int = 2000,
         estimate_alpha: bool = True,
-        return_samples: bool = False
+        return_samples: bool = False,
+        backend: str = "auto",
+        n_warmup: int = 500,
+        rng_seed: int = 42,
+        use_gpu: bool = True,
     ) -> Dict:
         """
         High-level API for Bayesian track analysis.
@@ -446,7 +686,11 @@ class BayesianDiffusionInference:
             n_walkers=n_walkers,
             n_steps=n_steps,
             estimate_alpha=estimate_alpha,
-            progress=False
+            progress=False,
+            backend=backend,
+            n_warmup=n_warmup,
+            rng_seed=rng_seed,
+            use_gpu=use_gpu,
         )
         
         if not result['success']:
@@ -455,7 +699,8 @@ class BayesianDiffusionInference:
         # Add track info
         result['track_length'] = len(track)
         result['n_displacements'] = len(displacements)
-        result['method'] = 'Bayesian_MCMC'
+        backend_used = str(result.get('backend', 'emcee')).upper()
+        result['method'] = f'Bayesian_{backend_used}'
         
         # Remove samples if not requested
         if not return_samples:
@@ -491,17 +736,35 @@ def create_arviz_inference_data(
     if not mcmc_result.get('success', False):
         return None
     
+    samples = mcmc_result.get('samples')
     sampler = mcmc_result.get('sampler')
-    if sampler is None:
-        return None
-    
-    if param_names is None:
-        n_params = mcmc_result['samples'].shape[1]
+    backend = str(mcmc_result.get('backend', '')).lower()
+
+    if param_names is None and samples is not None:
+        n_params = int(np.asarray(samples).shape[1]) if np.asarray(samples).ndim == 2 else 1
         param_names = ['D', 'alpha'][:n_params]
-    
+    elif param_names is None:
+        param_names = ['D']
+
     try:
-        idata = az.from_emcee(sampler, var_names=param_names)
-        return idata
+        if sampler is not None and backend in ('', 'emcee'):
+            return az.from_emcee(sampler, var_names=param_names)
+
+        if samples is None:
+            return None
+
+        samples_arr = np.asarray(samples)
+        if samples_arr.ndim == 1:
+            samples_arr = samples_arr.reshape(-1, 1)
+        if samples_arr.ndim != 2 or samples_arr.shape[0] == 0:
+            return None
+
+        posterior = {}
+        for idx, name in enumerate(param_names):
+            if idx >= samples_arr.shape[1]:
+                break
+            posterior[name] = samples_arr[:, idx][None, :]
+        return az.from_dict(posterior=posterior)
     except Exception as e:
         warnings.warn(f"Failed to create InferenceData: {e}")
         return None

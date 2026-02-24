@@ -1,0 +1,76 @@
+name: Synthetic Validation
+
+on:
+  schedule:
+    - cron: "15 7 * * *"
+  workflow_dispatch:
+    inputs:
+      analysis_timeout_sec:
+        description: "Timeout per analysis/visualization step in seconds"
+        required: false
+        default: "45"
+      strict:
+        description: "Fail workflow unless all analyses and visualizations pass"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  synthetic-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run synthetic validation
+        run: |
+          TIMEOUT="${{ github.event.inputs.analysis_timeout_sec || '45' }}"
+          python scripts/generate_synthetic_analysis_validation.py \
+            --output-dir test_reports/synthetic_validation_ci \
+            --analysis-timeout-sec "$TIMEOUT"
+
+      - name: Enforce strict pass criteria
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.strict == 'true' }}
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          summary_path = Path("test_reports/synthetic_validation_ci/validation_summary.json")
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          total = int(summary.get("analyses_total", 0))
+          analysis_ok = int(summary.get("analysis_success_count", 0))
+          viz_ok = int(summary.get("visualization_success_count", 0))
+
+          print(f"analyses_total={total}")
+          print(f"analysis_success_count={analysis_ok}")
+          print(f"visualization_success_count={viz_ok}")
+
+          if total == 0:
+              print("No analyses were executed.")
+              sys.exit(1)
+          if analysis_ok != total or viz_ok != total:
+              print("Synthetic validation strict check failed.")
+              sys.exit(1)
+          PY
+
+      - name: Upload synthetic validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-validation-report
+          path: test_reports/synthetic_validation_ci
+          retention-days: 14

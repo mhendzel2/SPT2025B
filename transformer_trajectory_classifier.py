@@ -472,6 +472,396 @@ def extract_trajectory_features(track: np.ndarray, dt: float = 0.1) -> np.ndarra
     return np.array(features[:20])
 
 
+if TORCH_AVAILABLE:
+    class MultiTaskTrajectoryTransformer(nn.Module):
+        """
+        Multi-task transformer for trajectory classification and fBm parameter inference.
+
+        Outputs both class logits and two continuous values:
+        - Hurst exponent H in [0, 1] via sigmoid
+        - log(D_alpha) as unconstrained real value
+        """
+
+        def __init__(
+            self,
+            input_dim: int,
+            num_classes: int,
+            d_model: int = 128,
+            n_heads: int = 4,
+            n_layers: int = 3,
+            dim_feedforward: int = 256,
+            dropout: float = 0.1,
+            max_seq_len: int = 256
+        ) -> None:
+            super().__init__()
+            self.input_dim = input_dim
+            self.num_classes = num_classes
+            self.d_model = d_model
+            self.max_seq_len = max_seq_len
+
+            self.input_projection = nn.Linear(input_dim, d_model)
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+            self.position_embedding = nn.Parameter(torch.zeros(1, max_seq_len + 1, d_model))
+
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=dim_feedforward,
+                dropout=dropout,
+                batch_first=True
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+            self.classification_head = nn.Linear(d_model, num_classes)
+            self.regression_head = nn.Sequential(
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model // 2, 2)
+            )
+
+        def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+            """
+            Forward pass.
+
+            Parameters
+            ----------
+            x : torch.Tensor
+                Input tensor with shape (batch, seq_len, input_dim).
+            padding_mask : torch.Tensor, optional
+                Boolean mask with shape (batch, seq_len), where True marks padded
+                positions to ignore.
+
+            Returns
+            -------
+            dict
+                Dictionary with keys ``class_logits`` and ``regression`` where
+                ``regression`` has columns [H, log_D_alpha].
+            """
+            batch_size, seq_len, _ = x.shape
+            seq_len = min(seq_len, self.max_seq_len)
+            x = x[:, :seq_len, :]
+
+            if padding_mask is not None:
+                padding_mask = padding_mask[:, :seq_len]
+
+            x_proj = self.input_projection(x)
+            cls = self.cls_token.expand(batch_size, -1, -1)
+            tokens = torch.cat([cls, x_proj], dim=1)
+
+            pos = self.position_embedding[:, :tokens.size(1), :]
+            tokens = tokens + pos
+
+            if padding_mask is not None:
+                cls_mask = torch.zeros((batch_size, 1), dtype=torch.bool, device=padding_mask.device)
+                src_key_padding_mask = torch.cat([cls_mask, padding_mask], dim=1)
+            else:
+                src_key_padding_mask = None
+
+            encoded = self.transformer_encoder(tokens, src_key_padding_mask=src_key_padding_mask)
+            pooled = encoded[:, 0, :]
+
+            class_logits = self.classification_head(pooled)
+            regression_raw = self.regression_head(pooled)
+            hurst = torch.sigmoid(regression_raw[:, 0:1])
+            log_d_alpha = regression_raw[:, 1:2]
+            regression = torch.cat([hurst, log_d_alpha], dim=1)
+
+            return {
+                'class_logits': class_logits,
+                'regression': regression
+            }
+
+
+    class TransformerTrajectoryClassifier:
+        """
+        Wrapper for multi-task transformer trajectory modeling.
+
+        Supports:
+        - Class prediction over known motion classes
+        - Continuous inference of ``H`` and ``log(D_alpha)``
+        - Out-of-distribution (OoD) detection from confidence and entropy
+        """
+
+        def __init__(
+            self,
+            dt: float = 0.1,
+            dimensions: int = 2,
+            class_names: Optional[List[str]] = None,
+            d_model: int = 128,
+            n_heads: int = 4,
+            n_layers: int = 3,
+            max_seq_len: int = 256,
+            device: Optional[str] = None
+        ) -> None:
+            if not TORCH_AVAILABLE:
+                raise ImportError("PyTorch not available")
+
+            self.dt = dt
+            self.dimensions = dimensions
+            self.class_names = class_names or ['brownian', 'confined', 'directed', 'anomalous_sub', 'anomalous_super']
+            self.label_to_index = {label: index for index, label in enumerate(self.class_names)}
+            self.index_to_label = {index: label for label, index in self.label_to_index.items()}
+            self.max_seq_len = max_seq_len
+            self.device = torch.device(device if device is not None else ('cuda' if torch.cuda.is_available() else 'cpu'))
+
+            self.model = MultiTaskTrajectoryTransformer(
+                input_dim=self.dimensions,
+                num_classes=len(self.class_names),
+                d_model=d_model,
+                n_heads=n_heads,
+                n_layers=n_layers,
+                max_seq_len=max_seq_len
+            ).to(self.device)
+            self.is_trained = False
+
+        def _to_tensor_sequence(self, trajectory: np.ndarray) -> torch.Tensor:
+            array = np.asarray(trajectory, dtype=np.float32)
+            if array.ndim != 2:
+                raise ValueError("trajectory must have shape (N, dimensions)")
+
+            if array.shape[1] < self.dimensions:
+                pad = np.zeros((array.shape[0], self.dimensions - array.shape[1]), dtype=np.float32)
+                array = np.hstack([array, pad])
+            elif array.shape[1] > self.dimensions:
+                array = array[:, :self.dimensions]
+
+            if array.shape[0] > self.max_seq_len:
+                array = array[:self.max_seq_len]
+
+            return torch.tensor(array, dtype=torch.float32)
+
+        def _batchify(self, trajectories: List[np.ndarray]) -> Tuple[torch.Tensor, torch.Tensor]:
+            sequences = [self._to_tensor_sequence(track) for track in trajectories]
+            lengths = [seq.shape[0] for seq in sequences]
+            max_len = int(min(max(lengths), self.max_seq_len))
+            batch_size = len(sequences)
+
+            batch = torch.zeros((batch_size, max_len, self.dimensions), dtype=torch.float32)
+            padding_mask = torch.ones((batch_size, max_len), dtype=torch.bool)
+
+            for i, seq in enumerate(sequences):
+                current_len = min(seq.shape[0], max_len)
+                batch[i, :current_len, :] = seq[:current_len]
+                padding_mask[i, :current_len] = False
+
+            return batch.to(self.device), padding_mask.to(self.device)
+
+        def fit(
+            self,
+            trajectories: List[np.ndarray],
+            labels: List[str],
+            regression_targets: Optional[np.ndarray] = None,
+            epochs: int = 15,
+            learning_rate: float = 1e-3,
+            batch_size: int = 32,
+            alpha_regression: float = 1.0
+        ) -> Dict[str, Any]:
+            """
+            Train multi-task transformer.
+
+            Parameters
+            ----------
+            trajectories : list of np.ndarray
+                Input trajectories.
+            labels : list of str
+                Motion class labels.
+            regression_targets : np.ndarray, optional
+                Array with shape (n_samples, 2) containing [H, log(D_alpha)].
+                If omitted, regression loss is skipped.
+            epochs : int
+                Number of optimization epochs.
+            learning_rate : float
+                Optimizer learning rate.
+            batch_size : int
+                Batch size.
+            alpha_regression : float
+                Weight multiplier for regression loss.
+
+            Returns
+            -------
+            dict
+                Training summary with final losses.
+            """
+            if len(trajectories) != len(labels):
+                return {'success': False, 'error': 'trajectories and labels length mismatch'}
+            if len(trajectories) == 0:
+                return {'success': False, 'error': 'No training data provided'}
+
+            unknown = sorted(set(labels) - set(self.class_names))
+            if unknown:
+                return {'success': False, 'error': f'Unknown labels encountered: {unknown}'}
+
+            y_class = torch.tensor([self.label_to_index[label] for label in labels], dtype=torch.long, device=self.device)
+
+            use_regression = regression_targets is not None
+            if use_regression:
+                reg_targets = np.asarray(regression_targets, dtype=np.float32)
+                if reg_targets.shape != (len(trajectories), 2):
+                    return {'success': False, 'error': 'regression_targets must have shape (n_samples, 2)'}
+                y_reg = torch.tensor(reg_targets, dtype=torch.float32, device=self.device)
+            else:
+                y_reg = None
+
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
+            ce_loss_fn = nn.CrossEntropyLoss()
+            mse_loss_fn = nn.MSELoss()
+
+            n_samples = len(trajectories)
+            indices = np.arange(n_samples)
+            final_total_loss = np.nan
+            final_class_loss = np.nan
+            final_reg_loss = np.nan
+
+            self.model.train()
+            for _ in range(epochs):
+                np.random.shuffle(indices)
+                epoch_total_losses = []
+                epoch_class_losses = []
+                epoch_reg_losses = []
+
+                for start in range(0, n_samples, batch_size):
+                    batch_idx = indices[start:start + batch_size]
+                    batch_tracks = [trajectories[i] for i in batch_idx]
+                    batch_x, batch_mask = self._batchify(batch_tracks)
+                    batch_y_class = y_class[batch_idx]
+
+                    outputs = self.model(batch_x, padding_mask=batch_mask)
+                    class_logits = outputs['class_logits']
+                    reg_out = outputs['regression']
+
+                    class_loss = ce_loss_fn(class_logits, batch_y_class)
+                    if use_regression:
+                        batch_y_reg = y_reg[batch_idx]
+                        reg_loss = mse_loss_fn(reg_out, batch_y_reg)
+                        total_loss = class_loss + alpha_regression * reg_loss
+                    else:
+                        reg_loss = torch.tensor(0.0, device=self.device)
+                        total_loss = class_loss
+
+                    optimizer.zero_grad()
+                    total_loss.backward()
+                    optimizer.step()
+
+                    epoch_total_losses.append(float(total_loss.detach().cpu().item()))
+                    epoch_class_losses.append(float(class_loss.detach().cpu().item()))
+                    epoch_reg_losses.append(float(reg_loss.detach().cpu().item()))
+
+                final_total_loss = float(np.mean(epoch_total_losses)) if epoch_total_losses else np.nan
+                final_class_loss = float(np.mean(epoch_class_losses)) if epoch_class_losses else np.nan
+                final_reg_loss = float(np.mean(epoch_reg_losses)) if epoch_reg_losses else np.nan
+
+            self.is_trained = True
+
+            return {
+                'success': True,
+                'n_samples': n_samples,
+                'n_classes': len(self.class_names),
+                'use_regression_targets': use_regression,
+                'final_total_loss': final_total_loss,
+                'final_classification_loss': final_class_loss,
+                'final_regression_loss': final_reg_loss
+            }
+
+        def predict(
+            self,
+            trajectories: List[np.ndarray],
+            return_proba: bool = False
+        ) -> Union[List[str], Tuple[List[str], np.ndarray]]:
+            """
+            Predict class labels for trajectory list.
+
+            Parameters
+            ----------
+            trajectories : list of np.ndarray
+                Input trajectories.
+            return_proba : bool
+                Whether to also return class probabilities.
+
+            Returns
+            -------
+            list[str] or tuple
+                Predicted labels, optionally with probability matrix.
+            """
+            self.model.eval()
+            with torch.no_grad():
+                x, mask = self._batchify(trajectories)
+                outputs = self.model(x, padding_mask=mask)
+                probs = F.softmax(outputs['class_logits'], dim=1).cpu().numpy()
+                pred_idx = np.argmax(probs, axis=1)
+                labels = [self.index_to_label[int(i)] for i in pred_idx]
+
+            if return_proba:
+                return labels, probs
+            return labels
+
+        def predict_with_ood(
+            self,
+            trajectory: torch.Tensor,
+            confidence_threshold: float = 0.6,
+            entropy_threshold: float = 0.75
+        ) -> Dict[str, Any]:
+            """
+            Predict class and continuous parameters with OoD detection.
+
+            OoD is flagged when either:
+            - maximum class probability is below ``confidence_threshold``
+            - normalized predictive entropy exceeds ``entropy_threshold``
+
+            Parameters
+            ----------
+            trajectory : torch.Tensor
+                Single trajectory tensor with shape (N, D).
+            confidence_threshold : float
+                Minimum confidence for in-distribution prediction.
+            entropy_threshold : float
+                Maximum normalized entropy for in-distribution prediction.
+
+            Returns
+            -------
+            dict
+                Prediction summary including OoD decision and [H, log(D_alpha)].
+            """
+            if trajectory.ndim != 2:
+                raise ValueError("trajectory must have shape (N, D)")
+
+            np_track = trajectory.detach().cpu().numpy()
+            batch_x, batch_mask = self._batchify([np_track])
+
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model(batch_x, padding_mask=batch_mask)
+                logits = outputs['class_logits'][0]
+                regression = outputs['regression'][0]
+
+                probs = F.softmax(logits, dim=0)
+                max_prob_value, max_index = torch.max(probs, dim=0)
+
+                entropy = -torch.sum(probs * torch.log(probs + 1e-12))
+                normalized_entropy = float((entropy / np.log(len(self.class_names))).cpu().item())
+                max_prob = float(max_prob_value.cpu().item())
+
+                is_ood = (max_prob < confidence_threshold) or (normalized_entropy > entropy_threshold)
+                predicted_label = 'Out-of-Distribution' if is_ood else self.index_to_label[int(max_index.cpu().item())]
+
+                hurst = float(regression[0].cpu().item())
+                log_d_alpha = float(regression[1].cpu().item())
+
+            return {
+                'predicted_label': predicted_label,
+                'ood': bool(is_ood),
+                'max_probability': max_prob,
+                'predictive_entropy': normalized_entropy,
+                'confidence_threshold': float(confidence_threshold),
+                'entropy_threshold': float(entropy_threshold),
+                'class_probabilities': {
+                    label: float(prob.cpu().item())
+                    for label, prob in zip(self.class_names, probs)
+                },
+                'H': hurst,
+                'log_D_alpha': log_d_alpha
+            }
+
+
 # ============================================================================
 # Sklearn-based Classifier (Fallback)
 # ============================================================================
@@ -626,7 +1016,26 @@ def train_trajectory_classifier(
         results = classifier.fit(trajectories, labels)
         return classifier, results
     else:
-        return None, {'success': False, 'error': 'Transformer not yet fully implemented'}
+        classifier = TransformerTrajectoryClassifier(
+            dt=dt,
+            dimensions=kwargs.get('dimensions', 2),
+            class_names=kwargs.get('class_names'),
+            d_model=kwargs.get('d_model', 128),
+            n_heads=kwargs.get('n_heads', 4),
+            n_layers=kwargs.get('n_layers', 3),
+            max_seq_len=kwargs.get('max_seq_len', 256),
+            device=kwargs.get('device')
+        )
+        fit_results = classifier.fit(
+            trajectories=trajectories,
+            labels=labels,
+            regression_targets=kwargs.get('regression_targets'),
+            epochs=kwargs.get('epochs', 15),
+            learning_rate=kwargs.get('learning_rate', 1e-3),
+            batch_size=kwargs.get('batch_size', 32),
+            alpha_regression=kwargs.get('alpha_regression', 1.0)
+        )
+        return classifier, fit_results
 
 
 def classify_trajectories(

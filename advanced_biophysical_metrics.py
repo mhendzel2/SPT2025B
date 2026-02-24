@@ -340,6 +340,115 @@ class AdvancedMetricsAnalyzer:
             'fbm': fbm_df
         }
 
+
+def compute_trajectory_morphometrics(trajectory_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute parameter-free trajectory morphometrics per track.
+
+    For each unique ``track_id``, this function computes:
+    - Radius of gyration
+    - Asymmetry (from the 2D gyration tensor eigenvalues)
+    - Fractal dimension (path-length vs. bounding-box scale approximation)
+    - Efficiency
+    - Straightness
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        Trajectory data containing ``track_id``, ``x``, ``y`` and optionally ``z``,
+        plus optional temporal columns such as ``frame`` or ``t``.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per ``track_id`` with columns:
+        ``track_id``, ``radius_gyration``, ``asymmetry``, ``fractal_dimension``,
+        ``efficiency``, and ``straightness``.
+    """
+    required_columns = {'track_id', 'x', 'y'}
+    if not required_columns.issubset(trajectory_df.columns):
+        missing = required_columns - set(trajectory_df.columns)
+        raise ValueError(f"trajectory_df missing required columns: {missing}")
+
+    sort_columns = ['track_id']
+    if 'frame' in trajectory_df.columns:
+        sort_columns.append('frame')
+    elif 't' in trajectory_df.columns:
+        sort_columns.append('t')
+
+    spatial_columns = ['x', 'y'] + (['z'] if 'z' in trajectory_df.columns else [])
+    df = trajectory_df[['track_id', *spatial_columns, *[c for c in sort_columns if c != 'track_id']]].dropna(subset=['track_id', 'x', 'y']).copy()
+    df = df.sort_values(sort_columns)
+
+    output_rows = []
+    epsilon = 1e-30
+
+    for track_id, group in df.groupby('track_id'):
+        points = group[spatial_columns].to_numpy(dtype=float)
+        n_points = points.shape[0]
+
+        if n_points < 2:
+            output_rows.append({
+                'track_id': track_id,
+                'radius_gyration': np.nan,
+                'asymmetry': np.nan,
+                'fractal_dimension': np.nan,
+                'efficiency': np.nan,
+                'straightness': np.nan
+            })
+            continue
+
+        center_of_mass = np.mean(points, axis=0)
+        centered = points - center_of_mass
+        radius_gyration = float(np.sqrt(np.mean(np.sum(centered * centered, axis=1))))
+
+        points_xy = group[['x', 'y']].to_numpy(dtype=float)
+        centered_xy = points_xy - np.mean(points_xy, axis=0)
+        gyration_tensor = (centered_xy.T @ centered_xy) / float(n_points)
+        eigenvalues = np.sort(np.real(np.linalg.eigvalsh(gyration_tensor)))[::-1]
+        lambda_1, lambda_2 = float(eigenvalues[0]), float(eigenvalues[1])
+        lambda_sum = lambda_1 + lambda_2
+
+        if lambda_sum <= epsilon:
+            asymmetry = np.nan
+        else:
+            asymmetry_argument = 1.0 - ((lambda_1 - lambda_2) ** 2) / (2.0 * (lambda_sum ** 2) + epsilon)
+            asymmetry_argument = np.clip(asymmetry_argument, epsilon, 1.0)
+            asymmetry = float(-np.log(asymmetry_argument))
+
+        steps = np.diff(points, axis=0)
+        step_lengths = np.linalg.norm(steps, axis=1)
+        step_sq = np.sum(steps * steps, axis=1)
+
+        total_path_length = float(np.sum(step_lengths))
+        net_displacement = points[-1] - points[0]
+        net_distance = float(np.linalg.norm(net_displacement))
+        net_sq = float(np.sum(net_displacement * net_displacement))
+        sum_step_sq = float(np.sum(step_sq))
+
+        efficiency = float(net_sq / (sum_step_sq + epsilon))
+        straightness = float(net_distance / (total_path_length + epsilon))
+
+        ranges = np.ptp(points, axis=0)
+        max_bounding_box_size = float(np.max(ranges)) if ranges.size else 0.0
+        n_steps = max(n_points - 1, 1)
+        fractal_ratio = (n_steps * max_bounding_box_size) / (total_path_length + epsilon)
+        if fractal_ratio > 1.0:
+            fractal_dimension = float(np.log(n_steps) / np.log(fractal_ratio))
+        else:
+            fractal_dimension = np.nan
+
+        output_rows.append({
+            'track_id': track_id,
+            'radius_gyration': radius_gyration,
+            'asymmetry': asymmetry,
+            'fractal_dimension': fractal_dimension,
+            'efficiency': efficiency,
+            'straightness': straightness
+        })
+
+    return pd.DataFrame(output_rows)
+
 def fit_fbm_model(track_df: pd.DataFrame, pixel_size: float = 1.0, frame_interval: float = 1.0):
     """
     Fit a Fractional Brownian Motion (fBm) model to a single trajectory.

@@ -1,3 +1,5 @@
 # Canonical dependency definitions live in pyproject.toml.
-# Install the editable project with development tools:
--e ".[dev]"
+# Install the editable project with development + Bayesian dependencies:
+-e ".[dev,bayes]"
+POT>=0.9.4
+ripser>=0.6.4
