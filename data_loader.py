@@ -427,10 +427,14 @@ def load_tracks_file(
             file_obj.size = len(file_bytes)
             file = file_obj
 
-        # Some in-memory test doubles may not define .size explicitly.
-        if not hasattr(file, 'size') and hasattr(file, 'getvalue'):
+        # Normalize size for in-memory uploads/test doubles (e.g., MagicMock).
+        if hasattr(file, 'getvalue'):
             try:
-                file.size = len(file.getvalue())
+                payload = file.getvalue()
+                payload_size = len(payload) if payload is not None else 0
+                current_size = getattr(file, 'size', None)
+                if not isinstance(current_size, (int, float, np.integer, np.floating)):
+                    file.size = int(payload_size)
             except Exception:
                 pass
 
