@@ -1884,6 +1884,17 @@ def plot_clustering_analysis(analysis_results: Dict[str, Any]) -> go.Figure:
     first_frame_with_clusters = cluster_tracks['frame'].min()
     frame_data = cluster_tracks[cluster_tracks['frame'] == first_frame_with_clusters].copy()
 
+    for col in ("centroid_x", "centroid_y", "n_points", "radius", "n_tracks"):
+        if col in frame_data.columns:
+            frame_data[col] = pd.to_numeric(frame_data[col], errors="coerce")
+
+    # Drop rows that cannot be plotted after numeric coercion.
+    required_plot_cols = [c for c in ("centroid_x", "centroid_y", "n_points") if c in frame_data.columns]
+    if required_plot_cols:
+        frame_data = frame_data.dropna(subset=required_plot_cols)
+    if frame_data.empty:
+        return _empty_fig("No valid numeric cluster data to plot.")
+
     # Keep hover data schema aligned with available columns.
     if "n_tracks" not in frame_data.columns and "n_points" in frame_data.columns:
         frame_data["n_tracks"] = frame_data["n_points"]
