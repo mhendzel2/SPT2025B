@@ -44,7 +44,8 @@ except ImportError:
 try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import classification_report, roc_auc_score, calibration_curve
+    from sklearn.metrics import classification_report, roc_auc_score
+    from sklearn.calibration import calibration_curve
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
