@@ -414,8 +414,11 @@ def load_tracks_file(
         DataFrame containing the track data
     """
     try:
+        # Prefer uploaded/file-like objects over path handling.
+        has_file_like_api = hasattr(file, 'getvalue') or hasattr(file, 'read')
+
         # Support pathlib/str inputs used in tests and CLI contexts.
-        if isinstance(file, (str, os.PathLike)):
+        if (not has_file_like_api) and isinstance(file, (str, os.PathLike)):
             file_path = os.fspath(file)
             with open(file_path, 'rb') as f_in:
                 file_bytes = f_in.read()
@@ -423,6 +426,13 @@ def load_tracks_file(
             file_obj.name = os.path.basename(file_path)
             file_obj.size = len(file_bytes)
             file = file_obj
+
+        # Some in-memory test doubles may not define .size explicitly.
+        if not hasattr(file, 'size') and hasattr(file, 'getvalue'):
+            try:
+                file.size = len(file.getvalue())
+            except Exception:
+                pass
 
         # Validate filename
         safe_filename = SecureFileHandler.validate_filename(file.name)
