@@ -18,8 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing as mp
 from functools import partial
 from tracking import detect_particles, detect_particles_enhanced
-from concurrent.futures import ProcessPoolExecutor # Change this import
-import multiprocessing as mp
+
 
 class ParticleDetectionOptimizer:
     def __init__(self, image_path, ground_truth_csv, num_sigma=10, min_distance=2.0):
@@ -749,16 +748,7 @@ class ParticleDetectionOptimizer:
                 st.write(f"- **{key}**: {value}")
         
         return best_result
-# Use ProcessPoolExecutor instead of ThreadPoolExecutor
-max_workers = min(mp.cpu_count(), 8)
-with ProcessPoolExecutor(max_workers=max_workers) as executor: # Change this line
-    futures = [executor.submit(self.test_log_params_parallel, combo) for combo in param_combinations]
-    
-    for i, future in enumerate(futures):
-        result = future.result()
-        if result:
-            results.append(result)
-        progress_bar.progress((i + 1) / len(param_combinations))
+
 def create_optimizer_interface():
     """Create Streamlit interface for parameter optimization"""
     st.header("🔬 Particle Detection Parameter Optimizer")
