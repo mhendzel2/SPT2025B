@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import streamlit as st
 
 def calculate_population_metrics(tracks_df, pixel_size=0.1, frame_interval=0.1):
     """

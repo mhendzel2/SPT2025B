@@ -134,8 +134,9 @@ try:
     from hmm_analysis import fit_hmm, ensure_hmmlearn
 except RuntimeError as e:
     fit_hmm = None
+    _hmm_err = str(e)
     def _hmm_warning():
-        return f"HMM features disabled: {e}"
+        return f"HMM features disabled: {_hmm_err}"
 from intensity_analysis import (
     extract_intensity_channels, calculate_movement_metrics,
     correlate_intensity_movement, create_intensity_movement_plots,

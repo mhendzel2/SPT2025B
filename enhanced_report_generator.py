@@ -8904,9 +8904,10 @@ def _plot_loop_extrusion(self, result):
         fig.update_yaxes(title_text="Return Tendency", row=2, col=1)
         
         # Update layout
+        _status_html = "<b style='color:green'>DETECTED</b>" if str(loop_detected).lower() == "true" else "<b style='color:red'>NOT DETECTED</b>"
         fig.update_layout(
             title=dict(
-                text=f'Loop Extrusion Detection Analysis<br><sub>Status: {"<b style=\\'color:green\\'>DETECTED</b>" if str(loop_detected).lower() == "true" else "<b style=\\'color:red\\'>NOT DETECTED</b>"}</sub>',
+                text=f'Loop Extrusion Detection Analysis<br><sub>Status: {_status_html}</sub>',
                 x=0.5,
                 xanchor='center'
             ),
