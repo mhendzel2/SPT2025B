@@ -19,6 +19,11 @@ except ImportError:
     DEFAULT_PIXEL_SIZE = 0.1
     DEFAULT_FRAME_INTERVAL = 0.1
 
+try:
+    from spt2025b.ui.dual_mode import init_dual_mode_state
+except Exception:
+    init_dual_mode_state = None
+
 def initialize_session_state():
     """
     Initialize all required session state variables for the SPT2025B application.
@@ -66,6 +71,13 @@ def initialize_session_state():
         st.session_state.channel2_data = None
     if 'loaded_datasets' not in st.session_state:
         st.session_state.loaded_datasets = {}
+
+    # Shared guided/expert bridge keys (safe no-op if module unavailable)
+    if init_dual_mode_state is not None:
+        try:
+            init_dual_mode_state(st.session_state)
+        except Exception:
+            pass
 
 def validate_tracks_dataframe(tracks_df: pd.DataFrame, 
                              check_duplicates: bool = True,

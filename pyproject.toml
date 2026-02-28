@@ -41,6 +41,7 @@ bayes = [
 ml = [
     "hmmlearn>=0.3.0",
     "tensorflow>=2.15.0",
+    "torch>=2.2.0",
     "emcee>=3.1.0",
     "arviz>=0.18.0",
 ]
@@ -67,3 +68,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["spt2025b*"]
+
+[tool.setuptools.package-data]
+"spt2025b.ui" = ["protocols/*.json"]

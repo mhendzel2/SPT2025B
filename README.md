@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Streamlit-1.50+-red" alt="Streamlit">
   <img src="https://img.shields.io/badge/NumPy-2.x%20Compatible-green" alt="NumPy">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
-  <img src="https://img.shields.io/badge/Last%20Updated-December%202025-purple" alt="Updated">
+  <img src="https://img.shields.io/badge/Last%20Updated-February%202026-purple" alt="Updated">
 </p>
 
 ---
@@ -23,6 +23,7 @@ SPT2025B is a production-ready single particle tracking analysis platform design
 - 📊 **Diffusion Analysis** - MSD, anomalous diffusion, multiple diffusion models
 - 🧬 **Microrheology** - Storage/loss modulus, creep compliance, viscoelastic characterization
 - 🤖 **Machine Learning** - HMM-based state classification, ML trajectory analysis
+- 🧠 **2026 SOTA Trajectory Methods** - Diffusional Fingerprinting, Wasserstein population statistics, transformer multi-task inference (H and log(Dα)), and time-windowed persistent homology
 - 📈 **Publication-Ready Reports** - Interactive HTML, PDF, and JSON exports
 
 ---
@@ -55,8 +56,21 @@ pip install -r requirements.txt
 # Optional: install directly from pyproject extras
 pip install -e ".[dev,bayes]"
 
+# Optional: install ML extra group (includes PyTorch)
+pip install -e ".[ml]"
+
 # Run the application
 streamlit run app.py --server.port 5000
+```
+
+### Installation Profiles
+
+```bash
+# Minimal app/runtime
+pip install -e "."
+
+# Full scientific + report + ML stack
+pip install -e ".[full]"
 ```
 
 ### Windows Quick Start
@@ -132,6 +146,43 @@ if not has_data:
     return
 
 # tracks_df guaranteed to have: track_id, frame, x, y columns
+```
+
+### Dual Interface Architecture (One Engine, Two Cockpits)
+SPT2025B now includes a shared guided/expert configuration bridge in [`spt2025b/ui/dual_mode.py`](spt2025b/ui/dual_mode.py):
+
+- **One universal state object**: `UniversalSessionConfig` is the canonical backend config used by both UIs.
+- **Guided translation layer**: `GuidedInputs` (few controls) are translated into full expert parameters via hidden JSON templates in `spt2025b/ui/protocols/`.
+- **Expert parity**: Expert mode reads/writes the same config object, so no pipeline branching is required.
+- **Mode bridge**:
+  - **Eject to Expert**: keep current guided-generated config and switch to expert controls.
+  - **Deploy to Guided**: export an expert-tuned configuration as a reusable custom guided protocol.
+- **Dual chatbot persona hooks**: `chatbot_prompt_for_mode()` switches system prompt between guided tutor and expert computational peer.
+
+Minimal usage:
+
+```python
+from spt2025b.ui.dual_mode import (
+    BiologyPreset,
+    GuidedInputs,
+    TrafficLightStatus,
+    apply_guided_inputs_to_state,
+    eject_to_expert_workspace,
+)
+
+# Guided mode user input -> full backend config
+cfg = apply_guided_inputs_to_state(
+    GuidedInputs(
+        biology_preset=BiologyPreset.MEMBRANE_RECEPTOR,
+        traffic_light=TrafficLightStatus.YELLOW,
+        pixel_size_um=0.107,
+        frame_interval_s=0.05,
+    )
+)
+
+# Preserve config and move user to expert workspace
+expert_cfg = eject_to_expert_workspace()
+assert expert_cfg.to_dict() == cfg.to_dict()
 ```
 
 ### Analysis Function Contract
@@ -234,6 +285,13 @@ plotly>=6.0.0              # Interactive visualization
 trackpy>=0.7.0             # Particle tracking
 ```
 
+### 2026 Trajectory Extensions
+```
+POT>=0.9.4                 # Wasserstein / Earth Mover's Distance
+ripser>=0.6.4              # Persistent homology (Betti-0/Betti-1)
+torch>=2.2.0               # Transformer-based trajectory multi-task model
+```
+
 ### Advanced Analysis
 ```
 emcee>=3.1.0               # MCMC parameter estimation
@@ -254,6 +312,18 @@ numba>=0.60.0              # JIT compilation
 ### GPU Note (NumPyro/JAX)
 - `pip install -r requirements.txt` installs CPU JAX by default.
 - For NVIDIA GPU acceleration, install a CUDA-enabled `jaxlib` wheel matching your CUDA version.
+
+### GPU Note (PyTorch)
+- CPU-only installation is sufficient for transformer inference on small/medium trajectory batches.
+- For NVIDIA GPU acceleration, install a CUDA-enabled PyTorch build matching your CUDA version.
+
+### References / Citations
+- **POT (Python Optimal Transport)**: Flamary et al., *POT: Python Optimal Transport*, Journal of Machine Learning Research (JMLR), 2021.
+- **Wasserstein / Earth Mover's Distance**: Villani, *Optimal Transport: Old and New*, Springer, 2009.
+- **Ripser / Persistent Homology**: Tralie, Saul, Bar-On, *Ripser.py: A Lean Persistent Homology Library for Python*, Journal of Open Source Software (JOSS), 2018.
+- **Topological Data Analysis (persistent diagrams)**: Edelsbrunner and Harer, *Computational Topology: An Introduction*, 2010.
+- **Transformer architecture**: Vaswani et al., *Attention Is All You Need*, NeurIPS, 2017.
+- **OoD detection with softmax confidence / predictive entropy**: Hendrycks and Gimpel, *A Baseline for Detecting Misclassified and Out-of-Distribution Examples in Neural Networks*, ICLR, 2017.
 
 ---
 

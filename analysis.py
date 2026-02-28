@@ -470,6 +470,10 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
                     track_result['alpha_ci_upper'] = np.nan
                     track_result['diffusion_type'] = 'unknown'
                     track_result['diffusion_confidence'] = 'indeterminate'
+
+                if check_confinement:
+                    track_result['confined'] = False
+                    track_result['confinement_radius'] = np.nan
                 
                 # Check for confined diffusion
                 if check_confinement and len(lag_times) >= MIN_POINTS_CONFINEMENT:
@@ -573,6 +577,9 @@ def analyze_diffusion(tracks_df: pd.DataFrame, max_lag: int = 20, pixel_size: fl
         return {
             'success': True,
             'result': results,
+            'msd_data': results.get('msd_data'),
+            'track_results': results.get('track_results'),
+            'ensemble_results': results.get('ensemble_results'),
             'error': None
         }
     

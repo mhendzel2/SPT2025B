@@ -1,0 +1,19 @@
+{
+  "protocol_name": "Membrane Receptors",
+  "dimensionality": "2d",
+  "msd_fit_fraction": 0.25,
+  "msd_max_lag_fraction": 0.5,
+  "hmm_state_count": 3,
+  "ihmm_enabled": false,
+  "ihmm_static_state_prior": 0.35,
+  "hmm_dirichlet_prior": 1.2,
+  "bocpd_hazard_lambda": 120.0,
+  "search_radius_px": 8.0,
+  "max_jump_um": 0.5,
+  "min_track_length": 8,
+  "savin_doyle_noise_correction": false,
+  "localization_error_subtraction": true,
+  "rheology_freq_min_hz": 0.2,
+  "rheology_freq_max_hz": 80.0,
+  "batch_enabled": true
+}

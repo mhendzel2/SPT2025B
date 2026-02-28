@@ -1,0 +1,19 @@
+{
+  "protocol_name": "Cytosolic Proteins",
+  "dimensionality": "3d",
+  "msd_fit_fraction": 0.3,
+  "msd_max_lag_fraction": 0.55,
+  "hmm_state_count": 3,
+  "ihmm_enabled": false,
+  "ihmm_static_state_prior": 0.25,
+  "hmm_dirichlet_prior": 0.9,
+  "bocpd_hazard_lambda": 90.0,
+  "search_radius_px": 12.0,
+  "max_jump_um": 1.2,
+  "min_track_length": 6,
+  "savin_doyle_noise_correction": false,
+  "localization_error_subtraction": true,
+  "rheology_freq_min_hz": 0.25,
+  "rheology_freq_max_hz": 120.0,
+  "batch_enabled": true
+}

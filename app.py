@@ -18,6 +18,7 @@ import io
 import time
 import uuid
 import json
+from pathlib import Path
 import tempfile  # ADDED: For temporary file handling
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -157,6 +158,22 @@ from logic import (
     convert_coordinates_to_microns,
     normalize_image_for_display,
     process_image_data,
+)
+from spt2025b.ui.dual_mode import (
+    BiologyPreset,
+    GuidedInputs,
+    TrafficLightStatus,
+    UIMode,
+    apply_guided_inputs_to_state,
+    chatbot_prompt_for_mode,
+    deploy_as_guided_protocol,
+    eject_to_expert_workspace,
+    get_ui_mode,
+    get_universal_config,
+    init_dual_mode_state,
+    load_custom_guided_protocol,
+    set_ui_mode,
+    set_universal_config,
 )
 
 # Import advanced segmentation module
@@ -977,6 +994,264 @@ def navigate_to(page):
     st.session_state.active_page = page
     # Note: st.rerun() not needed here - Streamlit automatically reruns after callback
 
+
+def _traffic_light_from_quality_score(score: float) -> TrafficLightStatus:
+    """Map quality score (0-100) to traffic-light categories."""
+    if score >= 80.0:
+        return TrafficLightStatus.GREEN
+    if score >= 60.0:
+        return TrafficLightStatus.YELLOW
+    return TrafficLightStatus.RED
+
+
+def _traffic_light_icon(status: TrafficLightStatus) -> str:
+    return {
+        TrafficLightStatus.GREEN: "🟢",
+        TrafficLightStatus.YELLOW: "🟡",
+        TrafficLightStatus.RED: "🔴",
+    }[status]
+
+
+def _run_guided_quality_check() -> Optional[Dict[str, Any]]:
+    """Run quality checks on loaded tracks and return a compact traffic-light result."""
+    tracks_df, has_data = get_track_data()
+    if not has_data or tracks_df is None or tracks_df.empty:
+        return None
+
+    checker = DataQualityChecker()
+    pixel_size = float(st.session_state.get("pixel_size", DEFAULT_PIXEL_SIZE))
+    frame_interval = float(st.session_state.get("frame_interval", DEFAULT_FRAME_INTERVAL))
+    report = checker.run_all_checks(
+        tracks_df=tracks_df,
+        pixel_size=pixel_size,
+        frame_interval=frame_interval,
+    )
+
+    status = _traffic_light_from_quality_score(float(report.overall_score))
+    status_message = {
+        TrafficLightStatus.GREEN: "Excellent signal quality and track continuity.",
+        TrafficLightStatus.YELLOW: "Moderate quality issues detected; noise correction is recommended.",
+        TrafficLightStatus.RED: "Low data quality detected; expert review is recommended before batch runs.",
+    }[status]
+
+    return {
+        "status": status.value,
+        "score": float(report.overall_score),
+        "message": status_message,
+        "failed_checks": int(report.failed_checks),
+        "warnings": int(report.warnings),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def _sync_runtime_units(pixel_size_um: float, frame_interval_s: float) -> None:
+    """Keep legacy unit keys and global settings aligned with shared config units."""
+    st.session_state.pixel_size = float(pixel_size_um)
+    st.session_state.frame_interval = float(frame_interval_s)
+    st.session_state.current_pixel_size = float(pixel_size_um)
+    st.session_state.current_frame_interval = float(frame_interval_s)
+    if "unit_converter" in st.session_state:
+        st.session_state.unit_converter.set_pixel_size(float(pixel_size_um))
+        st.session_state.unit_converter.set_frame_interval(float(frame_interval_s))
+
+    global_settings = st.session_state.get("global_settings")
+    if global_settings is not None:
+        try:
+            global_settings.pixel_size = float(pixel_size_um)
+            global_settings.frame_interval = float(frame_interval_s)
+        except Exception:
+            pass
+
+
+def _show_dual_mode_sidebar() -> None:
+    """Render guided/expert controls that share one backend configuration."""
+    init_dual_mode_state(st.session_state)
+    current_mode = get_ui_mode(st.session_state)
+
+    mode_labels = {
+        UIMode.GUIDED: "🎓 Guided Mode",
+        UIMode.EXPERT: "⚙️ Expert Workspace",
+    }
+    ordered_modes = [UIMode.GUIDED, UIMode.EXPERT]
+    selected_label = st.sidebar.radio(
+        "Interface",
+        [mode_labels[m] for m in ordered_modes],
+        index=ordered_modes.index(current_mode),
+        key="dual_mode_selector",
+        help="Guided mode uses biology presets; Expert mode gives direct parameter control.",
+    )
+    selected_mode = ordered_modes[[mode_labels[m] for m in ordered_modes].index(selected_label)]
+    if selected_mode != current_mode:
+        set_ui_mode(selected_mode, st.session_state)
+        st.rerun()
+
+    st.session_state["chatbot_system_prompt"] = chatbot_prompt_for_mode(selected_mode)
+
+    try:
+        config = get_universal_config(st.session_state)
+    except Exception:
+        config = set_universal_config({}, st.session_state)
+    guided_cache = st.session_state.get("guided_inputs", {})
+
+    if selected_mode == UIMode.GUIDED:
+        st.sidebar.caption("Guided wizard: map biology context to validated expert defaults.")
+
+        preset_labels = {
+            "Membrane Receptors": BiologyPreset.MEMBRANE_RECEPTOR,
+            "Chromatin/DNA Binding": BiologyPreset.CHROMATIN_DNA_BINDING,
+            "Cytosolic Proteins": BiologyPreset.CYTOSOLIC_PROTEIN,
+        }
+        reverse_preset = {v.value: k for k, v in preset_labels.items()}
+        default_preset_key = guided_cache.get(
+            "biology_preset", BiologyPreset.MEMBRANE_RECEPTOR.value
+        )
+        default_preset_label = reverse_preset.get(default_preset_key, "Membrane Receptors")
+        chosen_label = st.sidebar.selectbox(
+            "What are you imaging?",
+            options=list(preset_labels.keys()),
+            index=list(preset_labels.keys()).index(default_preset_label),
+            key="guided_preset_select",
+        )
+        chosen_preset = preset_labels[chosen_label]
+
+        if st.sidebar.button("Run Traffic-Light Check", key="guided_quality_check_btn"):
+            quality_summary = _run_guided_quality_check()
+            if quality_summary is None:
+                st.sidebar.warning("Load track data first to run quality checks.")
+            else:
+                st.session_state["guided_quality_summary"] = quality_summary
+
+        quality_summary = st.session_state.get("guided_quality_summary")
+        auto_traffic = TrafficLightStatus.GREEN
+        if isinstance(quality_summary, dict) and "status" in quality_summary:
+            auto_traffic = TrafficLightStatus(str(quality_summary["status"]))
+            st.sidebar.info(
+                f"{_traffic_light_icon(auto_traffic)} Score {quality_summary.get('score', 0.0):.1f}/100\n\n"
+                f"{quality_summary.get('message', '')}"
+            )
+
+        traffic_options = {
+            "🟢 Green (Excellent)": TrafficLightStatus.GREEN,
+            "🟡 Yellow (Use Noise Correction)": TrafficLightStatus.YELLOW,
+            "🔴 Red (Needs Expert Review)": TrafficLightStatus.RED,
+        }
+        selected_traffic = st.sidebar.selectbox(
+            "Data quality status",
+            options=list(traffic_options.keys()),
+            index=list(traffic_options.values()).index(auto_traffic),
+            key="guided_traffic_select",
+        )
+        traffic_status = traffic_options[selected_traffic]
+
+        if st.sidebar.button("Apply Guided Preset", type="primary", key="apply_guided_preset_btn"):
+            guided = GuidedInputs(
+                biology_preset=chosen_preset,
+                traffic_light=traffic_status,
+                pixel_size_um=float(st.session_state.get("pixel_size", DEFAULT_PIXEL_SIZE)),
+                frame_interval_s=float(st.session_state.get("frame_interval", DEFAULT_FRAME_INTERVAL)),
+            )
+            config = apply_guided_inputs_to_state(guided, st.session_state)
+            _sync_runtime_units(config.pixel_size_um, config.frame_interval_s)
+            st.sidebar.success("Guided preset applied to shared expert configuration.")
+
+        custom_protocol_dir = (
+            Path(__file__).resolve().parent / "spt2025b" / "ui" / "protocols" / "custom"
+        )
+        custom_protocols = sorted(custom_protocol_dir.glob("*.json")) if custom_protocol_dir.exists() else []
+        if custom_protocols:
+            selected_protocol = st.sidebar.selectbox(
+                "Load Custom Protocol",
+                options=custom_protocols,
+                format_func=lambda p: p.name,
+                key="guided_custom_protocol_select",
+            )
+            if st.sidebar.button("Load Custom Protocol", key="guided_load_custom_protocol_btn"):
+                loaded_cfg = load_custom_guided_protocol(selected_protocol)
+                set_universal_config(loaded_cfg, st.session_state)
+                _sync_runtime_units(loaded_cfg.pixel_size_um, loaded_cfg.frame_interval_s)
+                st.session_state["guided_inputs"] = {
+                    "biology_preset": chosen_preset.value,
+                    "traffic_light": traffic_status.value,
+                    "pixel_size_um": loaded_cfg.pixel_size_um,
+                    "frame_interval_s": loaded_cfg.frame_interval_s,
+                    "custom_protocol": str(selected_protocol),
+                }
+                st.sidebar.success(f"Loaded protocol: {selected_protocol.name}")
+
+        if st.sidebar.button("Eject to Expert Workspace", key="guided_eject_to_expert_btn"):
+            eject_to_expert_workspace(st.session_state)
+            st.rerun()
+
+    else:
+        st.sidebar.caption("Expert controls are writing directly to the shared backend state.")
+        with st.sidebar.expander("Expert Quick Controls", expanded=False):
+            msd_fit_fraction = st.number_input(
+                "MSD Fit Fraction",
+                min_value=0.01,
+                max_value=1.0,
+                value=float(config.msd_fit_fraction),
+                step=0.01,
+                key="expert_msd_fit_fraction",
+                help="Fraction of each trajectory used for MSD fitting.",
+            )
+            hmm_state_count = st.number_input(
+                "HMM States",
+                min_value=1,
+                max_value=10,
+                value=int(config.hmm_state_count),
+                step=1,
+                key="expert_hmm_state_count",
+            )
+            search_radius_px = st.number_input(
+                "Search Radius (px)",
+                min_value=0.1,
+                max_value=100.0,
+                value=float(config.search_radius_px),
+                step=0.1,
+                key="expert_search_radius_px",
+            )
+            if st.button("Update Expert Config", key="expert_update_config_btn"):
+                config.msd_fit_fraction = float(msd_fit_fraction)
+                config.hmm_state_count = int(hmm_state_count)
+                config.search_radius_px = float(search_radius_px)
+                set_universal_config(config, st.session_state)
+                st.sidebar.success("Expert parameters updated.")
+
+        with st.sidebar.expander("Deploy to Guided Protocol", expanded=False):
+            default_protocol_name = f"custom_protocol_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            protocol_name = st.text_input(
+                "Protocol Name",
+                value=default_protocol_name,
+                key="expert_protocol_name_input",
+            )
+            protocol_description = st.text_area(
+                "Description",
+                value="Expert-tuned protocol exported from Expert Workspace.",
+                key="expert_protocol_desc_input",
+            )
+            if st.button("Save as Guided Protocol", key="expert_save_guided_protocol_btn"):
+                saved_path = deploy_as_guided_protocol(
+                    get_universal_config(st.session_state),
+                    name=protocol_name.strip() or default_protocol_name,
+                    description=protocol_description.strip(),
+                )
+                st.sidebar.success(f"Saved: {saved_path}")
+
+    with st.sidebar.expander("Shared Config Snapshot", expanded=False):
+        cfg_dict = get_universal_config(st.session_state).to_dict()
+        summary_keys = [
+            "protocol_name",
+            "dimensionality",
+            "msd_fit_fraction",
+            "hmm_state_count",
+            "search_radius_px",
+            "max_jump_um",
+            "pixel_size_um",
+            "frame_interval_s",
+        ]
+        st.json({k: cfg_dict.get(k) for k in summary_keys})
+
+
 # Initialize the centralized state and analysis managers
 state_manager = get_state_manager()
 analysis_manager = AnalysisManager()
@@ -990,6 +1265,8 @@ if 'analysis_manager' not in st.session_state:
 # Sidebar navigation
 st.sidebar.title("SPT Analysis")
 #st.sidebar.image("generated-icon.png", width=100)
+_show_dual_mode_sidebar()
+st.sidebar.divider()
 
 # Main navigation menu - Updated for multi-page architecture
 nav_options = [

@@ -3,3 +3,4 @@
 -e ".[dev,bayes]"
 POT>=0.9.4
 ripser>=0.6.4
+torch>=2.2.0

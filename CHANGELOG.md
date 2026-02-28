@@ -1,5 +1,86 @@
 # CHANGELOG - Enhanced SPT Analysis Package
 
+## Version: 2026 Trajectory Methods Upgrade (20260224)
+
+### MAJOR NEW FEATURES - 2025/2026 State-of-the-Art Trajectory Analysis
+
+This release adds modern trajectory analysis capabilities across geometric morphometrics, optimal transport population statistics, deep learning inference, and topological data analysis.
+
+#### 1. Trajectory Morphometrics (Diffusional Fingerprinting)
+- **Function**: `compute_trajectory_morphometrics()` in `advanced_biophysical_metrics.py`
+- **Per-track metrics**:
+  - Radius of gyration (`R_g`)
+  - Asymmetry (from gyration tensor eigenvalues)
+  - Fractal dimension approximation (`D_f`)
+  - Efficiency (net squared displacement / sum of squared step lengths)
+  - Straightness (net displacement / total path length)
+- **Input requirements**: `track_id`, `x`, `y` (optional `z`, `frame`, `t`)
+- **Output**: one-row-per-track `pandas.DataFrame`
+
+#### 2. Heterogeneity-Aware Population Statistics (Wasserstein EMD)
+- **Function**: `compare_populations_wasserstein()` in `advanced_statistical_tests.py`
+- **Approach**:
+  - Standardization via `sklearn.preprocessing.StandardScaler`
+  - Multivariate transport distance via `ot.emd2` (POT)
+  - 500-iteration permutation test for empirical p-value
+- **Graceful degradation**: returns structured error if `POT` or `scikit-learn` is unavailable
+
+#### 3. Transformer Multi-Task Continuous Inference + OoD
+- **Module**: `transformer_trajectory_classifier.py`
+- **New architecture**:
+  - `MultiTaskTrajectoryTransformer`
+  - Classification head (existing model classes)
+  - Regression head outputting `[H, log(D_alpha)]`
+  - Sigmoid-constrained Hurst output (`H in [0,1]`)
+- **New inference API**:
+  - `predict_with_ood(trajectory, confidence_threshold=0.6, entropy_threshold=0.75)`
+  - Flags trajectories as `Out-of-Distribution` using max-softmax confidence and predictive entropy
+- **Compatibility**:
+  - Preserves sklearn fallback when PyTorch is unavailable
+  - `train_trajectory_classifier(..., method='transformer')` now returns a working transformer model path
+
+#### 4. Spatiotemporal Topological Data Analysis
+- **Function**: `compute_time_windowed_persistence()` in `tda_analysis.py`
+- **Method**:
+  - Overlapping frame-window point clouds from `(x, y)`
+  - Persistent homology using `ripser` (Betti-0/Betti-1)
+  - Windowed summary of max Betti-1 lifespan over time
+- **Graceful degradation**: warns and returns empty list if `ripser` is unavailable
+
+### DEPENDENCY UPDATES
+- **Added** `POT>=0.9.4`
+- **Added** `ripser>=0.6.4`
+- **Added** `torch>=2.2.0` for transformer multi-task inference
+- Updated in:
+  - `requirements.txt`
+  - `pyproject.toml` (`ml` optional dependency group)
+
+### DOCUMENTATION UPDATES
+- Updated `README.md` with:
+  - new installation profiles (`minimal`, `ml`, `full`)
+  - 2026 feature summary
+  - dependency notes for POT/ripser/torch
+  - PyTorch GPU note
+
+### TESTING / VALIDATION SUMMARY
+- Implemented per-stage runtime validation for all four new analysis areas
+- Verified non-fallback execution with installed `POT`, `ripser`, and `torch`
+- Fixed pre-existing test compatibility issues discovered during validation:
+  - robust file-like handling in `load_tracks_file()` (`data_loader.py`)
+  - resilient confinement-field handling and compatibility return keys in `analyze_diffusion()` (`analysis.py`)
+- Targeted regression status:
+  - `tests/test_app_logic.py`: **7 passed**
+
+### REFERENCES / CITATIONS
+- **POT (Python Optimal Transport)**: Flamary et al., *POT: Python Optimal Transport*, JMLR, 2021.
+- **Wasserstein / Earth Mover's Distance**: Villani, *Optimal Transport: Old and New*, Springer, 2009.
+- **Ripser / Persistent Homology**: Tralie, Saul, Bar-On, *Ripser.py: A Lean Persistent Homology Library for Python*, JOSS, 2018.
+- **Computational Topology**: Edelsbrunner and Harer, *Computational Topology: An Introduction*, 2010.
+- **Transformer architecture**: Vaswani et al., *Attention Is All You Need*, NeurIPS, 2017.
+- **OoD baseline**: Hendrycks and Gimpel, *A Baseline for Detecting Misclassified and Out-of-Distribution Examples in Neural Networks*, ICLR, 2017.
+
+---
+
 ## Version: Percolation Analysis Suite (20250118_000000)
 
 ### MAJOR NEW FEATURES - Percolation Analysis for Chromatin Network Assessment
